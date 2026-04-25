@@ -67,7 +67,7 @@
 <div class="container">
   <header>
     <div class="logo-row"><div class="logo-dot"></div><h1>RPA Field Extractor</h1></div>
-    <p class="subtitle">Upload documents → Extract 47 fields → Send to Process Street</p>
+    <p class="subtitle">Upload documents → Extract 50 fields → Send to Process Street</p>
   </header>
 
   <div class="card">
@@ -105,7 +105,7 @@
 
   <div class="card">
     <p class="card-title">Step 2 — Extract</p>
-    <button class="btn btn-primary" id="extract-btn" onclick="runExtraction()" disabled>Extract all 47 fields</button>
+    <button class="btn btn-primary" id="extract-btn" onclick="runExtraction()" disabled>Extract all 50 fields</button>
     <div class="progress-bar-wrap" id="progress-wrap"><div class="progress-bar" id="progress-bar"></div></div>
     <div class="status-box" id="status-box"></div>
   </div>
@@ -139,11 +139,11 @@ const FILES = [null, null, null];
 let extractedData = {};
 
 const FIELD_LABELS = {
-  property_address:'Property address',date_of_acceptance:'Date of acceptance',emd_due_date:'EMD due date',emd_amount:'EMD amount',close_of_escrow_date:'Close of escrow date',loan_contingency_date:'Loan contingency date',appraisal_contingency_date:'Appraisal contingency date',inspection_contingency_date:'Inspection contingency date',seller_disclosures_due_date:'Seller disclosures due date',sprp_date:'SPRP date',cop_date:'COP date',date_rpa_prepared:'Date RPA prepared',final_purchase_price:'Final purchase price',buyer_agent_commission_amount:'Buyer agent commission amount',seller_credit_referenced:'Seller credit referenced',is_all_cash:'All cash offer',home_warranty:'Home warranty',home_warranty_who_pays:'Home warranty — who pays',home_warranty_amount:'Home warranty amount',home_warranty_company:'Home warranty company',buyer_names:'Buyer name(s)',seller_names:'Seller name(s)',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',county:'County',city:'City',zip_code:'Zip code',mls_number:'MLS number',year_built:'Year built',buyer_agent_name:'Buyer agent name',buyer_agent_dre:'Buyer agent DRE',buyer_agent_brokerage_name:'Buyer brokerage name',buyer_agent_brokerage_dre:'Buyer brokerage DRE',buyer_agent_address:'Buyer agent address',buyer_agent_email:'Buyer agent email',buyer_agent_phone:'Buyer agent phone',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage_name:'Seller brokerage name',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone',escrow_company:'Escrow company',escrow_officer_name:'Escrow officer name',title_company:'Title company'
+  property_address:'Property address',date_of_acceptance:'Date of acceptance',emd_due_date:'EMD due date',emd_amount:'EMD amount',close_of_escrow_date:'Close of escrow date',loan_contingency_date:'Loan contingency date',appraisal_contingency_date:'Appraisal contingency date',inspection_contingency_date:'Inspection contingency date',seller_disclosures_due_date:'Seller disclosures due date',sprp_date:'SPRP date',cop_date:'COP date',date_rpa_prepared:'Date RPA prepared',final_purchase_price:'Final purchase price',buyer_agent_commission_amount:'Buyer agent commission amount',seller_credit_referenced:'Seller credit referenced',is_all_cash:'All cash offer',home_warranty:'Home warranty',home_warranty_who_pays:'Home warranty — who pays',home_warranty_amount:'Home warranty amount',home_warranty_company:'Home warranty company',buyer_names:'Buyer name(s)',seller_names:'Seller name(s)',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',county:'County',city:'City',zip_code:'Zip code',mls_number:'MLS number',year_built:'Year built',buyer_agent_name:'Buyer agent name',buyer_agent_dre:'Buyer agent DRE',buyer_agent_brokerage_name:'Buyer brokerage name',buyer_agent_brokerage_dre:'Buyer brokerage DRE',buyer_agent_address:'Buyer agent address',buyer_agent_email:'Buyer agent email',buyer_agent_phone:'Buyer agent phone',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage_name:'Seller brokerage name',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone',escrow_company:'Escrow company',escrow_officer_name:'Escrow officer name',title_company:'Title company',hoa_fee:'HOA fee',hoa_name:'HOA name',property_type:'Property type'
 };
 
 const SECTIONS = {
-  'Property':['property_address','apn','city','zip_code','county','mls_number','year_built','sqft_structure','sqft_lot'],
+  'Property':['property_address','apn','city','zip_code','county','mls_number','year_built','sqft_structure','sqft_lot','property_type','hoa_fee','hoa_name'],
   'Parties':['buyer_names','seller_names'],
   'Key dates & price':['date_rpa_prepared','date_of_acceptance','final_purchase_price','close_of_escrow_date','is_all_cash'],
   'Deposit & financing':['emd_amount','emd_due_date','seller_credit_referenced','buyer_agent_commission_amount'],
@@ -217,7 +217,7 @@ async function runExtraction() {
       }
     }
 
-    showStatus('Sending to Claude for analysis — this takes about 30 seconds...', 'info');
+    showStatus('Sending to Claude for analysis — this takes about 60 seconds...', 'info');
     setProgress(40);
 
     const resp = await fetch(WORKER_URL, {
@@ -252,7 +252,7 @@ async function runExtraction() {
       });
     }
 
-    document.getElementById('results-count').textContent = `${filled} of 47 fields extracted`;
+    document.getElementById('results-count').textContent = `${filled} of 50 fields extracted`;
     setProgress(100);
     document.getElementById('status-box').style.display = 'none';
     document.getElementById('progress-wrap').style.display = 'none';
