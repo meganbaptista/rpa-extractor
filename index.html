@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RPA Extractor — Process Street</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f7f6f3;
+    --surface: #ffffff;
+    --border: #e4e2dc;
+    --border-strong: #ccc9c0;
+    --text: #1a1a18;
+    --muted: #6b6a65;
+    --hint: #a8a7a2;
+    --accent: #1a6b4a;
+    --accent-light: #e8f4ef;
+    --accent-text: #0f4a32;
+    --danger: #c0392b;
+    --danger-light: #fdf0ee;
+    --warning-light: #fef9ec;
+    --warning: #92670a;
+    --radius: 10px;
+    --radius-sm: 6px;
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 2rem 1rem;
+  }
+
+  .container {
+    max-width: 720px;
+    margin: 0 auto;
+  }
+
+  header {
+    margin-bottom: 2.5rem;
+  }
+
+  .logo-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+
+  .logo-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  h1 {
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.3px;
+  }
+
+  .subtitle {
+    font-size: 14px;
+    color: var(--muted);
+    margin-left: 20px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .card-title {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 1rem;
+  }
+
+  .upload-slots {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .upload-slot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    background: var(--bg);
+  }
+
+  .upload-slot:hover { border-color: var(--border-strong); background: #f0efe9; }
+  .upload-slot.ready { border-color: var(--accent); background: var(--accent-light); }
+
+  .slot-icon {
+    font-size: 16px;
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .slot-info { flex: 1; min-width: 0; }
+
+  .slot-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .slot-filename {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: 'DM Mono', monospace;
+  }
+
+  .slot-badge {
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    flex-shrink: 0;
+    font-weight: 500;
+  }
+
+  .badge-required { background: #fde8e8; color: #a32d2d; }
+  .badge-optional { background: #efefec; color: var(--muted); }
+  .badge-ready { background: var(--accent-light); color: var(--accent-text); }
+
+  input[type="file"] { display: none; }
+
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text);
+    transition: background 0.15s, opacity 0.15s;
+    text-align: center;
+  }
+
+  .btn:hover:not(:disabled) { background: var(--bg); }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+
+  .btn-primary:hover:not(:disabled) { background: #155c3e; }
+
+  .status-box {
+    padding: 12px 16px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    margin-top: 1rem;
+    display: none;
+  }
+
+  .status-info { background: var(--warning-light); color: var(--warning); border: 1px solid #f0d98a; }
+  .status-error { background: var(--danger-light); color: var(--danger); border: 1px solid #f5c6c2; }
+  .status-success { background: var(--accent-light); color: var(--accent-text); border: 1px solid #b2d9c8; }
+
+  .progress-bar-wrap {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 10px;
+    overflow: hidden;
+    display: none;
+  }
+
+  .progress-bar {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    width: 0%;
+    transition: width 0.4s ease;
+  }
+
+  .results-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .results-count {
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .btn-small {
+    padding: 6px 14px;
+    font-size: 13px;
+    width: auto;
+    display: inline-block;
+  }
+
+  .fields-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    table-layout: fixed;
+  }
+
+  .fields-table colgroup col:first-child { width: 44%; }
+  .fields-table colgroup col:last-child { width: 56%; }
+
+  .section-head td {
+    padding: 5px 0;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--border);
+    padding-top: 14px;
+  }
+
+  .section-head:first-child td { padding-top: 0; }
+
+  .field-row td {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .field-row:last-child td { border-bottom: none; }
+
+  .field-key { color: var(--muted); }
+  .field-val { color: var(--text); word-break: break-word; }
+  .field-empty { color: var(--hint); font-style: italic; }
+
+  .send-section { margin-top: 1.5rem; }
+
+  footer {
+    text-align: center;
+    font-size: 12px;
+    color: var(--hint);
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <div class="logo-row">
+      <div class="logo-dot"></div>
+      <h1>RPA Field Extractor</h1>
+    </div>
+    <p class="subtitle">Upload documents → Extract 47 fields → Send to Process Street</p>
+  </header>
+
+  <div class="card">
+    <p class="card-title">Step 1 — Upload documents</p>
+    <div class="upload-slots">
+
+      <label class="upload-slot" id="slot0">
+        <span class="slot-icon">📄</span>
+        <div class="slot-info">
+          <p class="slot-label">Purchase Agreement (RPA + addenda)</p>
+          <p class="slot-filename" id="fn0">Click to select PDF</p>
+        </div>
+        <span class="slot-badge badge-required" id="badge0">Required</span>
+        <input type="file" accept=".pdf" onchange="setFile(0, this)">
+      </label>
+
+      <label class="upload-slot" id="slot1">
+        <span class="slot-icon">🏠</span>
+        <div class="slot-info">
+          <p class="slot-label">Property Profile Report</p>
+          <p class="slot-filename" id="fn1">Click to select PDF</p>
+        </div>
+        <span class="slot-badge badge-optional" id="badge1">Optional</span>
+        <input type="file" accept=".pdf" onchange="setFile(1, this)">
+      </label>
+
+      <label class="upload-slot" id="slot2">
+        <span class="slot-icon">📋</span>
+        <div class="slot-info">
+          <p class="slot-label">MLS Listing</p>
+          <p class="slot-filename" id="fn2">Click to select PDF</p>
+        </div>
+        <span class="slot-badge badge-optional" id="badge2">Optional</span>
+        <input type="file" accept=".pdf" onchange="setFile(2, this)">
+      </label>
+
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="card-title">Step 2 — Extract</p>
+    <button class="btn btn-primary" id="extract-btn" onclick="runExtraction()" disabled>Extract all 47 fields</button>
+    <div class="progress-bar-wrap" id="progress-wrap">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+    <div class="status-box status-info" id="status-box"></div>
+  </div>
+
+  <div class="card" id="results-card" style="display:none;">
+    <div class="results-header">
+      <p class="card-title" style="margin:0;" id="results-count">Fields extracted</p>
+      <button class="btn btn-small" onclick="copyJSON()">Copy JSON ↗</button>
+    </div>
+    <table class="fields-table">
+      <colgroup><col><col></colgroup>
+      <tbody id="results-body"></tbody>
+    </table>
+  </div>
+
+  <div class="send-section" id="send-section" style="display:none;">
+    <div class="card">
+      <p class="card-title">Step 3 — Send to Process Street</p>
+      <button class="btn btn-primary" id="send-btn" onclick="sendToZapier()">Send to Process Street via Zapier</button>
+      <div class="status-box" id="send-status"></div>
+    </div>
+  </div>
+
+  <footer>Built for your team &mdash; powered by Claude</footer>
+
+</div>
+
+<script>
+const ZAPIER_WEBHOOK = 'https://hooks.zapier.com/hooks/catch/4252316/uvbffe5/';
+const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
+const FILES = [null, null, null];
+let extractedData = {};
+
+const FIELD_LABELS = {
+  property_address:'Property address',date_of_acceptance:'Date of acceptance',emd_due_date:'EMD due date',emd_amount:'EMD amount',close_of_escrow_date:'Close of escrow date',loan_contingency_date:'Loan contingency date',appraisal_contingency_date:'Appraisal contingency date',inspection_contingency_date:'Inspection contingency date',seller_disclosures_due_date:'Seller disclosures due date',sprp_date:'SPRP date',cop_date:'COP date',date_rpa_prepared:'Date RPA prepared',final_purchase_price:'Final purchase price',buyer_agent_commission_amount:'Buyer agent commission amount',seller_credit_referenced:'Seller credit referenced',is_all_cash:'All cash offer',home_warranty:'Home warranty',home_warranty_who_pays:'Home warranty — who pays',home_warranty_amount:'Home warranty amount',home_warranty_company:'Home warranty company',buyer_names:'Buyer name(s)',seller_names:'Seller name(s)',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',county:'County',city:'City',zip_code:'Zip code',mls_number:'MLS number',year_built:'Year built',buyer_agent_name:'Buyer agent name',buyer_agent_dre:'Buyer agent DRE',buyer_agent_brokerage_name:'Buyer brokerage name',buyer_agent_brokerage_dre:'Buyer brokerage DRE',buyer_agent_address:'Buyer agent address',buyer_agent_email:'Buyer agent email',buyer_agent_phone:'Buyer agent phone',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage_name:'Seller brokerage name',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone',escrow_company:'Escrow company',escrow_officer_name:'Escrow officer name',title_company:'Title company'
+};
+
+const SECTIONS = {
+  'Property':['property_address','apn','city','zip_code','county','mls_number','year_built','sqft_structure','sqft_lot'],
+  'Parties':['buyer_names','seller_names'],
+  'Key dates & price':['date_rpa_prepared','date_of_acceptance','final_purchase_price','close_of_escrow_date','is_all_cash'],
+  'Deposit & financing':['emd_amount','emd_due_date','seller_credit_referenced','buyer_agent_commission_amount'],
+  'Contingencies':['loan_contingency_date','appraisal_contingency_date','inspection_contingency_date','seller_disclosures_due_date','sprp_date','cop_date'],
+  'Home warranty':['home_warranty','home_warranty_who_pays','home_warranty_amount','home_warranty_company'],
+  'Buyer agent':['buyer_agent_name','buyer_agent_dre','buyer_agent_brokerage_name','buyer_agent_brokerage_dre','buyer_agent_address','buyer_agent_email','buyer_agent_phone'],
+  'Seller agent':['seller_agent_name','seller_agent_dre','seller_agent_brokerage_name','seller_agent_brokerage_dre','seller_agent_address','seller_agent_email','seller_agent_phone'],
+  'Escrow & title':['escrow_company','escrow_officer_name','title_company']
+};
+
+function setFile(idx, input) {
+  FILES[idx] = input.files[0] || null;
+  const slot = document.getElementById('slot'+idx);
+  const fn = document.getElementById('fn'+idx);
+  const badge = document.getElementById('badge'+idx);
+  if (FILES[idx]) {
+    fn.textContent = FILES[idx].name;
+    slot.classList.add('ready');
+    badge.textContent = 'Ready';
+    badge.className = 'slot-badge badge-ready';
+  } else {
+    fn.textContent = 'Click to select PDF';
+    slot.classList.remove('ready');
+    badge.textContent = idx === 0 ? 'Required' : 'Optional';
+    badge.className = idx === 0 ? 'slot-badge badge-required' : 'slot-badge badge-optional';
+  }
+  const btn = document.getElementById('extract-btn');
+  btn.disabled = !FILES[0];
+}
+
+async function toBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.onerror = () => rej(new Error('Read failed'));
+    r.readAsDataURL(file);
+  });
+}
+
+function setProgress(pct) {
+  document.getElementById('progress-wrap').style.display = 'block';
+  document.getElementById('progress-bar').style.width = pct + '%';
+}
+
+function showStatus(msg, type) {
+  const el = document.getElementById('status-box');
+  el.textContent = msg;
+  el.className = 'status-box status-' + type;
+  el.style.display = 'block';
+}
+
+async function runExtraction() {
+  document.getElementById('results-card').style.display = 'none';
+  document.getElementById('send-section').style.display = 'none';
+  document.getElementById('extract-btn').disabled = true;
+
+  try {
+    showStatus('Reading documents...', 'info');
+    setProgress(15);
+
+    const docLabels = [
+      'California Residential Purchase Agreement (RPA) and all addenda',
+      'Property Profile Report (CoreLogic/Anvil or similar)',
+      'MLS Listing'
+    ];
+    const contentBlocks = [];
+    for (let i = 0; i < 3; i++) {
+      if (FILES[i]) {
+        const b64 = await toBase64(FILES[i]);
+        contentBlocks.push({ type: 'text', text: 'Document ' + (i+1) + ': ' + docLabels[i] });
+        contentBlocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } });
+      }
+    }
+
+    contentBlocks.push({ type: 'text', text: `Please analyze the attached real estate documents and extract the following fields. Return the results as a single JSON object with these exact key names and no other text, markdown, or backticks:\n{"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":""}` });
+
+    showStatus('Sending to Claude for analysis — this takes about 30 seconds...', 'info');
+    setProgress(40);
+
+    const resp = await fetch(ANTHROPIC_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2000,
+        system: 'You are a real estate transaction coordinator specializing in California residential purchase agreements. Extract field values precisely as written in the documents. If a field is not found, return an empty string. Return ONLY a valid JSON object — no markdown, no backticks, no explanation.',
+        messages: [{ role: 'user', content: contentBlocks }]
+      })
+    });
+
+    setProgress(80);
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error.message);
+
+    const text = data.content.map(b => b.text || '').join('');
+    extractedData = JSON.parse(text.replace(/```json|```/g, '').trim());
+
+    const tbody = document.getElementById('results-body');
+    tbody.innerHTML = '';
+    let filled = 0;
+
+    for (const [section, keys] of Object.entries(SECTIONS)) {
+      const hdr = document.createElement('tr');
+      hdr.className = 'section-head';
+      hdr.innerHTML = `<td colspan="2">${section}</td>`;
+      tbody.appendChild(hdr);
+      keys.forEach(key => {
+        const val = extractedData[key] || '';
+        if (val) filled++;
+        const tr = document.createElement('tr');
+        tr.className = 'field-row';
+        tr.innerHTML = `<td class="field-key">${FIELD_LABELS[key]}</td><td class="field-val ${val ? '' : 'field-empty'}">${val || '—'}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.getElementById('results-count').textContent = `${filled} of 47 fields extracted`;
+    setProgress(100);
+    document.getElementById('status-box').style.display = 'none';
+    document.getElementById('progress-wrap').style.display = 'none';
+    document.getElementById('results-card').style.display = 'block';
+    document.getElementById('send-section').style.display = 'block';
+    document.getElementById('extract-btn').disabled = false;
+
+  } catch(err) {
+    showStatus('Error: ' + err.message, 'error');
+    document.getElementById('progress-wrap').style.display = 'none';
+    document.getElementById('extract-btn').disabled = false;
+  }
+}
+
+async function sendToZapier() {
+  const btn = document.getElementById('send-btn');
+  const ss = document.getElementById('send-status');
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+
+  try {
+    const resp = await fetch(ZAPIER_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(extractedData)
+    });
+
+    ss.textContent = 'Successfully sent to Zapier — your Process Street run is being created now.';
+    ss.className = 'status-box status-success';
+    ss.style.display = 'block';
+    btn.textContent = 'Sent to Process Street';
+
+  } catch(err) {
+    ss.textContent = 'Send failed: ' + err.message + '. Use "Copy JSON" above and paste into Zapier manually.';
+    ss.className = 'status-box status-error';
+    ss.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Retry — Send to Process Street';
+  }
+}
+
+function copyJSON() {
+  navigator.clipboard.writeText(JSON.stringify(extractedData, null, 2))
+    .then(() => alert('JSON copied to clipboard!'));
+}
+</script>
+</body>
+</html>
