@@ -1,8 +1,3 @@
-bash
-
-cat /mnt/user-data/outputs/rpa-extractor/index.html
-Output
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13,22 +8,12 @@ Output
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
-    --bg: #f7f6f3;
-    --surface: #ffffff;
-    --border: #e4e2dc;
-    --border-strong: #ccc9c0;
-    --text: #1a1a18;
-    --muted: #6b6a65;
-    --hint: #a8a7a2;
-    --accent: #1a6b4a;
-    --accent-light: #e8f4ef;
-    --accent-text: #0f4a32;
-    --danger: #c0392b;
-    --danger-light: #fdf0ee;
-    --warning-light: #fef9ec;
-    --warning: #92670a;
-    --radius: 10px;
-    --radius-sm: 6px;
+    --bg: #f7f6f3; --surface: #ffffff; --border: #e4e2dc; --border-strong: #ccc9c0;
+    --text: #1a1a18; --muted: #6b6a65; --hint: #a8a7a2;
+    --accent: #1a6b4a; --accent-light: #e8f4ef; --accent-text: #0f4a32;
+    --danger: #c0392b; --danger-light: #fdf0ee;
+    --warning-light: #fef9ec; --warning: #92670a;
+    --radius: 10px; --radius-sm: 6px;
   }
   body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem 1rem; }
   .container { max-width: 720px; margin: 0 auto; }
@@ -64,7 +49,6 @@ Output
   .progress-bar-wrap { height: 3px; background: var(--border); border-radius: 2px; margin-top: 10px; overflow: hidden; display: none; }
   .progress-bar { height: 100%; background: var(--accent); border-radius: 2px; width: 0%; transition: width 0.4s ease; }
   .results-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; flex-wrap: wrap; gap: 8px; }
-  .results-count { font-size: 14px; font-weight: 500; }
   .btn-small { padding: 6px 14px; font-size: 13px; width: auto; display: inline-block; }
   .fields-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
   .fields-table colgroup col:first-child { width: 44%; }
@@ -76,18 +60,13 @@ Output
   .field-key { color: var(--muted); }
   .field-val { color: var(--text); word-break: break-word; }
   .field-empty { color: var(--hint); font-style: italic; }
-  .send-section { margin-top: 1.5rem; }
   footer { text-align: center; font-size: 12px; color: var(--hint); margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 </style>
 </head>
 <body>
 <div class="container">
-
   <header>
-    <div class="logo-row">
-      <div class="logo-dot"></div>
-      <h1>RPA Field Extractor</h1>
-    </div>
+    <div class="logo-row"><div class="logo-dot"></div><h1>RPA Field Extractor</h1></div>
     <p class="subtitle">Upload documents → Extract 47 fields → Send to Process Street</p>
   </header>
 
@@ -128,7 +107,7 @@ Output
     <p class="card-title">Step 2 — Extract</p>
     <button class="btn btn-primary" id="extract-btn" onclick="runExtraction()" disabled>Extract all 47 fields</button>
     <div class="progress-bar-wrap" id="progress-wrap"><div class="progress-bar" id="progress-bar"></div></div>
-    <div class="status-box status-info" id="status-box"></div>
+    <div class="status-box" id="status-box"></div>
   </div>
 
   <div class="card" id="results-card" style="display:none;">
@@ -142,7 +121,7 @@ Output
     </table>
   </div>
 
-  <div class="send-section" id="send-section" style="display:none;">
+  <div id="send-section" style="display:none;">
     <div class="card">
       <p class="card-title">Step 3 — Send to Process Street</p>
       <button class="btn btn-primary" id="send-btn" onclick="sendToZapier()">Send to Process Street via Zapier</button>
@@ -151,10 +130,10 @@ Output
   </div>
 
   <footer>Built for My TC Concierge &mdash; powered by Claude</footer>
-
 </div>
 
 <script>
+const WORKER_URL = 'https://rpa-extractor.megan-9c6.workers.dev';
 const ZAPIER_WEBHOOK = 'https://hooks.zapier.com/hooks/catch/4252316/uvbffe5/';
 const FILES = [null, null, null];
 let extractedData = {};
@@ -229,30 +208,29 @@ async function runExtraction() {
       'Property Profile Report (CoreLogic/Anvil or similar)',
       'MLS Listing'
     ];
-    const contentBlocks = [];
+
+    const documents = [];
     for (let i = 0; i < 3; i++) {
       if (FILES[i]) {
-        const b64 = await toBase64(FILES[i]);
-        contentBlocks.push({ type: 'text', text: 'Document ' + (i+1) + ': ' + docLabels[i] });
-        contentBlocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } });
+        const data = await toBase64(FILES[i]);
+        documents.push({ label: docLabels[i], data });
       }
     }
-    contentBlocks.push({ type: 'text', text: `Please analyze the attached real estate documents and extract the following fields. Return the results as a single JSON object with these exact key names and no other text, markdown, or backticks:\n{"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":""}` });
 
     showStatus('Sending to Claude for analysis — this takes about 30 seconds...', 'info');
     setProgress(40);
 
-    const resp = await fetch('/.netlify/functions/extract', {
+    const resp = await fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: contentBlocks }] })
+      body: JSON.stringify({ documents })
     });
 
     setProgress(80);
-    const data = await resp.json();
-    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+    const result = await resp.json();
+    if (result.error) throw new Error(result.error.message || JSON.stringify(result.error));
 
-    const text = data.content.map(b => b.text || '').join('');
+    const text = result.content.map(b => b.text || '').join('');
     extractedData = JSON.parse(text.replace(/```json|```/g, '').trim());
 
     const tbody = document.getElementById('results-body');
@@ -294,7 +272,6 @@ async function sendToZapier() {
   const ss = document.getElementById('send-status');
   btn.disabled = true;
   btn.textContent = 'Sending...';
-
   try {
     await fetch(ZAPIER_WEBHOOK, {
       method: 'POST',
