@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RPA Extractor — Process Street</title>
+<title>Keeva — Agent 1: Contract Reader</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -13,6 +13,7 @@
     --accent: #1a6b4a; --accent-light: #e8f4ef; --accent-text: #0f4a32;
     --danger: #c0392b; --danger-light: #fdf0ee;
     --warning-light: #fef9ec; --warning: #92670a;
+    --airtable: #2d7dd2; --airtable-light: #eef4fc;
     --radius: 10px; --radius-sm: 6px;
   }
   body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem 1rem; }
@@ -42,10 +43,13 @@
   .btn:disabled { opacity: 0.35; cursor: not-allowed; }
   .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   .btn-primary:hover:not(:disabled) { background: #155c3e; }
+  .btn-airtable { background: var(--airtable); color: #fff; border-color: var(--airtable); }
+  .btn-airtable:hover:not(:disabled) { background: #1f5fa8; }
   .status-box { padding: 12px 16px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 1rem; display: none; }
   .status-info { background: var(--warning-light); color: var(--warning); border: 1px solid #f0d98a; }
   .status-error { background: var(--danger-light); color: var(--danger); border: 1px solid #f5c6c2; }
   .status-success { background: var(--accent-light); color: var(--accent-text); border: 1px solid #b2d9c8; }
+  .status-airtable { background: var(--airtable-light); color: var(--airtable); border: 1px solid #b3d1f0; }
   .progress-bar-wrap { height: 3px; background: var(--border); border-radius: 2px; margin-top: 10px; overflow: hidden; display: none; }
   .progress-bar { height: 100%; background: var(--accent); border-radius: 2px; width: 0%; transition: width 0.4s ease; }
   .results-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; flex-wrap: wrap; gap: 8px; }
@@ -60,16 +64,31 @@
   .field-key { color: var(--muted); }
   .field-val { color: var(--text); word-break: break-word; }
   .field-empty { color: var(--hint); font-style: italic; }
+
+  /* AIRTABLE STATUS TABLE */
+  .airtable-table-status { margin-top: 1rem; display: none; }
+  .airtable-table-status.visible { display: block; }
+  .at-status-title { font-size: 12px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .at-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: var(--radius-sm); background: var(--bg); margin-bottom: 6px; border: 1px solid var(--border); }
+  .at-row-name { font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+  .at-badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600; }
+  .at-pending { background: #efefec; color: var(--muted); }
+  .at-writing { background: #dbeafe; color: #1e40af; }
+  .at-done { background: var(--accent-light); color: var(--accent-text); }
+  .at-skipped { background: #efefec; color: var(--muted); }
+  .at-error { background: var(--danger-light); color: var(--danger); }
+
   footer { text-align: center; font-size: 12px; color: var(--hint); margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 </style>
 </head>
 <body>
 <div class="container">
   <header>
-    <div class="logo-row"><div class="logo-dot"></div><h1>RPA Field Extractor</h1></div>
-    <p class="subtitle">Upload documents → Extract 50 fields → Send to Process Street</p>
+    <div class="logo-row"><div class="logo-dot"></div><h1>Keeva — Agent 1: Contract Reader</h1></div>
+    <p class="subtitle">Upload documents → Extract 50 fields → Save to Airtable</p>
   </header>
 
+  <!-- STEP 1: UPLOAD -->
   <div class="card">
     <p class="card-title">Step 1 — Upload documents</p>
     <div class="upload-slots">
@@ -103,6 +122,7 @@
     </div>
   </div>
 
+  <!-- STEP 2: EXTRACT -->
   <div class="card">
     <p class="card-title">Step 2 — Extract</p>
     <button class="btn btn-primary" id="extract-btn" onclick="runExtraction()" disabled>Extract all 50 fields</button>
@@ -110,6 +130,7 @@
     <div class="status-box" id="status-box"></div>
   </div>
 
+  <!-- RESULTS -->
   <div class="card" id="results-card" style="display:none;">
     <div class="results-header">
       <p class="card-title" style="margin:0;" id="results-count">Fields extracted</p>
@@ -121,23 +142,36 @@
     </table>
   </div>
 
+  <!-- STEP 3: SAVE TO AIRTABLE -->
   <div id="send-section" style="display:none;">
     <div class="card">
-      <p class="card-title">Step 3 — Send to Process Street</p>
-      <button class="btn btn-primary" id="send-btn" onclick="sendToZapier()">Send to Process Street via Zapier</button>
+      <p class="card-title">Step 3 — Save to Airtable</p>
+      <button class="btn btn-airtable" id="send-btn" onclick="saveToAirtable()">
+        🗄️ Save all fields to Airtable
+      </button>
       <div class="status-box" id="send-status"></div>
+
+      <!-- Per-table status -->
+      <div class="airtable-table-status" id="atStatus">
+        <p class="at-status-title" style="margin-top:1rem;">Write status by table</p>
+        <div id="atRows"></div>
+      </div>
     </div>
   </div>
 
-  <footer>Built for My TC Concierge &mdash; powered by Claude</footer>
+  <footer>Built for My TC Concierge &mdash; powered by Claude + Airtable</footer>
 </div>
 
 <script>
-const WORKER_URL = 'https://rpa-extractor.megan-9c6.workers.dev';
-const ZAPIER_WEBHOOK = 'https://hooks.zapier.com/hooks/catch/4252316/uvbvfoa/';
+// ── CONFIG ────────────────────────────────────────────────────────────────────
+const ANTHROPIC_KEY = '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';
+const AT_TOKEN      = 'patjINcR6HBzfakqI.283c78f4524fd7723c0a539488b0687fbe81f0344f12354263e6221713391bba';
+const AT_BASE       = 'appZ9ucNHFtNRNQMg';
+
 const FILES = [null, null, null];
 let extractedData = {};
 
+// ── FIELD LABELS (original 50 fields — unchanged) ─────────────────────────────
 const FIELD_LABELS = {
   property_address:'Property address',date_of_acceptance:'Date of acceptance',emd_due_date:'EMD due date',emd_amount:'EMD amount',close_of_escrow_date:'Close of escrow date',loan_contingency_date:'Loan contingency date',appraisal_contingency_date:'Appraisal contingency date',inspection_contingency_date:'Inspection contingency date',seller_disclosures_due_date:'Seller disclosures due date',sprp_date:'SPRP date',cop_date:'COP date',date_rpa_prepared:'Date RPA prepared',final_purchase_price:'Final purchase price',buyer_agent_commission_amount:'Buyer agent commission amount',seller_credit_referenced:'Seller credit referenced',is_all_cash:'All cash offer',home_warranty:'Home warranty',home_warranty_who_pays:'Home warranty — who pays',home_warranty_amount:'Home warranty amount',home_warranty_company:'Home warranty company',buyer_names:'Buyer name(s)',seller_names:'Seller name(s)',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',county:'County',city:'City',zip_code:'Zip code',mls_number:'MLS number',year_built:'Year built',buyer_agent_name:'Buyer agent name',buyer_agent_dre:'Buyer agent DRE',buyer_agent_brokerage_name:'Buyer brokerage name',buyer_agent_brokerage_dre:'Buyer brokerage DRE',buyer_agent_address:'Buyer agent address',buyer_agent_email:'Buyer agent email',buyer_agent_phone:'Buyer agent phone',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage_name:'Seller brokerage name',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone',escrow_company:'Escrow company',escrow_officer_name:'Escrow officer name',title_company:'Title company',hoa_fee:'HOA fee',hoa_name:'HOA name',property_type:'Property type'
 };
@@ -154,21 +188,22 @@ const SECTIONS = {
   'Escrow & title':['escrow_company','escrow_officer_name','title_company']
 };
 
+// ── FILE HANDLING (unchanged) ─────────────────────────────────────────────────
 function setFile(idx, input) {
   FILES[idx] = input.files[0] || null;
-  const slot = document.getElementById('slot'+idx);
-  const fn = document.getElementById('fn'+idx);
-  const badge = document.getElementById('badge'+idx);
+  const slot  = document.getElementById('slot'  + idx);
+  const fn    = document.getElementById('fn'    + idx);
+  const badge = document.getElementById('badge' + idx);
   if (FILES[idx]) {
-    fn.textContent = FILES[idx].name;
+    fn.textContent    = FILES[idx].name;
     slot.classList.add('ready');
     badge.textContent = 'Ready';
-    badge.className = 'slot-badge badge-ready';
+    badge.className   = 'slot-badge badge-ready';
   } else {
-    fn.textContent = 'Click to select PDF';
+    fn.textContent    = 'Click to select PDF';
     slot.classList.remove('ready');
     badge.textContent = idx === 0 ? 'Required' : 'Optional';
-    badge.className = idx === 0 ? 'slot-badge badge-required' : 'slot-badge badge-optional';
+    badge.className   = idx === 0 ? 'slot-badge badge-required' : 'slot-badge badge-optional';
   }
   document.getElementById('extract-btn').disabled = !FILES[0];
 }
@@ -176,7 +211,7 @@ function setFile(idx, input) {
 async function toBase64(file) {
   return new Promise((res, rej) => {
     const r = new FileReader();
-    r.onload = () => res(r.result.split(',')[1]);
+    r.onload  = () => res(r.result.split(',')[1]);
     r.onerror = () => rej(new Error('Read failed'));
     r.readAsDataURL(file);
   });
@@ -184,20 +219,21 @@ async function toBase64(file) {
 
 function setProgress(pct) {
   document.getElementById('progress-wrap').style.display = 'block';
-  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('progress-bar').style.width    = pct + '%';
 }
 
 function showStatus(msg, type) {
-  const el = document.getElementById('status-box');
+  const el      = document.getElementById('status-box');
   el.textContent = msg;
-  el.className = 'status-box status-' + type;
+  el.className  = 'status-box status-' + type;
   el.style.display = 'block';
 }
 
+// ── EXTRACTION (unchanged — still uses your Cloudflare Worker) ────────────────
 async function runExtraction() {
-  document.getElementById('results-card').style.display = 'none';
-  document.getElementById('send-section').style.display = 'none';
-  document.getElementById('extract-btn').disabled = true;
+  document.getElementById('results-card').style.display  = 'none';
+  document.getElementById('send-section').style.display  = 'none';
+  document.getElementById('extract-btn').disabled        = true;
 
   try {
     showStatus('Reading documents...', 'info');
@@ -220,10 +256,38 @@ async function runExtraction() {
     showStatus('Sending to Claude for analysis — this takes about 60 seconds...', 'info');
     setProgress(40);
 
-    const resp = await fetch(WORKER_URL, {
+    // Build content array — one document block per uploaded file
+    const content = [];
+    documents.forEach(doc => {
+      content.push({
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: doc.data },
+        title: doc.label
+      });
+    });
+
+    content.push({
+      type: 'text',
+      text: `You are a California real estate transaction coordinator. Extract all of the following fields from the uploaded documents. Cross-reference all documents — use the Property Profile and MLS to fill gaps the RPA leaves blank. Return ONLY valid JSON with exactly these keys, no preamble, no markdown fences:
+
+{"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":"","hoa_fee":"","hoa_name":"","property_type":""}
+
+Use ISO format (YYYY-MM-DD) for all dates. Leave fields as empty string if not found. Return ONLY the JSON object.`
+    });
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ documents })
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-5',
+        max_tokens: 2000,
+        messages: [{ role: 'user', content }]
+      })
     });
 
     setProgress(80);
@@ -254,41 +318,218 @@ async function runExtraction() {
 
     document.getElementById('results-count').textContent = `${filled} of 50 fields extracted`;
     setProgress(100);
-    document.getElementById('status-box').style.display = 'none';
+    document.getElementById('status-box').style.display  = 'none';
     document.getElementById('progress-wrap').style.display = 'none';
     document.getElementById('results-card').style.display = 'block';
     document.getElementById('send-section').style.display = 'block';
-    document.getElementById('extract-btn').disabled = false;
+    document.getElementById('extract-btn').disabled       = false;
 
   } catch(err) {
     showStatus('Error: ' + err.message, 'error');
     document.getElementById('progress-wrap').style.display = 'none';
-    document.getElementById('extract-btn').disabled = false;
+    document.getElementById('extract-btn').disabled        = false;
   }
 }
 
-async function sendToZapier() {
+// ── AIRTABLE HELPERS ──────────────────────────────────────────────────────────
+async function atCreate(table, fields) {
+  const res = await fetch(`https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${AT_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields })
+  });
+  const data = await res.json();
+  if (data.error) { console.warn(`AT ${table}:`, data.error); return null; }
+  return data;
+}
+
+// Table status UI
+const TABLE_ICONS = {
+  'Properties': '🏡', 'Transactions': '📋',
+  'Contacts': '👥', 'Escrow Contacts': '🏢', 'Dates & Deadlines': '📅'
+};
+
+let tableStatuses = {};
+
+function renderATStatus() {
+  const el = document.getElementById('atRows');
+  el.innerHTML = Object.entries(tableStatuses).map(([name, status]) => `
+    <div class="at-row">
+      <div class="at-row-name">${TABLE_ICONS[name] || '📁'} ${name}</div>
+      <div class="at-badge at-${status}">${
+        status === 'pending'  ? 'Pending'    :
+        status === 'writing'  ? 'Writing...' :
+        status === 'done'     ? '✓ Saved'    :
+        status === 'skipped'  ? 'Skipped'    : '✗ Error'
+      }</div>
+    </div>`).join('');
+}
+
+function setATStatus(table, status) {
+  tableStatuses[table] = status;
+  renderATStatus();
+}
+
+function showSendStatus(msg, type) {
+  const el = document.getElementById('send-status');
+  el.textContent  = msg;
+  el.className    = 'status-box status-' + type;
+  el.style.display = 'block';
+}
+
+// ── SAVE TO AIRTABLE (replaces sendToZapier) ──────────────────────────────────
+async function saveToAirtable() {
+  if (!Object.keys(extractedData).length) return;
+
   const btn = document.getElementById('send-btn');
-  const ss = document.getElementById('send-status');
   btn.disabled = true;
-  btn.textContent = 'Sending...';
+  btn.textContent = '⏳ Saving to Airtable...';
+
+  // Init status panel
+  tableStatuses = {
+    'Properties':       'pending',
+    'Transactions':     'pending',
+    'Contacts':         'pending',
+    'Escrow Contacts':  'pending',
+    'Dates & Deadlines':'pending',
+  };
+  document.getElementById('atStatus').classList.add('visible');
+  renderATStatus();
+
+  const d = extractedData; // shorthand
+
   try {
-    await fetch(ZAPIER_WEBHOOK, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(extractedData)
+    // ── 1. PROPERTIES ────────────────────────────────────────────────────
+    setATStatus('Properties', 'writing');
+
+    const propFields = {};
+    if (d.property_address)  propFields['Street Address']   = d.property_address;
+    if (d.city)              propFields['City']             = d.city;
+    if (d.county)            propFields['County']           = d.county;
+    if (d.zip_code)          propFields['Zip Code']         = d.zip_code;
+    if (d.property_type)     propFields['Property Type']    = d.property_type;
+    if (d.apn)               propFields['APN']              = d.apn;
+    if (d.mls_number)        propFields['MLS Number']       = d.mls_number;
+    if (d.hoa_name)          propFields['HOA Name']         = d.hoa_name;
+    if (d.hoa_fee)           propFields['HOA Fee']          = d.hoa_fee;
+    if (d.sqft_structure)    propFields['Sq Ft Structure']  = d.sqft_structure;
+    if (d.sqft_lot)          propFields['Sq Ft Lot']        = d.sqft_lot;
+    if (d.hoa_name || d.hoa_fee) propFields['Has HOA']     = true;
+
+    // Year built — must be a number
+    if (d.year_built) {
+      const yr = parseInt(String(d.year_built).replace(/\D/g, ''));
+      if (!isNaN(yr)) propFields['Year Built'] = yr;
+    }
+
+    // Seller info from parties
+    if (d.seller_names) propFields['Seller Signer 1'] = d.seller_names.split(/[,&\n]/)[0].trim();
+
+    const propRec = await atCreate('Properties', propFields);
+    setATStatus('Properties', propRec ? 'done' : 'error');
+
+    // ── 2. TRANSACTIONS ──────────────────────────────────────────────────
+    setATStatus('Transactions', 'writing');
+
+    const addr    = d.property_address || 'Unknown Address';
+    const txFields = {
+      'Transaction Name': addr,
+      'Status':           'Active',
+    };
+    if (d.final_purchase_price)        txFields['Purchase Price']          = d.final_purchase_price;
+    if (d.is_all_cash)                 txFields['Is All Cash']             = d.is_all_cash === 'Yes' || d.is_all_cash === true;
+    if (d.buyer_agent_name)            txFields['Buyer Agent Name']        = d.buyer_agent_name;
+    if (d.buyer_agent_brokerage_name)  txFields['Buyer Agent Brokerage']   = d.buyer_agent_brokerage_name;
+    if (d.seller_agent_name)           txFields['Seller Agent Name']       = d.seller_agent_name;
+    if (d.seller_agent_brokerage_name) txFields['Seller Agent Brokerage']  = d.seller_agent_brokerage_name;
+    if (d.buyer_agent_commission_amount) txFields['Buyer Agent Commission'] = d.buyer_agent_commission_amount;
+    if (d.seller_credit_referenced)    txFields['Seller Credit']           = d.seller_credit_referenced;
+    if (d.home_warranty)               txFields['Has Home Warranty']       = d.home_warranty === 'Yes' || d.home_warranty === true;
+    if (d.home_warranty_company)       txFields['Home Warranty Company']   = d.home_warranty_company;
+    if (d.home_warranty_who_pays)      txFields['Home Warranty Who Pays']  = d.home_warranty_who_pays;
+    if (d.home_warranty_amount)        txFields['Home Warranty Amount']    = d.home_warranty_amount;
+    if (propRec)                       txFields['Property']                = [{ id: propRec.id }];
+
+    const txRec = await atCreate('Transactions', txFields);
+    setATStatus('Transactions', txRec ? 'done' : 'error');
+
+    // ── 3. CONTACTS — Buyers ─────────────────────────────────────────────
+    setATStatus('Contacts', 'writing');
+
+    // Parse buyer names — may be comma or & separated
+    const buyerNames   = d.buyer_names   ? d.buyer_names.split(/[,&\n]/).map(n => n.trim()).filter(Boolean)   : [];
+    const sellerNames  = d.seller_names  ? d.seller_names.split(/[,&\n]/).map(n => n.trim()).filter(Boolean)  : [];
+
+    const contactRoles = [
+      ...buyerNames.map((name, i)  => ({ name, role: `Buyer ${i + 1}` })),
+      ...sellerNames.map((name, i) => ({ name, role: `Seller ${i + 1}` })),
+    ];
+
+    let contactsOk = true;
+    for (const c of contactRoles) {
+      if (!c.name) continue;
+      const cFields = { 'Full Name': c.name, 'Role': c.role };
+      if (txRec) cFields['Transaction'] = [{ id: txRec.id }];
+
+      // Attach email/phone for buyer agent contact if relevant
+      if (c.role === 'Buyer 1' && d.buyer_agent_email)   cFields['Email'] = d.buyer_agent_email;
+      if (c.role === 'Seller 1' && d.seller_agent_email) cFields['Email'] = d.seller_agent_email;
+
+      const r = await atCreate('Contacts', cFields);
+      if (!r) contactsOk = false;
+    }
+    setATStatus('Contacts', contactsOk ? 'done' : 'error');
+
+    // ── 4. ESCROW CONTACTS ───────────────────────────────────────────────
+    setATStatus('Escrow Contacts', 'writing');
+
+    if (d.escrow_officer_name) {
+      const ecFields = { 'Full Name': d.escrow_officer_name };
+      if (d.escrow_company) ecFields['Escrow Company'] = d.escrow_company;
+      const ecRec = await atCreate('Escrow Contacts', ecFields);
+      setATStatus('Escrow Contacts', ecRec ? 'done' : 'error');
+    } else {
+      setATStatus('Escrow Contacts', 'skipped');
+    }
+
+    // ── 5. DATES & DEADLINES ─────────────────────────────────────────────
+    setATStatus('Dates & Deadlines', 'writing');
+
+    const dFields = {};
+    if (txRec) dFields['Transaction'] = [{ id: txRec.id }];
+
+    const dateMap = {
+      'Open Date':                    d.date_of_acceptance,
+      'Close of Escrow Date':         d.close_of_escrow_date,
+      'Loan Contingency Date':        d.loan_contingency_date,
+      'Appraisal Contingency Date':   d.appraisal_contingency_date,
+      'Inspection Contingency Date':  d.inspection_contingency_date,
+      'Possession Date':              d.cop_date,
+      'SPRP Due Date':                d.sprp_date,
+      'Home Warranty Order Deadline': d.emd_due_date,
+    };
+
+    Object.entries(dateMap).forEach(([field, val]) => {
+      if (val) dFields[field] = val;
     });
-    ss.textContent = 'Successfully sent to Zapier — your Process Street run is being created now.';
-    ss.className = 'status-box status-success';
-    ss.style.display = 'block';
-    btn.textContent = 'Sent to Process Street';
+
+    const dRec = await atCreate('Dates & Deadlines', dFields);
+    setATStatus('Dates & Deadlines', dRec ? 'done' : 'error');
+
+    // ── DONE ─────────────────────────────────────────────────────────────
+    showSendStatus('✅ All data saved to your Keeva Airtable base successfully!', 'success');
+    btn.textContent = '✓ Saved to Airtable';
+
   } catch(err) {
-    ss.textContent = 'Send failed: ' + err.message;
-    ss.className = 'status-box status-error';
-    ss.style.display = 'block';
-    btn.disabled = false;
-    btn.textContent = 'Retry — Send to Process Street';
+    // Mark anything still pending/writing as error
+    Object.keys(tableStatuses).forEach(k => {
+      if (tableStatuses[k] === 'writing' || tableStatuses[k] === 'pending')
+        tableStatuses[k] = 'error';
+    });
+    renderATStatus();
+    showSendStatus('Error: ' + err.message + '. Check that your Airtable field names match exactly.', 'error');
+    btn.disabled    = false;
+    btn.textContent = '🗄️ Retry — Save to Airtable';
   }
 }
 
