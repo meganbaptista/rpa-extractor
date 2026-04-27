@@ -18,7 +18,6 @@ exports.handler = async function(event, context) {
     const body = JSON.parse(event.body);
 
     // ── AIRTABLE PROXY ────────────────────────────────────────────────────────
-    // If the request includes an airtable_table field, proxy it to Airtable
     if (body.airtable_table) {
       const AT_TOKEN = process.env.AIRTABLE_TOKEN;
       const AT_BASE  = process.env.AIRTABLE_BASE_ID || 'appZ9ucNHFtNRNQMg';
@@ -26,6 +25,7 @@ exports.handler = async function(event, context) {
       if (!AT_TOKEN) {
         return { statusCode: 500, headers, body: JSON.stringify({ error: { message: 'AIRTABLE_TOKEN not set' } }) };
       }
+
       const atResp = await fetch(
         'https://api.airtable.com/v0/' + AT_BASE + '/' + encodeURIComponent(body.airtable_table),
         {
@@ -43,6 +43,23 @@ exports.handler = async function(event, context) {
       return { statusCode: 500, headers, body: JSON.stringify({ error: { message: 'ANTHROPIC_API_KEY not set' } }) };
     }
 
+    // Build content array from uploaded documents
+    const documents = body.documents || [];
+    const content = [];
+
+    documents.forEach(doc => {
+      content.push({
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: doc.data },
+        title: doc.label
+      });
+    });
+
+    content.push({
+      type: 'text',
+      text: 'Extract all of the following fields from the uploaded documents. Cross-reference all documents to fill gaps. Return ONLY valid JSON with exactly these keys, no preamble, no markdown: {"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":"","hoa_fee":"","hoa_name":"","property_type":""}. Use ISO format YYYY-MM-DD for all dates. Leave fields as empty string if not found.'
+    });
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -53,8 +70,7 @@ exports.handler = async function(event, context) {
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 2000,
-        system: 'You are a real estate transaction coordinator specializing in California residential purchase agreements. Extract field values precisely as written in the documents. If a field is not found, return an empty string. Return ONLY a valid JSON object — no markdown, no backticks, no explanation.',
-        messages: body.messages
+        messages: [{ role: 'user', content }]
       })
     });
 
