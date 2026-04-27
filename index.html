@@ -149,11 +149,11 @@ const FUNCTION_URL = '/.netlify/functions/extract';
 const FILES = [null, null, null];
 let extractedData = {};
 const FIELD_LABELS = {
-  property_address:'Property address',date_of_acceptance:'Date of acceptance',emd_due_date:'EMD due date',emd_amount:'EMD amount',close_of_escrow_date:'Close of escrow date',loan_contingency_date:'Loan contingency date',appraisal_contingency_date:'Appraisal contingency date',inspection_contingency_date:'Inspection contingency date',seller_disclosures_due_date:'Seller disclosures due date',sprp_date:'SPRP date',cop_date:'COP date',date_rpa_prepared:'Date RPA prepared',final_purchase_price:'Final purchase price',buyer_agent_commission_amount:'Buyer agent commission amount',seller_credit_referenced:'Seller credit referenced',is_all_cash:'All cash offer',home_warranty:'Home warranty',home_warranty_who_pays:'Home warranty who pays',home_warranty_amount:'Home warranty amount',home_warranty_company:'Home warranty company',buyer_names:'Buyer names',seller_names:'Seller names',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',county:'County',city:'City',zip_code:'Zip code',mls_number:'MLS number',year_built:'Year built',buyer_agent_name:'Buyer agent name',buyer_agent_dre:'Buyer agent DRE',buyer_agent_brokerage_name:'Buyer brokerage name',buyer_agent_brokerage_dre:'Buyer brokerage DRE',buyer_agent_address:'Buyer agent address',buyer_agent_email:'Buyer agent email',buyer_agent_phone:'Buyer agent phone',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage_name:'Seller brokerage name',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone',escrow_company:'Escrow company',escrow_officer_name:'Escrow officer name',title_company:'Title company',hoa_fee:'HOA fee',hoa_name:'HOA name',property_type:'Property type'
+  property_address:'Property address',date_of_acceptance:'Date of acceptance',emd_due_date:'EMD due date',emd_amount:'EMD amount',close_of_escrow_date:'Close of escrow date',loan_contingency_date:'Loan contingency date',appraisal_contingency_date:'Appraisal contingency date',inspection_contingency_date:'Inspection contingency date',seller_disclosures_due_date:'Seller disclosures due date',sprp_date:'SPRP date',cop_date:'COP date',date_rpa_prepared:'Date RPA prepared',final_purchase_price:'Final purchase price',buyer_agent_commission_amount:'Buyer agent commission amount',seller_credit_referenced:'Seller credit referenced',is_all_cash:'All cash offer',home_warranty:'Home warranty',home_warranty_who_pays:'Home warranty who pays',home_warranty_amount:'Home warranty amount',home_warranty_company:'Home warranty company',buyer_names:'Buyer names',seller_names:'Seller names',seller_entity_name:'Seller entity name',seller_type:'Seller type',seller_signer_1:'Seller signer 1',seller_signer_2:'Seller signer 2',seller_signer_3:'Seller signer 3',seller_signer_4:'Seller signer 4',trust_full_name:'Trust full name',trust_date:'Trust date',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',county:'County',city:'City',zip_code:'Zip code',mls_number:'MLS number',year_built:'Year built',buyer_agent_name:'Buyer agent name',buyer_agent_dre:'Buyer agent DRE',buyer_agent_brokerage_name:'Buyer brokerage name',buyer_agent_brokerage_dre:'Buyer brokerage DRE',buyer_agent_address:'Buyer agent address',buyer_agent_email:'Buyer agent email',buyer_agent_phone:'Buyer agent phone',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage_name:'Seller brokerage name',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone',escrow_company:'Escrow company',escrow_officer_name:'Escrow officer name',title_company:'Title company',hoa_fee:'HOA fee',hoa_name:'HOA name',property_type:'Property type'
 };
 const SECTIONS = {
   'Property':['property_address','apn','city','zip_code','county','mls_number','year_built','sqft_structure','sqft_lot','property_type','hoa_fee','hoa_name'],
-  'Parties':['buyer_names','seller_names'],
+  'Parties':['buyer_names','seller_names','seller_entity_name','seller_type','seller_signer_1','seller_signer_2','seller_signer_3','seller_signer_4','trust_full_name','trust_date'],
   'Key dates & price':['date_rpa_prepared','date_of_acceptance','final_purchase_price','close_of_escrow_date','is_all_cash'],
   'Deposit & financing':['emd_amount','emd_due_date','seller_credit_referenced','buyer_agent_commission_amount'],
   'Contingencies':['loan_contingency_date','appraisal_contingency_date','inspection_contingency_date','seller_disclosures_due_date','sprp_date','cop_date'],
@@ -195,7 +195,7 @@ async function runExtraction(){
       const hdr=document.createElement('tr');hdr.className='section-head';hdr.innerHTML='<td colspan="2">'+section+'</td>';tbody.appendChild(hdr);
       keys.forEach(key=>{const val=extractedData[key]||'';if(val)filled++;const tr=document.createElement('tr');tr.className='field-row';tr.innerHTML='<td class="field-key">'+FIELD_LABELS[key]+'</td><td class="field-val '+(val?'':'field-empty')+'">'+(val||'—')+'</td>';tbody.appendChild(tr);});
     }
-    document.getElementById('results-count').textContent=filled+' of 50 fields extracted';
+    document.getElementById('results-count').textContent=filled+' of '+Object.keys(FIELD_LABELS).length+' fields extracted';
     setProgress(100);document.getElementById('status-box').style.display='none';document.getElementById('progress-wrap').style.display='none';
     document.getElementById('results-card').style.display='block';document.getElementById('send-section').style.display='block';document.getElementById('extract-btn').disabled=false;
   }catch(err){showStatus('Error: '+err.message,'error');document.getElementById('progress-wrap').style.display='none';document.getElementById('extract-btn').disabled=false;}
@@ -241,7 +241,15 @@ async function saveToAirtable(){
     if(d.sqft_lot)propFields['Sq Ft Lot']=String(d.sqft_lot);
     if(d.hoa_name||d.hoa_fee)propFields['Has HOA']=true;
     if(d.year_built){const yr=parseInt(String(d.year_built).replace(/\D/g,''));if(!isNaN(yr))propFields['Year Built']=yr;}
-    if(d.seller_names)propFields['Seller Signer 1']=d.seller_names.split(/[,&\n]/)[0].trim();
+    if(d.seller_names)propFields['Seller Name(s)']=d.seller_names;
+    if(d.seller_entity_name)propFields['Seller Name(s)']=d.seller_entity_name;
+    if(d.seller_type)propFields['Seller Type']=d.seller_type;
+    if(d.seller_signer_1)propFields['Seller Signer 1']=d.seller_signer_1;
+    if(d.seller_signer_2)propFields['Seller Signer 2']=d.seller_signer_2;
+    if(d.seller_signer_3)propFields['Seller Signer 3']=d.seller_signer_3;
+    if(d.seller_signer_4)propFields['Seller Signer 4']=d.seller_signer_4;
+    if(d.trust_full_name)propFields['Trust Full Name']=d.trust_full_name;
+    if(d.trust_date)propFields['Trust Date']=d.trust_date;
     const propRec=await atCreate('Properties',propFields);
     setATStatus('Properties',propRec?'done':'error');
 
@@ -273,11 +281,16 @@ async function saveToAirtable(){
     const txRec=await atCreate('Transactions',txFields);
     setATStatus('Transactions',txRec?'done':'error');
 
-    // CONTACTS
+    // CONTACTS — uses seller signers (real humans) not entity name
     setATStatus('Contacts','writing');
     const buyerNames=d.buyer_names?d.buyer_names.split(/[,&\n]/).map(n=>n.trim()).filter(Boolean):[];
-    const sellerNames=d.seller_names?d.seller_names.split(/[,&\n]/).map(n=>n.trim()).filter(Boolean):[];
-    const contactRoles=[...buyerNames.map((name,i)=>({name,role:'Buyer '+(i+1)})),...sellerNames.map((name,i)=>({name,role:'Seller '+(i+1)}))];
+    const sellerSigners=[d.seller_signer_1,d.seller_signer_2,d.seller_signer_3,d.seller_signer_4].filter(Boolean);
+    const fallbackSellers=(!sellerSigners.length&&d.seller_names)?d.seller_names.split(/[,&\n]/).map(n=>n.trim()).filter(Boolean):[];
+    const sellerContacts=sellerSigners.length?sellerSigners:fallbackSellers;
+    const contactRoles=[
+      ...buyerNames.map((name,i)=>({name,role:'Buyer '+(i+1)})),
+      ...sellerContacts.map((name,i)=>({name,role:'Seller '+(i+1)}))
+    ];
     let contactsOk=true;
     for(const c of contactRoles){
       if(!c.name)continue;
@@ -293,7 +306,6 @@ async function saveToAirtable(){
       const existing=await atSearch('Escrow Contacts','Full Name',d.escrow_officer_name);
       if(existing){
         setATStatus('Escrow Contacts','skipped');
-        console.log('Escrow contact already exists, skipping: '+d.escrow_officer_name);
       } else {
         const ecFields={'Full Name':d.escrow_officer_name};
         if(d.escrow_company)ecFields['Escrow Company']=d.escrow_company;
