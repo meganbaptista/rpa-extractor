@@ -206,6 +206,12 @@ async function atCreate(table,fields){
   if(data.error){console.warn('AT '+table+':',data.error);return null;}
   return data;
 }
+async function atSearch(table,field,value){
+  const res=await fetch(FUNCTION_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({airtable_search:{table,field,value}})});
+  const data=await res.json();
+  if(data.records&&data.records.length>0)return data.records[0];
+  return null;
+}
 const TABLE_ICONS={'Properties':'🏡','Transactions':'📋','Contacts':'👥','Escrow Contacts':'🏢','Dates & Deadlines':'📅'};
 let tableStatuses={};
 function renderATStatus(){const el=document.getElementById('atRows');el.innerHTML=Object.entries(tableStatuses).map(([name,status])=>'<div class="at-row"><div class="at-row-name">'+(TABLE_ICONS[name]||'📁')+' '+name+'</div><div class="at-badge at-'+status+'">'+(status==='pending'?'Pending':status==='writing'?'Writing...':status==='done'?'Saved':status==='skipped'?'Skipped':'Error')+'</div></div>').join('');}
@@ -230,9 +236,9 @@ async function saveToAirtable(){
     if(d.apn)propFields['APN']=d.apn;
     if(d.mls_number)propFields['MLS Number']=d.mls_number;
     if(d.hoa_name)propFields['HOA Name']=d.hoa_name;
-    if(d.hoa_fee)propFields['HOA Fee']=d.hoa_fee;
-    if(d.sqft_structure)propFields['Sq Ft Structure']=parseFloat(String(d.sqft_structure).replace(/[^0-9.]/g,''))||d.sqft_structure;
-    if(d.sqft_lot)propFields['Sq Ft Lot']=parseFloat(String(d.sqft_lot).replace(/[^0-9.]/g,''))||d.sqft_lot;
+    if(d.hoa_fee)propFields['HOA Fee']=String(d.hoa_fee);
+    if(d.sqft_structure)propFields['Sq Ft Structure']=String(d.sqft_structure);
+    if(d.sqft_lot)propFields['Sq Ft Lot']=String(d.sqft_lot);
     if(d.hoa_name||d.hoa_fee)propFields['Has HOA']=true;
     if(d.year_built){const yr=parseInt(String(d.year_built).replace(/\D/g,''));if(!isNaN(yr))propFields['Year Built']=yr;}
     if(d.seller_names)propFields['Seller Signer 1']=d.seller_names.split(/[,&\n]/)[0].trim();
@@ -262,7 +268,6 @@ async function saveToAirtable(){
     if(d.home_warranty_company)txFields['Home Warranty Company']=d.home_warranty_company;
     if(d.emd_amount)txFields['EMD Amount']=String(d.emd_amount);
     if(d.buyer_agent_commission_amount)txFields['Buyer Agent Commission']=String(d.buyer_agent_commission_amount);
-    if(d.seller_credit_referenced)txFields['Seller Credit']=String(d.seller_credit_referenced);
     if(d.escrow_company)txFields['Escrow Company']=d.escrow_company;
     if(d.title_company)txFields['Title Company']=d.title_company;
     const txRec=await atCreate('Transactions',txFields);
@@ -282,18 +287,25 @@ async function saveToAirtable(){
     }
     setATStatus('Contacts',contactsOk?'done':'error');
 
-    // ESCROW CONTACTS
+    // ESCROW CONTACTS — with duplicate check
     setATStatus('Escrow Contacts','writing');
     if(d.escrow_officer_name){
-      const ecFields={'Full Name':d.escrow_officer_name};
-      if(d.escrow_company)ecFields['Escrow Company']=d.escrow_company;
-      const ecRec=await atCreate('Escrow Contacts',ecFields);
-      setATStatus('Escrow Contacts',ecRec?'done':'error');
+      const existing=await atSearch('Escrow Contacts','Full Name',d.escrow_officer_name);
+      if(existing){
+        setATStatus('Escrow Contacts','skipped');
+        console.log('Escrow contact already exists, skipping: '+d.escrow_officer_name);
+      } else {
+        const ecFields={'Full Name':d.escrow_officer_name};
+        if(d.escrow_company)ecFields['Escrow Company']=d.escrow_company;
+        const ecRec=await atCreate('Escrow Contacts',ecFields);
+        setATStatus('Escrow Contacts',ecRec?'done':'error');
+      }
     }else{setATStatus('Escrow Contacts','skipped');}
 
     // DATES & DEADLINES
     setATStatus('Dates & Deadlines','writing');
     const dFields={};
+    if(d.property_address)dFields['Property Address']=d.property_address;
     if(d.date_of_acceptance)dFields['Open Date']=d.date_of_acceptance;
     if(d.date_rpa_prepared)dFields['Date RPA Prepared']=d.date_rpa_prepared;
     if(d.close_of_escrow_date)dFields['Close of Escrow Date']=d.close_of_escrow_date;
@@ -304,7 +316,6 @@ async function saveToAirtable(){
     if(d.cop_date)dFields['COP Due Date']=d.cop_date;
     if(d.seller_disclosures_due_date)dFields['Seller Disclosures Due Date']=d.seller_disclosures_due_date;
     if(d.emd_due_date)dFields['EMD Due Date']=d.emd_due_date;
-    if(d.property_address)dFields['Property Address']=d.property_address;
     const dRec=await atCreate('Dates & Deadlines',dFields);
     setATStatus('Dates & Deadlines',dRec?'done':'error');
 
