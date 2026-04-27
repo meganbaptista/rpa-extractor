@@ -284,7 +284,7 @@ async function saveToAirtable(){
     if(d.seller_agent_name) txFields['Seller Agent Name']=d.seller_agent_name;
     if(d.seller_agent_brokerage_name) txFields['Seller Agent Brokerage']=d.seller_agent_brokerage_name;
     if(d.home_warranty_company) txFields['Home Warranty Company']=d.home_warranty_company;
-    if(propRec) txFields['Property']=[{id:propRec.id}];
+    
     const txRec=await atCreate('Transactions',txFields);
     setATStatus('Transactions',txRec?'done':'error');
     setATStatus('Contacts','writing');
