@@ -145,9 +145,7 @@
   <footer>Built for My TC Concierge &mdash; powered by Claude + Airtable</footer>
 </div>
 <script>
-const WORKER_URL = '/.netlify/functions/extract';
-const AT_TOKEN = 'patjINcR6HBzfakqI.283c78f4524fd7723c0a539488b0687fbe81f0344f12354263e6221713391bba';
-const AT_BASE = 'appZ9ucNHFtNRNQMg';
+const FUNCTION_URL = '/.netlify/functions/extract';
 const FILES = [null, null, null];
 let extractedData = {};
 const FIELD_LABELS = {
@@ -166,204 +164,166 @@ const SECTIONS = {
 };
 function setFile(idx, input) {
   FILES[idx] = input.files[0] || null;
-  const slot = document.getElementById('slot' + idx);
-  const fn = document.getElementById('fn' + idx);
-  const badge = document.getElementById('badge' + idx);
+  const slot = document.getElementById('slot'+idx);
+  const fn = document.getElementById('fn'+idx);
+  const badge = document.getElementById('badge'+idx);
   if (FILES[idx]) {
-    fn.textContent = FILES[idx].name;
-    slot.classList.add('ready');
-    badge.textContent = 'Ready';
-    badge.className = 'slot-badge badge-ready';
+    fn.textContent = FILES[idx].name; slot.classList.add('ready');
+    badge.textContent = 'Ready'; badge.className = 'slot-badge badge-ready';
   } else {
-    fn.textContent = 'Click to select PDF';
-    slot.classList.remove('ready');
-    badge.textContent = idx === 0 ? 'Required' : 'Optional';
-    badge.className = idx === 0 ? 'slot-badge badge-required' : 'slot-badge badge-optional';
+    fn.textContent = 'Click to select PDF'; slot.classList.remove('ready');
+    badge.textContent = idx===0?'Required':'Optional';
+    badge.className = idx===0?'slot-badge badge-required':'slot-badge badge-optional';
   }
   document.getElementById('extract-btn').disabled = !FILES[0];
 }
 async function toBase64(file) {
-  return new Promise((res, rej) => {
+  return new Promise((res,rej) => {
     const r = new FileReader();
     r.onload = () => res(r.result.split(',')[1]);
     r.onerror = () => rej(new Error('Read failed'));
     r.readAsDataURL(file);
   });
 }
-function setProgress(pct) {
-  document.getElementById('progress-wrap').style.display = 'block';
-  document.getElementById('progress-bar').style.width = pct + '%';
-}
-function showStatus(msg, type) {
-  const el = document.getElementById('status-box');
-  el.textContent = msg;
-  el.className = 'status-box status-' + type;
-  el.style.display = 'block';
-}
+function setProgress(pct) { document.getElementById('progress-wrap').style.display='block'; document.getElementById('progress-bar').style.width=pct+'%'; }
+function showStatus(msg,type) { const el=document.getElementById('status-box'); el.textContent=msg; el.className='status-box status-'+type; el.style.display='block'; }
 async function runExtraction() {
-  document.getElementById('results-card').style.display = 'none';
-  document.getElementById('send-section').style.display = 'none';
-  document.getElementById('extract-btn').disabled = true;
+  document.getElementById('results-card').style.display='none';
+  document.getElementById('send-section').style.display='none';
+  document.getElementById('extract-btn').disabled=true;
   try {
-    showStatus('Reading documents...', 'info');
-    setProgress(15);
-    const docLabels = [
-      'California Residential Purchase Agreement (RPA) and all addenda',
-      'Property Profile Report (CoreLogic/Anvil or similar)',
-      'MLS Listing'
-    ];
-    const documents = [];
-    for (let i = 0; i < 3; i++) {
-      if (FILES[i]) {
-        const data = await toBase64(FILES[i]);
-        documents.push({ label: docLabels[i], data });
-      }
-    }
-    showStatus('Sending to Claude for analysis — this takes about 60 seconds...', 'info');
-    setProgress(40);
-    const resp = await fetch(WORKER_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ documents })
-    });
+    showStatus('Reading documents...','info'); setProgress(15);
+    const docLabels=['California Residential Purchase Agreement (RPA) and all addenda','Property Profile Report (CoreLogic/Anvil or similar)','MLS Listing'];
+    const documents=[];
+    for(let i=0;i<3;i++) { if(FILES[i]){ const data=await toBase64(FILES[i]); documents.push({label:docLabels[i],data}); } }
+    showStatus('Sending to Claude for analysis — this takes about 60 seconds...','info'); setProgress(40);
+    const resp = await fetch(FUNCTION_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({documents})});
     setProgress(80);
-    const result = await resp.json();
-    if (result.error) throw new Error(result.error.message || JSON.stringify(result.error));
-    const text = result.content.map(b => b.text || '').join('');
-    extractedData = JSON.parse(text.replace(/```json|```/g, '').trim());
-    const tbody = document.getElementById('results-body');
-    tbody.innerHTML = '';
-    let filled = 0;
-    for (const [section, keys] of Object.entries(SECTIONS)) {
-      const hdr = document.createElement('tr');
-      hdr.className = 'section-head';
-      hdr.innerHTML = '<td colspan="2">' + section + '</td>';
-      tbody.appendChild(hdr);
-      keys.forEach(key => {
-        const val = extractedData[key] || '';
-        if (val) filled++;
-        const tr = document.createElement('tr');
-        tr.className = 'field-row';
-        tr.innerHTML = '<td class="field-key">' + FIELD_LABELS[key] + '</td><td class="field-val ' + (val ? '' : 'field-empty') + '">' + (val || '—') + '</td>';
+    const result=await resp.json();
+    if(result.error) throw new Error(result.error.message||JSON.stringify(result.error));
+    const text=result.content.map(b=>b.text||'').join('');
+    extractedData=JSON.parse(text.replace(/```json|```/g,'').trim());
+    const tbody=document.getElementById('results-body');
+    tbody.innerHTML=''; let filled=0;
+    for(const [section,keys] of Object.entries(SECTIONS)){
+      const hdr=document.createElement('tr'); hdr.className='section-head';
+      hdr.innerHTML='<td colspan="2">'+section+'</td>'; tbody.appendChild(hdr);
+      keys.forEach(key=>{
+        const val=extractedData[key]||''; if(val) filled++;
+        const tr=document.createElement('tr'); tr.className='field-row';
+        tr.innerHTML='<td class="field-key">'+FIELD_LABELS[key]+'</td><td class="field-val '+(val?'':'field-empty')+'">'+(val||'—')+'</td>';
         tbody.appendChild(tr);
       });
     }
-    document.getElementById('results-count').textContent = filled + ' of 50 fields extracted';
+    document.getElementById('results-count').textContent=filled+' of 50 fields extracted';
     setProgress(100);
-    document.getElementById('status-box').style.display = 'none';
-    document.getElementById('progress-wrap').style.display = 'none';
-    document.getElementById('results-card').style.display = 'block';
-    document.getElementById('send-section').style.display = 'block';
-    document.getElementById('extract-btn').disabled = false;
+    document.getElementById('status-box').style.display='none';
+    document.getElementById('progress-wrap').style.display='none';
+    document.getElementById('results-card').style.display='block';
+    document.getElementById('send-section').style.display='block';
+    document.getElementById('extract-btn').disabled=false;
   } catch(err) {
-    showStatus('Error: ' + err.message, 'error');
-    document.getElementById('progress-wrap').style.display = 'none';
-    document.getElementById('extract-btn').disabled = false;
+    showStatus('Error: '+err.message,'error');
+    document.getElementById('progress-wrap').style.display='none';
+    document.getElementById('extract-btn').disabled=false;
   }
 }
 async function atCreate(table, fields) {
-  const res = await fetch('https://api.airtable.com/v0/' + AT_BASE + '/' + encodeURIComponent(table), {
+  const res = await fetch(FUNCTION_URL, {
     method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + AT_TOKEN, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields })
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({airtable_table: table, fields})
   });
   const data = await res.json();
-  if (data.error) { console.warn('AT ' + table + ':', data.error); return null; }
+  if(data.error){ console.warn('AT '+table+':', data.error); return null; }
   return data;
 }
-const TABLE_ICONS = { 'Properties': '🏡', 'Transactions': '📋', 'Contacts': '👥', 'Escrow Contacts': '🏢', 'Dates & Deadlines': '📅' };
-let tableStatuses = {};
-function renderATStatus() {
-  const el = document.getElementById('atRows');
-  el.innerHTML = Object.entries(tableStatuses).map(([name, status]) =>
-    '<div class="at-row"><div class="at-row-name">' + (TABLE_ICONS[name] || '📁') + ' ' + name + '</div>' +
-    '<div class="at-badge at-' + status + '">' + (status === 'pending' ? 'Pending' : status === 'writing' ? 'Writing...' : status === 'done' ? '✓ Saved' : status === 'skipped' ? 'Skipped' : '✗ Error') + '</div></div>'
+const TABLE_ICONS={'Properties':'🏡','Transactions':'📋','Contacts':'👥','Escrow Contacts':'🏢','Dates & Deadlines':'📅'};
+let tableStatuses={};
+function renderATStatus(){
+  const el=document.getElementById('atRows');
+  el.innerHTML=Object.entries(tableStatuses).map(([name,status])=>
+    '<div class="at-row"><div class="at-row-name">'+(TABLE_ICONS[name]||'📁')+' '+name+'</div>'+
+    '<div class="at-badge at-'+status+'">'+(status==='pending'?'Pending':status==='writing'?'Writing...':status==='done'?'✓ Saved':status==='skipped'?'Skipped':'✗ Error')+'</div></div>'
   ).join('');
 }
-function setATStatus(table, status) { tableStatuses[table] = status; renderATStatus(); }
-function showSendStatus(msg, type) {
-  const el = document.getElementById('send-status');
-  el.textContent = msg;
-  el.className = 'status-box status-' + type;
-  el.style.display = 'block';
-}
-async function saveToAirtable() {
-  if (!Object.keys(extractedData).length) return;
-  const btn = document.getElementById('send-btn');
-  btn.disabled = true;
-  btn.textContent = '⏳ Saving to Airtable...';
-  tableStatuses = { 'Properties': 'pending', 'Transactions': 'pending', 'Contacts': 'pending', 'Escrow Contacts': 'pending', 'Dates & Deadlines': 'pending' };
+function setATStatus(table,status){tableStatuses[table]=status;renderATStatus();}
+function showSendStatus(msg,type){const el=document.getElementById('send-status');el.textContent=msg;el.className='status-box status-'+type;el.style.display='block';}
+async function saveToAirtable(){
+  if(!Object.keys(extractedData).length) return;
+  const btn=document.getElementById('send-btn');
+  btn.disabled=true; btn.textContent='⏳ Saving to Airtable...';
+  tableStatuses={'Properties':'pending','Transactions':'pending','Contacts':'pending','Escrow Contacts':'pending','Dates & Deadlines':'pending'};
   document.getElementById('atStatus').classList.add('visible');
   renderATStatus();
-  const d = extractedData;
+  const d=extractedData;
   try {
-    setATStatus('Properties', 'writing');
-    const propFields = {};
-    if (d.property_address) propFields['Street Address'] = d.property_address;
-    if (d.city) propFields['City'] = d.city;
-    if (d.county) propFields['County'] = d.county;
-    if (d.zip_code) propFields['Zip Code'] = d.zip_code;
-    if (d.property_type) propFields['Property Type'] = d.property_type;
-    if (d.apn) propFields['APN'] = d.apn;
-    if (d.mls_number) propFields['MLS Number'] = d.mls_number;
-    if (d.hoa_name) propFields['HOA Name'] = d.hoa_name;
-    if (d.hoa_fee) propFields['HOA Fee'] = d.hoa_fee;
-    if (d.sqft_structure) propFields['Sq Ft Structure'] = d.sqft_structure;
-    if (d.sqft_lot) propFields['Sq Ft Lot'] = d.sqft_lot;
-    if (d.hoa_name || d.hoa_fee) propFields['Has HOA'] = true;
-    if (d.year_built) { const yr = parseInt(String(d.year_built).replace(/\D/g, '')); if (!isNaN(yr)) propFields['Year Built'] = yr; }
-    if (d.seller_names) propFields['Seller Signer 1'] = d.seller_names.split(/[,&\n]/)[0].trim();
-    const propRec = await atCreate('Properties', propFields);
-    setATStatus('Properties', propRec ? 'done' : 'error');
-    setATStatus('Transactions', 'writing');
-    const txFields = { 'Transaction Name': d.property_address || 'Unknown Address', 'Status': 'Active' };
-    if (d.final_purchase_price) txFields['Purchase Price'] = d.final_purchase_price;
-    if (d.buyer_agent_name) txFields['Buyer Agent Name'] = d.buyer_agent_name;
-    if (d.buyer_agent_brokerage_name) txFields['Buyer Agent Brokerage'] = d.buyer_agent_brokerage_name;
-    if (d.seller_agent_name) txFields['Seller Agent Name'] = d.seller_agent_name;
-    if (d.seller_agent_brokerage_name) txFields['Seller Agent Brokerage'] = d.seller_agent_brokerage_name;
-    if (d.home_warranty_company) txFields['Home Warranty Company'] = d.home_warranty_company;
-    if (propRec) txFields['Property'] = [{ id: propRec.id }];
-    const txRec = await atCreate('Transactions', txFields);
-    setATStatus('Transactions', txRec ? 'done' : 'error');
-    setATStatus('Contacts', 'writing');
-    const buyerNames = d.buyer_names ? d.buyer_names.split(/[,&\n]/).map(n => n.trim()).filter(Boolean) : [];
-    const sellerNames = d.seller_names ? d.seller_names.split(/[,&\n]/).map(n => n.trim()).filter(Boolean) : [];
-    const contactRoles = [...buyerNames.map((name, i) => ({ name, role: 'Buyer ' + (i+1) })), ...sellerNames.map((name, i) => ({ name, role: 'Seller ' + (i+1) }))];
-    let contactsOk = true;
-    for (const c of contactRoles) {
-      if (!c.name) continue;
-      const cFields = { 'Full Name': c.name, 'Role': c.role };
-      if (txRec) cFields['Transaction'] = [{ id: txRec.id }];
-      const r = await atCreate('Contacts', cFields);
-      if (!r) contactsOk = false;
+    setATStatus('Properties','writing');
+    const propFields={};
+    if(d.property_address) propFields['Street Address']=d.property_address;
+    if(d.city) propFields['City']=d.city;
+    if(d.county) propFields['County']=d.county;
+    if(d.zip_code) propFields['Zip Code']=d.zip_code;
+    if(d.property_type) propFields['Property Type']=d.property_type;
+    if(d.apn) propFields['APN']=d.apn;
+    if(d.mls_number) propFields['MLS Number']=d.mls_number;
+    if(d.hoa_name) propFields['HOA Name']=d.hoa_name;
+    if(d.hoa_fee) propFields['HOA Fee']=d.hoa_fee;
+    if(d.sqft_structure) propFields['Sq Ft Structure']=d.sqft_structure;
+    if(d.sqft_lot) propFields['Sq Ft Lot']=d.sqft_lot;
+    if(d.hoa_name||d.hoa_fee) propFields['Has HOA']=true;
+    if(d.year_built){const yr=parseInt(String(d.year_built).replace(/\D/g,''));if(!isNaN(yr)) propFields['Year Built']=yr;}
+    if(d.seller_names) propFields['Seller Signer 1']=d.seller_names.split(/[,&\n]/)[0].trim();
+    const propRec=await atCreate('Properties',propFields);
+    setATStatus('Properties',propRec?'done':'error');
+    setATStatus('Transactions','writing');
+    const txFields={'Transaction Name':d.property_address||'Unknown Address','Status':'Active'};
+    if(d.final_purchase_price) txFields['Purchase Price']=d.final_purchase_price;
+    if(d.buyer_agent_name) txFields['Buyer Agent Name']=d.buyer_agent_name;
+    if(d.buyer_agent_brokerage_name) txFields['Buyer Agent Brokerage']=d.buyer_agent_brokerage_name;
+    if(d.seller_agent_name) txFields['Seller Agent Name']=d.seller_agent_name;
+    if(d.seller_agent_brokerage_name) txFields['Seller Agent Brokerage']=d.seller_agent_brokerage_name;
+    if(d.home_warranty_company) txFields['Home Warranty Company']=d.home_warranty_company;
+    if(propRec) txFields['Property']=[{id:propRec.id}];
+    const txRec=await atCreate('Transactions',txFields);
+    setATStatus('Transactions',txRec?'done':'error');
+    setATStatus('Contacts','writing');
+    const buyerNames=d.buyer_names?d.buyer_names.split(/[,&\n]/).map(n=>n.trim()).filter(Boolean):[];
+    const sellerNames=d.seller_names?d.seller_names.split(/[,&\n]/).map(n=>n.trim()).filter(Boolean):[];
+    const contactRoles=[...buyerNames.map((name,i)=>({name,role:'Buyer '+(i+1)})),...sellerNames.map((name,i)=>({name,role:'Seller '+(i+1)}))];
+    let contactsOk=true;
+    for(const c of contactRoles){
+      if(!c.name) continue;
+      const cFields={'Full Name':c.name,'Role':c.role};
+      if(txRec) cFields['Transaction']=[{id:txRec.id}];
+      const r=await atCreate('Contacts',cFields);
+      if(!r) contactsOk=false;
     }
-    setATStatus('Contacts', contactsOk ? 'done' : 'error');
-    setATStatus('Escrow Contacts', 'writing');
-    if (d.escrow_officer_name) {
-      const ecFields = { 'Full Name': d.escrow_officer_name };
-      if (d.escrow_company) ecFields['Escrow Company'] = d.escrow_company;
-      const ecRec = await atCreate('Escrow Contacts', ecFields);
-      setATStatus('Escrow Contacts', ecRec ? 'done' : 'error');
-    } else { setATStatus('Escrow Contacts', 'skipped'); }
-    setATStatus('Dates & Deadlines', 'writing');
-    const dFields = {};
-    if (txRec) dFields['Transaction'] = [{ id: txRec.id }];
-    const dateMap = { 'Open Date': d.date_of_acceptance, 'Close of Escrow Date': d.close_of_escrow_date, 'Loan Contingency Date': d.loan_contingency_date, 'Appraisal Contingency Date': d.appraisal_contingency_date, 'Inspection Contingency Date': d.inspection_contingency_date, 'SPRP Due Date': d.sprp_date };
-    Object.entries(dateMap).forEach(([field, val]) => { if (val) dFields[field] = val; });
-    const dRec = await atCreate('Dates & Deadlines', dFields);
-    setATStatus('Dates & Deadlines', dRec ? 'done' : 'error');
-    showSendStatus('✅ All data saved to your Keeva Airtable base successfully!', 'success');
-    btn.textContent = '✓ Saved to Airtable';
-  } catch(err) {
-    Object.keys(tableStatuses).forEach(k => { if (tableStatuses[k] === 'writing' || tableStatuses[k] === 'pending') tableStatuses[k] = 'error'; });
+    setATStatus('Contacts',contactsOk?'done':'error');
+    setATStatus('Escrow Contacts','writing');
+    if(d.escrow_officer_name){
+      const ecFields={'Full Name':d.escrow_officer_name};
+      if(d.escrow_company) ecFields['Escrow Company']=d.escrow_company;
+      const ecRec=await atCreate('Escrow Contacts',ecFields);
+      setATStatus('Escrow Contacts',ecRec?'done':'error');
+    } else { setATStatus('Escrow Contacts','skipped'); }
+    setATStatus('Dates & Deadlines','writing');
+    const dFields={};
+    if(txRec) dFields['Transaction']=[{id:txRec.id}];
+    const dateMap={'Open Date':d.date_of_acceptance,'Close of Escrow Date':d.close_of_escrow_date,'Loan Contingency Date':d.loan_contingency_date,'Appraisal Contingency Date':d.appraisal_contingency_date,'Inspection Contingency Date':d.inspection_contingency_date,'SPRP Due Date':d.sprp_date};
+    Object.entries(dateMap).forEach(([field,val])=>{if(val) dFields[field]=val;});
+    const dRec=await atCreate('Dates & Deadlines',dFields);
+    setATStatus('Dates & Deadlines',dRec?'done':'error');
+    showSendStatus('✅ All data saved to your Keeva Airtable base successfully!','success');
+    btn.textContent='✓ Saved to Airtable';
+  } catch(err){
+    Object.keys(tableStatuses).forEach(k=>{if(tableStatuses[k]==='writing'||tableStatuses[k]==='pending') tableStatuses[k]='error';});
     renderATStatus();
-    showSendStatus('Error: ' + err.message, 'error');
-    btn.disabled = false;
-    btn.textContent = '🗄️ Retry — Save to Airtable';
+    showSendStatus('Error: '+err.message,'error');
+    btn.disabled=false; btn.textContent='🗄️ Retry — Save to Airtable';
   }
 }
-function copyJSON() { navigator.clipboard.writeText(JSON.stringify(extractedData, null, 2)).then(() => alert('JSON copied!')); }
+function copyJSON(){navigator.clipboard.writeText(JSON.stringify(extractedData,null,2)).then(()=>alert('JSON copied!'));}
 </script>
 </body>
 </html>
