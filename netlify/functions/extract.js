@@ -16,16 +16,29 @@ exports.handler = async function(event, context) {
 
   try {
     const body = JSON.parse(event.body);
+    const AT_TOKEN = process.env.AIRTABLE_TOKEN;
+    const AT_BASE  = process.env.AIRTABLE_BASE_ID || 'appZ9ucNHFtNRNQMg';
 
-    // ── AIRTABLE PROXY ────────────────────────────────────────────────────────
-    if (body.airtable_table) {
-      const AT_TOKEN = process.env.AIRTABLE_TOKEN;
-      const AT_BASE  = process.env.AIRTABLE_BASE_ID || 'appZ9ucNHFtNRNQMg';
-
+    // ── AIRTABLE SEARCH (for duplicate checking) ──────────────────────────────
+    if (body.airtable_search) {
       if (!AT_TOKEN) {
         return { statusCode: 500, headers, body: JSON.stringify({ error: { message: 'AIRTABLE_TOKEN not set' } }) };
       }
+      const { table, field, value } = body.airtable_search;
+      const formula = encodeURIComponent('LOWER({' + field + '})=LOWER("' + value.replace(/"/g, '') + '")');
+      const searchResp = await fetch(
+        'https://api.airtable.com/v0/' + AT_BASE + '/' + encodeURIComponent(table) + '?filterByFormula=' + formula + '&maxRecords=1',
+        { headers: { 'Authorization': 'Bearer ' + AT_TOKEN } }
+      );
+      const searchData = await searchResp.json();
+      return { statusCode: 200, headers, body: JSON.stringify(searchData) };
+    }
 
+    // ── AIRTABLE CREATE ───────────────────────────────────────────────────────
+    if (body.airtable_table) {
+      if (!AT_TOKEN) {
+        return { statusCode: 500, headers, body: JSON.stringify({ error: { message: 'AIRTABLE_TOKEN not set' } }) };
+      }
       const atResp = await fetch(
         'https://api.airtable.com/v0/' + AT_BASE + '/' + encodeURIComponent(body.airtable_table),
         {
@@ -43,7 +56,6 @@ exports.handler = async function(event, context) {
       return { statusCode: 500, headers, body: JSON.stringify({ error: { message: 'ANTHROPIC_API_KEY not set' } }) };
     }
 
-    // Build content array from uploaded documents
     const documents = body.documents || [];
     const content = [];
 
