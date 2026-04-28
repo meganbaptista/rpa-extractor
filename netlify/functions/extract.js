@@ -79,7 +79,7 @@ Important rules:
 - For trust_full_name: full legal name of the trust if applicable.
 - For trust_date: date the trust was established if shown.
 - For sqft_structure and sqft_lot: pull the full line as it appears in the document.
-- Leave any field as empty string if not found.`;
+- Leave any field as empty string if not found. For property_type: always use the SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex. Normalize all text to proper case — never return values in ALL CAPS even if the source document is in all caps.`;
 
     content.push({ type: 'text', text: extractionPrompt });
 
