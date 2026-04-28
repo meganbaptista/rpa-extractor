@@ -369,7 +369,7 @@ Use ISO format YYYY-MM-DD for all dates. For sqft_structure and sqft_lot pull th
 
 const RLA_PROMPT = `Extract all of the following fields from the uploaded California Residential Listing Agreement and supporting documents. Cross-reference all documents to fill gaps. Return ONLY valid JSON with exactly these keys, no preamble, no markdown:
 {"property_address":"","property_type":"","county":"","city":"","zip_code":"","apn":"","sqft_structure":"","sqft_lot":"","year_built":"","hoa_name":"","hoa_fee":"","seller_names":"","seller_email":"","listing_price":"","listing_date":"","listing_expiration_date":"","listing_agent_commission":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_phone":""}
-Use ISO format YYYY-MM-DD for all dates. For sqft_structure and sqft_lot pull the full line as it appears. For seller_email this may not always be present — leave empty string if not found. Leave all fields as empty string if not found.`;
+Use ISO format YYYY-MM-DD for all dates. For sqft_structure and sqft_lot pull the full line as it appears. For seller_email this may not always be present — leave empty string if not found. Leave all fields as empty string if not found. Normalize all text to proper case (Title Case for names and addresses, sentence case for other fields) — do not return values in ALL CAPS even if the source document is in all caps.`;
 
 // ── TAB SWITCHING ─────────────────────────────────────────────────────────────
 function switchTab(tab) {
