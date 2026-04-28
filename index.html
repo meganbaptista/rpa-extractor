@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Keeva — Document Extractor</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -16,130 +17,49 @@
     --warning-light: #fef9ec; --warning: #92670a;
     --radius: 10px; --radius-sm: 6px;
   }
-
-  body {
-    font-family: 'DM Sans', sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-  }
-
-  /* HEADER */
-  .header {
-    background: #0f1e12;
-    padding: 0 40px;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .logo {
-    font-family: 'DM Serif Display', serif;
-    font-size: 22px;
-    color: white;
-    letter-spacing: 3px;
-  }
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .header { background: #0f1e12; padding: 0 40px; height: 60px; display: flex; align-items: center; justify-content: space-between; }
+  .logo { font-family: 'DM Serif Display', serif; font-size: 22px; color: white; letter-spacing: 3px; }
   .logo span { color: #5cdb95; }
-  .header-badge {
-    font-size: 11px;
-    color: rgba(255,255,255,0.5);
-    letter-spacing: 1px;
-    text-transform: uppercase;
-  }
-
-  /* TABS */
-  .tab-bar {
-    background: #0f1e12;
-    display: flex;
-    padding: 0 40px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-  }
-  .tab {
-    padding: 14px 24px;
-    font-size: 13px;
-    font-weight: 500;
-    color: rgba(255,255,255,0.4);
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: all 0.2s;
-    letter-spacing: 0.3px;
-  }
+  .header-badge { font-size: 11px; color: rgba(255,255,255,0.5); letter-spacing: 1px; text-transform: uppercase; }
+  .tab-bar { background: #0f1e12; display: flex; padding: 0 40px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .tab { padding: 14px 24px; font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.4); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; }
   .tab:hover { color: rgba(255,255,255,0.7); }
-  .tab.active {
-    color: #5cdb95;
-    border-bottom-color: #5cdb95;
-  }
-
-  /* MAIN */
-  .main {
-    max-width: 740px;
-    margin: 0 auto;
-    padding: 40px 24px;
-  }
-
+  .tab.active { color: #5cdb95; border-bottom-color: #5cdb95; }
+  .main { max-width: 740px; margin: 0 auto; padding: 40px 24px; }
   .tab-content { display: none; }
   .tab-content.active { display: block; }
-
   .page-header { margin-bottom: 32px; }
-  .page-title {
-    font-family: 'DM Serif Display', serif;
-    font-size: 28px;
-    color: #0f1e12;
-    margin-bottom: 6px;
-  }
+  .page-title { font-family: 'DM Serif Display', serif; font-size: 28px; color: #0f1e12; margin-bottom: 6px; }
   .page-sub { font-size: 14px; color: var(--muted); }
-
-  /* CARDS */
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1.5rem;
-    margin-bottom: 1rem;
-  }
-  .card-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 1rem;
-  }
-
-  /* UPLOAD SLOTS */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; margin-bottom: 1rem; }
+  .card-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 1rem; }
   .upload-slots { display: flex; flex-direction: column; gap: 8px; }
   .upload-slot {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 10px 14px;
-    cursor: pointer;
-    transition: all 0.15s;
-    background: var(--bg);
+    display: flex; align-items: center; gap: 12px;
+    border: 1.5px dashed var(--border); border-radius: var(--radius-sm);
+    padding: 12px 14px; cursor: pointer; transition: all 0.15s; background: var(--bg);
   }
   .upload-slot:hover { border-color: var(--border-strong); background: #f0efe9; }
-  .upload-slot.ready { border-color: var(--green); background: var(--green-light); }
-  .slot-icon { font-size: 16px; width: 20px; text-align: center; flex-shrink: 0; }
+  .upload-slot.ready { border-style: solid; border-color: var(--green); background: var(--green-light); }
+  .upload-slot.dragover { border-color: var(--green); background: var(--green-light); transform: scale(1.01); }
+  .upload-slot.compressing { border-color: var(--warning); background: var(--warning-light); border-style: solid; }
+  .slot-icon { font-size: 18px; width: 22px; text-align: center; flex-shrink: 0; }
   .slot-info { flex: 1; min-width: 0; }
   .slot-label { font-size: 13px; font-weight: 500; }
-  .slot-filename { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'DM Mono', monospace; }
+  .slot-filename { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'DM Mono', monospace; margin-top: 2px; }
+  .slot-size { font-size: 11px; margin-top: 3px; }
+  .slot-size.ok { color: var(--green-text); }
+  .slot-size.compressing { color: var(--warning); }
+  .slot-size.warn { color: var(--danger); }
   .slot-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; flex-shrink: 0; font-weight: 500; }
   .badge-required { background: #fde8e8; color: #a32d2d; }
   .badge-optional { background: #efefec; color: var(--muted); }
   .badge-ready { background: var(--green-light); color: var(--green-text); }
+  .badge-compressing { background: var(--warning-light); color: var(--warning); }
+  .drag-hint { font-size: 11px; color: var(--hint); text-align: center; margin-top: 8px; }
   input[type="file"] { display: none; }
-
-  /* BUTTONS */
-  .btn {
-    display: block; width: 100%; padding: 12px;
-    font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500;
-    cursor: pointer; border-radius: var(--radius-sm);
-    border: 1px solid var(--border-strong);
-    background: var(--surface); color: var(--text);
-    transition: all 0.15s; text-align: center;
-  }
+  .btn { display: block; width: 100%; padding: 12px; font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); transition: all 0.15s; text-align: center; }
   .btn:hover:not(:disabled) { background: var(--bg); }
   .btn:disabled { opacity: 0.35; cursor: not-allowed; }
   .btn-green { background: var(--green); color: #fff; border-color: var(--green); }
@@ -147,23 +67,14 @@
   .btn-blue { background: var(--blue); color: #fff; border-color: var(--blue); }
   .btn-blue:hover:not(:disabled) { background: #133a61; }
   .btn-small { padding: 6px 14px; font-size: 13px; width: auto; display: inline-block; }
-
-  /* STATUS */
-  .status-box {
-    padding: 12px 16px; border-radius: var(--radius-sm);
-    font-size: 13px; margin-top: 1rem; display: none;
-  }
+  .status-box { padding: 12px 16px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 1rem; display: none; }
   .status-info { background: var(--warning-light); color: var(--warning); border: 1px solid #f0d98a; }
   .status-error { background: var(--danger-light); color: var(--danger); border: 1px solid #f5c6c2; }
   .status-success { background: var(--green-light); color: var(--green-text); border: 1px solid #b2d9c8; }
-
-  /* PROGRESS */
   .progress-bar-wrap { height: 3px; background: var(--border); border-radius: 2px; margin-top: 10px; overflow: hidden; display: none; }
   .progress-bar { height: 100%; border-radius: 2px; width: 0%; transition: width 0.4s ease; }
   .progress-green { background: var(--green); }
   .progress-blue { background: var(--blue); }
-
-  /* RESULTS */
   .results-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; flex-wrap: wrap; gap: 8px; }
   .fields-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
   .fields-table colgroup col:first-child { width: 44%; }
@@ -175,7 +86,6 @@
   .field-key { color: var(--muted); }
   .field-val { color: var(--text); word-break: break-word; font-family: 'DM Mono', monospace; font-size: 12px; }
   .field-empty { color: var(--hint); font-style: italic; font-family: 'DM Sans', sans-serif; font-size: 13px; }
-
   footer { text-align: center; font-size: 12px; color: var(--hint); margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 </style>
 </head>
@@ -185,61 +95,61 @@
   <div class="logo">KEE<span>VA</span></div>
   <div class="header-badge">Document Extractor</div>
 </div>
-
 <div class="tab-bar">
-  <div class="tab active" onclick="switchTab('rpa')">📄 Purchase Agreement (RPA)</div>
-  <div class="tab" onclick="switchTab('rla')">🏠 Listing Agreement (RLA)</div>
+  <div class="tab active" onclick="switchTab('rpa',event)">📄 Purchase Agreement (RPA)</div>
+  <div class="tab" onclick="switchTab('rla',event)">🏠 Listing Agreement (RLA)</div>
 </div>
 
 <div class="main">
 
-  <!-- ── RPA TAB ─────────────────────────────────────────────────────────── -->
+  <!-- RPA TAB -->
   <div class="tab-content active" id="tab-rpa">
     <div class="page-header">
       <div class="page-title">Purchase Agreement Extractor</div>
       <div class="page-sub">Upload documents → Extract 50 fields → Send to Process Street</div>
     </div>
-
     <div class="card">
       <div class="card-label">Step 1 — Upload documents</div>
       <div class="upload-slots">
-        <label class="upload-slot" id="rpa-slot0">
+        <label class="upload-slot" id="rpa-slot0" ondragover="onDragOver(event,'rpa',0)" ondragleave="onDragLeave(event,'rpa',0)" ondrop="onDrop(event,'rpa',0)">
           <span class="slot-icon">📄</span>
           <div class="slot-info">
             <p class="slot-label">Purchase Agreement (RPA + addenda)</p>
-            <p class="slot-filename" id="rpa-fn0">Click to select PDF</p>
+            <p class="slot-filename" id="rpa-fn0">Click or drag PDF here</p>
+            <p class="slot-size" id="rpa-sz0"></p>
           </div>
           <span class="slot-badge badge-required" id="rpa-badge0">Required</span>
-          <input type="file" accept=".pdf" onchange="setFile('rpa', 0, this)">
+          <input type="file" accept=".pdf" onchange="handleInput('rpa',0,this)">
         </label>
-        <label class="upload-slot" id="rpa-slot1">
+        <label class="upload-slot" id="rpa-slot1" ondragover="onDragOver(event,'rpa',1)" ondragleave="onDragLeave(event,'rpa',1)" ondrop="onDrop(event,'rpa',1)">
           <span class="slot-icon">🏠</span>
           <div class="slot-info">
             <p class="slot-label">Property Profile Report</p>
-            <p class="slot-filename" id="rpa-fn1">Click to select PDF</p>
+            <p class="slot-filename" id="rpa-fn1">Click or drag PDF here</p>
+            <p class="slot-size" id="rpa-sz1"></p>
           </div>
           <span class="slot-badge badge-optional" id="rpa-badge1">Optional</span>
-          <input type="file" accept=".pdf" onchange="setFile('rpa', 1, this)">
+          <input type="file" accept=".pdf" onchange="handleInput('rpa',1,this)">
         </label>
-        <label class="upload-slot" id="rpa-slot2">
+        <label class="upload-slot" id="rpa-slot2" ondragover="onDragOver(event,'rpa',2)" ondragleave="onDragLeave(event,'rpa',2)" ondrop="onDrop(event,'rpa',2)">
           <span class="slot-icon">📋</span>
           <div class="slot-info">
             <p class="slot-label">MLS Listing</p>
-            <p class="slot-filename" id="rpa-fn2">Click to select PDF</p>
+            <p class="slot-filename" id="rpa-fn2">Click or drag PDF here</p>
+            <p class="slot-size" id="rpa-sz2"></p>
           </div>
           <span class="slot-badge badge-optional" id="rpa-badge2">Optional</span>
-          <input type="file" accept=".pdf" onchange="setFile('rpa', 2, this)">
+          <input type="file" accept=".pdf" onchange="handleInput('rpa',2,this)">
         </label>
       </div>
+      <p class="drag-hint">💡 Drag PDFs directly onto each slot, or click to browse. Large files are automatically compressed.</p>
     </div>
-
     <div class="card">
       <div class="card-label">Step 2 — Extract</div>
       <button class="btn btn-green" id="rpa-extract-btn" onclick="runExtraction('rpa')" disabled>Extract all 50 fields</button>
       <div class="progress-bar-wrap" id="rpa-progress-wrap"><div class="progress-bar progress-green" id="rpa-progress-bar"></div></div>
       <div class="status-box" id="rpa-status-box"></div>
     </div>
-
     <div class="card" id="rpa-results-card" style="display:none;">
       <div class="results-header">
         <div class="card-label" style="margin:0;" id="rpa-results-count">Fields extracted</div>
@@ -247,7 +157,6 @@
       </div>
       <table class="fields-table"><colgroup><col><col></colgroup><tbody id="rpa-results-body"></tbody></table>
     </div>
-
     <div id="rpa-send-section" style="display:none;">
       <div class="card">
         <div class="card-label">Step 3 — Send to Process Street</div>
@@ -257,53 +166,54 @@
     </div>
   </div>
 
-  <!-- ── RLA TAB ─────────────────────────────────────────────────────────── -->
+  <!-- RLA TAB -->
   <div class="tab-content" id="tab-rla">
     <div class="page-header">
       <div class="page-title">Listing Agreement Extractor</div>
       <div class="page-sub">Upload documents → Extract listing fields → Send to Process Street</div>
     </div>
-
     <div class="card">
       <div class="card-label">Step 1 — Upload documents</div>
       <div class="upload-slots">
-        <label class="upload-slot" id="rla-slot0">
+        <label class="upload-slot" id="rla-slot0" ondragover="onDragOver(event,'rla',0)" ondragleave="onDragLeave(event,'rla',0)" ondrop="onDrop(event,'rla',0)">
           <span class="slot-icon">📋</span>
           <div class="slot-info">
             <p class="slot-label">Listing Agreement (RLA)</p>
-            <p class="slot-filename" id="rla-fn0">Click to select PDF</p>
+            <p class="slot-filename" id="rla-fn0">Click or drag PDF here</p>
+            <p class="slot-size" id="rla-sz0"></p>
           </div>
           <span class="slot-badge badge-required" id="rla-badge0">Required</span>
-          <input type="file" accept=".pdf" onchange="setFile('rla', 0, this)">
+          <input type="file" accept=".pdf" onchange="handleInput('rla',0,this)">
         </label>
-        <label class="upload-slot" id="rla-slot1">
+        <label class="upload-slot" id="rla-slot1" ondragover="onDragOver(event,'rla',1)" ondragleave="onDragLeave(event,'rla',1)" ondrop="onDrop(event,'rla',1)">
           <span class="slot-icon">🏠</span>
           <div class="slot-info">
             <p class="slot-label">Property Profile Report</p>
-            <p class="slot-filename" id="rla-fn1">Click to select PDF</p>
+            <p class="slot-filename" id="rla-fn1">Click or drag PDF here</p>
+            <p class="slot-size" id="rla-sz1"></p>
           </div>
           <span class="slot-badge badge-optional" id="rla-badge1">Optional</span>
-          <input type="file" accept=".pdf" onchange="setFile('rla', 1, this)">
+          <input type="file" accept=".pdf" onchange="handleInput('rla',1,this)">
         </label>
-        <label class="upload-slot" id="rla-slot2">
+        <label class="upload-slot" id="rla-slot2" ondragover="onDragOver(event,'rla',2)" ondragleave="onDragLeave(event,'rla',2)" ondrop="onDrop(event,'rla',2)">
           <span class="slot-icon">📄</span>
           <div class="slot-info">
             <p class="slot-label">MLS Listing</p>
-            <p class="slot-filename" id="rla-fn2">Click to select PDF</p>
+            <p class="slot-filename" id="rla-fn2">Click or drag PDF here</p>
+            <p class="slot-size" id="rla-sz2"></p>
           </div>
           <span class="slot-badge badge-optional" id="rla-badge2">Optional</span>
-          <input type="file" accept=".pdf" onchange="setFile('rla', 2, this)">
+          <input type="file" accept=".pdf" onchange="handleInput('rla',2,this)">
         </label>
       </div>
+      <p class="drag-hint">💡 Drag PDFs directly onto each slot, or click to browse. Large files are automatically compressed.</p>
     </div>
-
     <div class="card">
       <div class="card-label">Step 2 — Extract</div>
       <button class="btn btn-blue" id="rla-extract-btn" onclick="runExtraction('rla')" disabled>Extract listing fields</button>
       <div class="progress-bar-wrap" id="rla-progress-wrap"><div class="progress-bar progress-blue" id="rla-progress-bar"></div></div>
       <div class="status-box" id="rla-status-box"></div>
     </div>
-
     <div class="card" id="rla-results-card" style="display:none;">
       <div class="results-header">
         <div class="card-label" style="margin:0;" id="rla-results-count">Fields extracted</div>
@@ -311,7 +221,6 @@
       </div>
       <table class="fields-table"><colgroup><col><col></colgroup><tbody id="rla-results-body"></tbody></table>
     </div>
-
     <div id="rla-send-section" style="display:none;">
       <div class="card">
         <div class="card-label">Step 3 — Send to Process Street</div>
@@ -325,21 +234,18 @@
 </div>
 
 <script>
-// ── CONFIG ────────────────────────────────────────────────────────────────────
 const FUNCTION_URL = '/.netlify/functions/extract';
 const ZAPIER = {
   rpa: 'https://hooks.zapier.com/hooks/catch/4252316/uvbvfoa/',
   rla: 'https://hooks.zapier.com/hooks/catch/4252316/uv140hh/'
 };
-
-const FILES = { rpa: [null, null, null], rla: [null, null, null] };
+const MAX_BYTES = 8 * 1024 * 1024; // 8MB threshold — compress above this
+const FILES = { rpa: [null,null,null], rla: [null,null,null] };
 const extracted = { rpa: {}, rla: {} };
 
-// ── FIELD DEFINITIONS ─────────────────────────────────────────────────────────
 const RPA_FIELD_LABELS = {
   property_address:'Property address',date_of_acceptance:'Date of acceptance',emd_due_date:'EMD due date',emd_amount:'EMD amount',close_of_escrow_date:'Close of escrow date',loan_contingency_date:'Loan contingency date',appraisal_contingency_date:'Appraisal contingency date',inspection_contingency_date:'Inspection contingency date',seller_disclosures_due_date:'Seller disclosures due date',sprp_date:'SPRP date',cop_date:'COP date',date_rpa_prepared:'Date RPA prepared',final_purchase_price:'Final purchase price',buyer_agent_commission_amount:'Buyer agent commission amount',seller_credit_referenced:'Seller credit referenced',is_all_cash:'All cash offer',home_warranty:'Home warranty',home_warranty_who_pays:'Home warranty — who pays',home_warranty_amount:'Home warranty amount',home_warranty_company:'Home warranty company',buyer_names:'Buyer name(s)',seller_names:'Seller name(s)',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',county:'County',city:'City',zip_code:'Zip code',mls_number:'MLS number',year_built:'Year built',buyer_agent_name:'Buyer agent name',buyer_agent_dre:'Buyer agent DRE',buyer_agent_brokerage_name:'Buyer brokerage name',buyer_agent_brokerage_dre:'Buyer brokerage DRE',buyer_agent_address:'Buyer agent address',buyer_agent_email:'Buyer agent email',buyer_agent_phone:'Buyer agent phone',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage_name:'Seller brokerage name',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone',escrow_company:'Escrow company',escrow_officer_name:'Escrow officer name',title_company:'Title company',hoa_fee:'HOA fee',hoa_name:'HOA name',property_type:'Property type'
 };
-
 const RPA_SECTIONS = {
   'Property':['property_address','apn','city','zip_code','county','mls_number','year_built','sqft_structure','sqft_lot','property_type','hoa_fee','hoa_name'],
   'Parties':['buyer_names','seller_names'],
@@ -351,56 +257,107 @@ const RPA_SECTIONS = {
   'Seller agent':['seller_agent_name','seller_agent_dre','seller_agent_brokerage_name','seller_agent_brokerage_dre','seller_agent_address','seller_agent_email','seller_agent_phone'],
   'Escrow & title':['escrow_company','escrow_officer_name','title_company']
 };
-
 const RLA_FIELD_LABELS = {
   property_address:'Property address',property_type:'Type of property',county:'County',city:'City',zip_code:'Zip code',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',year_built:'Year built',hoa_name:'HOA name',hoa_fee:'HOA fee',seller_names:'Seller name(s)',seller_email:'Seller email address',listing_price:'Listing price',listing_date:'Listing date',listing_expiration_date:'Listing expiration date',listing_agent_commission:'Listing agent commission amount',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage:'Seller agent brokerage',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent office address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone'
 };
-
 const RLA_SECTIONS = {
   'Property':['property_address','property_type','county','city','zip_code','apn','sqft_structure','sqft_lot','year_built','hoa_name','hoa_fee'],
   'Seller':['seller_names','seller_email'],
   'Listing details':['listing_price','listing_date','listing_expiration_date','listing_agent_commission'],
   'Listing agent':['seller_agent_name','seller_agent_dre','seller_agent_brokerage','seller_agent_brokerage_dre','seller_agent_address','seller_agent_email','seller_agent_phone']
 };
-
-const RPA_PROMPT = `Extract all of the following fields from the uploaded California Residential Purchase Agreement and supporting documents. Cross-reference all documents to fill gaps. Return ONLY valid JSON with exactly these keys, no preamble, no markdown:
-{"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":"","hoa_fee":"","hoa_name":"","property_type":""}
-Use ISO format YYYY-MM-DD for all dates. For sqft_structure and sqft_lot pull the full line as it appears. Leave fields as empty string if not found.`;
-
 const RLA_PROMPT = `Extract all of the following fields from the uploaded California Residential Listing Agreement and supporting documents. Cross-reference all documents to fill gaps. Return ONLY valid JSON with exactly these keys, no preamble, no markdown:
 {"property_address":"","property_type":"","county":"","city":"","zip_code":"","apn":"","sqft_structure":"","sqft_lot":"","year_built":"","hoa_name":"","hoa_fee":"","seller_names":"","seller_email":"","listing_price":"","listing_date":"","listing_expiration_date":"","listing_agent_commission":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_phone":""}
-Use ISO format YYYY-MM-DD for all dates. For sqft_structure and sqft_lot pull the full line as it appears. For seller_email this may not always be present — leave empty string if not found. Leave all fields as empty string if not found. Normalize all text to proper case (Title Case for names and addresses, sentence case for other fields) — do not return values in ALL CAPS even if the source document is in all caps.`;
+Use ISO format YYYY-MM-DD for all dates. For property_type always use SUB TYPE from MLS or Type from Property Profile — valid values: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex. Normalize all text to proper case. Leave fields as empty string if not found.`;
 
-// ── TAB SWITCHING ─────────────────────────────────────────────────────────────
-function switchTab(tab) {
+// TAB SWITCHING
+function switchTab(tab, e) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  event.target.classList.add('active');
+  e.target.classList.add('active');
   document.getElementById('tab-' + tab).classList.add('active');
 }
 
-// ── FILE HANDLING ─────────────────────────────────────────────────────────────
-function setFile(type, idx, input) {
-  FILES[type][idx] = input.files[0] || null;
-  const slot = document.getElementById(type + '-slot' + idx);
-  const fn = document.getElementById(type + '-fn' + idx);
-  const badge = document.getElementById(type + '-badge' + idx);
-  if (FILES[type][idx]) {
-    fn.textContent = FILES[type][idx].name;
-    slot.classList.add('ready');
-    badge.textContent = 'Ready';
-    badge.className = 'slot-badge badge-ready';
-  } else {
-    fn.textContent = 'Click to select PDF';
-    slot.classList.remove('ready');
-    badge.textContent = idx === 0 ? 'Required' : 'Optional';
-    badge.className = idx === 0 ? 'slot-badge badge-required' : 'slot-badge badge-optional';
-  }
-  document.getElementById(type + '-extract-btn').disabled = !FILES[type][0];
+// DRAG AND DROP
+function onDragOver(e, type, idx) {
+  e.preventDefault(); e.stopPropagation();
+  document.getElementById(type+'-slot'+idx).classList.add('dragover');
+}
+function onDragLeave(e, type, idx) {
+  e.preventDefault();
+  document.getElementById(type+'-slot'+idx).classList.remove('dragover');
+}
+function onDrop(e, type, idx) {
+  e.preventDefault(); e.stopPropagation();
+  document.getElementById(type+'-slot'+idx).classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file && file.type === 'application/pdf') { processFile(type, idx, file); }
+  else if (file) { alert('Please drop a PDF file.'); }
+}
+function handleInput(type, idx, input) {
+  if (input.files[0]) processFile(type, idx, input.files[0]);
 }
 
+// PROCESS FILE — auto compress if over limit
+async function processFile(type, idx, file) {
+  const slot = document.getElementById(type+'-slot'+idx);
+  const fn = document.getElementById(type+'-fn'+idx);
+  const sz = document.getElementById(type+'-sz'+idx);
+  const badge = document.getElementById(type+'-badge'+idx);
+  const origMB = (file.size / 1024 / 1024).toFixed(1);
+
+  if (file.size > MAX_BYTES) {
+    // Show compressing state
+    slot.className = 'upload-slot compressing';
+    fn.textContent = file.name;
+    sz.textContent = 'Compressing ' + origMB + 'MB...';
+    sz.className = 'slot-size compressing';
+    badge.textContent = 'Compressing...';
+    badge.className = 'slot-badge badge-compressing';
+
+    try {
+      const compressed = await compressPDF(file);
+      const newMB = (compressed.size / 1024 / 1024).toFixed(1);
+      FILES[type][idx] = compressed;
+      slot.className = 'upload-slot ready';
+      fn.textContent = file.name;
+      sz.textContent = 'Compressed: ' + origMB + 'MB → ' + newMB + 'MB ✓';
+      sz.className = 'slot-size ok';
+      badge.textContent = 'Ready';
+      badge.className = 'slot-badge badge-ready';
+    } catch(err) {
+      // Compression failed — use original with warning
+      FILES[type][idx] = file;
+      slot.className = 'upload-slot ready';
+      fn.textContent = file.name;
+      sz.textContent = origMB + 'MB — large file, may be slow';
+      sz.className = 'slot-size warn';
+      badge.textContent = 'Ready';
+      badge.className = 'slot-badge badge-ready';
+    }
+  } else {
+    FILES[type][idx] = file;
+    slot.className = 'upload-slot ready';
+    fn.textContent = file.name;
+    sz.textContent = origMB + 'MB';
+    sz.className = 'slot-size ok';
+    badge.textContent = 'Ready';
+    badge.className = 'slot-badge badge-ready';
+  }
+  document.getElementById(type+'-extract-btn').disabled = !FILES[type][0];
+}
+
+// PDF COMPRESSION using pdf-lib
+async function compressPDF(file) {
+  const buf = await file.arrayBuffer();
+  const pdfDoc = await PDFLib.PDFDocument.load(buf, { ignoreEncryption: true });
+  const bytes = await pdfDoc.save({ useObjectStreams: true });
+  return new File([bytes], file.name, { type: 'application/pdf' });
+}
+
+// BASE64
 async function toBase64(file) {
-  return new Promise((res, rej) => {
+  return new Promise((res,rej) => {
     const r = new FileReader();
     r.onload = () => res(r.result.split(',')[1]);
     r.onerror = () => rej(new Error('Read failed'));
@@ -409,123 +366,81 @@ async function toBase64(file) {
 }
 
 function setProgress(type, pct) {
-  document.getElementById(type + '-progress-wrap').style.display = 'block';
-  document.getElementById(type + '-progress-bar').style.width = pct + '%';
+  document.getElementById(type+'-progress-wrap').style.display='block';
+  document.getElementById(type+'-progress-bar').style.width=pct+'%';
 }
-
 function showStatus(type, msg, cls) {
-  const el = document.getElementById(type + '-status-box');
-  el.textContent = msg;
-  el.className = 'status-box status-' + cls;
-  el.style.display = 'block';
+  const el = document.getElementById(type+'-status-box');
+  el.textContent=msg; el.className='status-box status-'+cls; el.style.display='block';
 }
 
-// ── EXTRACTION ────────────────────────────────────────────────────────────────
+// EXTRACTION
 async function runExtraction(type) {
-  document.getElementById(type + '-results-card').style.display = 'none';
-  document.getElementById(type + '-send-section').style.display = 'none';
-  document.getElementById(type + '-extract-btn').disabled = true;
-
+  document.getElementById(type+'-results-card').style.display='none';
+  document.getElementById(type+'-send-section').style.display='none';
+  document.getElementById(type+'-extract-btn').disabled=true;
   try {
-    showStatus(type, 'Reading documents...', 'info');
-    setProgress(type, 15);
-
-    const docLabels = type === 'rpa'
-      ? ['California Residential Purchase Agreement (RPA) and all addenda', 'Property Profile Report', 'MLS Listing']
-      : ['California Residential Listing Agreement (RLA)', 'Property Profile Report', 'MLS Listing'];
-
-    const documents = [];
-    for (let i = 0; i < 3; i++) {
-      if (FILES[type][i]) {
-        const data = await toBase64(FILES[type][i]);
-        documents.push({ label: docLabels[i], data });
-      }
+    showStatus(type,'Reading documents...','info'); setProgress(type,15);
+    const docLabels = type==='rpa'
+      ? ['California Residential Purchase Agreement (RPA) and all addenda','Property Profile Report','MLS Listing']
+      : ['California Residential Listing Agreement (RLA)','Property Profile Report','MLS Listing'];
+    const documents=[];
+    for(let i=0;i<3;i++) {
+      if(FILES[type][i]) { const data=await toBase64(FILES[type][i]); documents.push({label:docLabels[i],data}); }
     }
-
-    showStatus(type, 'Sending to Claude for analysis — this takes about 60 seconds...', 'info');
-    setProgress(type, 40);
-
-    const resp = await fetch(FUNCTION_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ documents, prompt_override: type === 'rla' ? RLA_PROMPT : null })
-    });
-
-    setProgress(type, 80);
-    const result = await resp.json();
-    if (result.error) throw new Error(result.error.message || JSON.stringify(result.error));
-
-    const text = result.content.map(b => b.text || '').join('');
-    extracted[type] = JSON.parse(text.replace(/```json|```/g, '').trim());
-
-    const labels = type === 'rpa' ? RPA_FIELD_LABELS : RLA_FIELD_LABELS;
-    const sections = type === 'rpa' ? RPA_SECTIONS : RLA_SECTIONS;
-
-    const tbody = document.getElementById(type + '-results-body');
-    tbody.innerHTML = '';
-    let filled = 0;
-
-    for (const [section, keys] of Object.entries(sections)) {
-      const hdr = document.createElement('tr');
-      hdr.className = 'section-head';
-      hdr.innerHTML = `<td colspan="2">${section}</td>`;
-      tbody.appendChild(hdr);
-      keys.forEach(key => {
-        const val = extracted[type][key] || '';
-        if (val) filled++;
-        const tr = document.createElement('tr');
-        tr.className = 'field-row';
-        tr.innerHTML = `<td class="field-key">${labels[key] || key}</td><td class="field-val ${val ? '' : 'field-empty'}">${val || '—'}</td>`;
+    showStatus(type,'Sending to Claude for analysis — this takes about 60 seconds...','info'); setProgress(type,40);
+    const resp=await fetch(FUNCTION_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({documents,prompt_override:type==='rla'?RLA_PROMPT:null})});
+    setProgress(type,80);
+    const result=await resp.json();
+    if(result.error) throw new Error(result.error.message||JSON.stringify(result.error));
+    const text=result.content.map(b=>b.text||'').join('');
+    extracted[type]=JSON.parse(text.replace(/```json|```/g,'').trim());
+    const labels=type==='rpa'?RPA_FIELD_LABELS:RLA_FIELD_LABELS;
+    const sections=type==='rpa'?RPA_SECTIONS:RLA_SECTIONS;
+    const tbody=document.getElementById(type+'-results-body');
+    tbody.innerHTML=''; let filled=0;
+    for(const [section,keys] of Object.entries(sections)) {
+      const hdr=document.createElement('tr'); hdr.className='section-head';
+      hdr.innerHTML='<td colspan="2">'+section+'</td>'; tbody.appendChild(hdr);
+      keys.forEach(key=>{
+        const val=extracted[type][key]||''; if(val) filled++;
+        const tr=document.createElement('tr'); tr.className='field-row';
+        tr.innerHTML='<td class="field-key">'+(labels[key]||key)+'</td><td class="field-val '+(val?'':'field-empty')+'">'+(val||'—')+'</td>';
         tbody.appendChild(tr);
       });
     }
-
-    const total = Object.keys(labels).length;
-    document.getElementById(type + '-results-count').textContent = `${filled} of ${total} fields extracted`;
-    setProgress(type, 100);
-    document.getElementById(type + '-status-box').style.display = 'none';
-    document.getElementById(type + '-progress-wrap').style.display = 'none';
-    document.getElementById(type + '-results-card').style.display = 'block';
-    document.getElementById(type + '-send-section').style.display = 'block';
-    document.getElementById(type + '-extract-btn').disabled = false;
-
-  } catch (err) {
-    showStatus(type, 'Error: ' + err.message, 'error');
-    document.getElementById(type + '-progress-wrap').style.display = 'none';
-    document.getElementById(type + '-extract-btn').disabled = false;
+    const total=Object.keys(labels).length;
+    document.getElementById(type+'-results-count').textContent=filled+' of '+total+' fields extracted';
+    setProgress(type,100);
+    document.getElementById(type+'-status-box').style.display='none';
+    document.getElementById(type+'-progress-wrap').style.display='none';
+    document.getElementById(type+'-results-card').style.display='block';
+    document.getElementById(type+'-send-section').style.display='block';
+    document.getElementById(type+'-extract-btn').disabled=false;
+  } catch(err) {
+    showStatus(type,'Error: '+err.message,'error');
+    document.getElementById(type+'-progress-wrap').style.display='none';
+    document.getElementById(type+'-extract-btn').disabled=false;
   }
 }
 
-// ── SEND TO ZAPIER ────────────────────────────────────────────────────────────
+// SEND TO ZAPIER
 async function sendToZapier(type) {
-  const btn = document.getElementById(type + '-send-btn');
-  const statusEl = document.getElementById(type + '-send-status');
-  btn.disabled = true;
-  btn.textContent = 'Sending...';
+  const btn=document.getElementById(type+'-send-btn');
+  const statusEl=document.getElementById(type+'-send-status');
+  btn.disabled=true; btn.textContent='Sending...';
   try {
-    await fetch(ZAPIER[type], {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(extracted[type])
-    });
-    statusEl.textContent = 'Successfully sent to Zapier — your Process Street run is being created now.';
-    statusEl.className = 'status-box status-success';
-    statusEl.style.display = 'block';
-    btn.textContent = type === 'rpa' ? '✓ Sent to Process Street' : '✓ Sent to Process Street';
-  } catch (err) {
-    statusEl.textContent = 'Send failed: ' + err.message;
-    statusEl.className = 'status-box status-error';
-    statusEl.style.display = 'block';
-    btn.disabled = false;
-    btn.textContent = 'Retry — Send to Process Street';
+    await fetch(ZAPIER[type],{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(extracted[type])});
+    statusEl.textContent='Successfully sent to Zapier — your Process Street run is being created now.';
+    statusEl.className='status-box status-success'; statusEl.style.display='block';
+    btn.textContent='✓ Sent to Process Street';
+  } catch(err) {
+    statusEl.textContent='Send failed: '+err.message;
+    statusEl.className='status-box status-error'; statusEl.style.display='block';
+    btn.disabled=false; btn.textContent='Retry — Send to Process Street';
   }
 }
-
-function copyJSON(type) {
-  navigator.clipboard.writeText(JSON.stringify(extracted[type], null, 2))
-    .then(() => alert('JSON copied to clipboard!'));
-}
+function copyJSON(type) { navigator.clipboard.writeText(JSON.stringify(extracted[type],null,2)).then(()=>alert('JSON copied!')); }
 </script>
 </body>
 </html>
