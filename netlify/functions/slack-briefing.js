@@ -36,7 +36,7 @@ function httpsPost(url, body) {
 exports.handler = async function(event, context) {
   console.log('PS_API_KEY:', PS_API_KEY ? PS_API_KEY.slice(0,8) + '...' : 'NOT SET');
 
-  const BASE = 'https://public-api.process.st/api/v1/templates';
+  const BASE = 'https://public-api.process.st/templates';
 
   // Try format 1: X-API-KEY header
   const r1 = await httpsGet(BASE, { 'X-API-KEY': PS_API_KEY });
