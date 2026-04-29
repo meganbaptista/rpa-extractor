@@ -78,7 +78,7 @@ SELLER NAME (highest priority source order — use the first source that has it)
 2. MLS Listing seller/owner name field.
 3. RPA paragraph 33 Acceptance section — only use as last resort. Do NOT use the printed label text (e.g. "Owner of Record") — only use the actual handwritten or DocuSigned name value.
 
-BUYER & SELLER AGENT INFO (Real Estate Brokers Section, last page of RPA):
+BUYER AGENT INFO (source: RPA Real Estate Brokers Section, last page):
 - buyer_agent_name: the name signed or printed in the "By" line under "Buyer's Brokerage Firm" (section A). This is often a DocuSign signature — read the printed name below it.
 - buyer_agent_dre: the DRE license number on the same "By" line, labeled "DRE Lic. #".
 - buyer_agent_brokerage_name: the firm name on the "Buyer's Brokerage Firm" line.
@@ -86,13 +86,17 @@ BUYER & SELLER AGENT INFO (Real Estate Brokers Section, last page of RPA):
 - buyer_agent_address: the Address field in the buyer's brokerage section.
 - buyer_agent_email: the Email field in the buyer's brokerage section.
 - buyer_agent_phone: the Phone # field in the buyer's brokerage section.
-- seller_agent_name: same pattern in section B "Seller's Brokerage Firm".
-- seller_agent_dre: DRE Lic. # on the seller agent "By" line.
-- seller_agent_brokerage_name: the firm name on the "Seller's Brokerage Firm" line.
-- seller_agent_brokerage_dre: the DRE Lic. # next to the seller brokerage firm name.
-- seller_agent_address: the Address field in the seller's brokerage section.
-- seller_agent_email: the Email field in the seller's brokerage section.
-- seller_agent_phone: the Phone # field in the seller's brokerage section.
+
+SELLER AGENT INFO (priority source order — use the first source that has it):
+1. MLS Listing — use the Agent and Office/Brokerage fields in the listing agent section. This is the preferred source.
+2. RPA Real Estate Brokers Section (last page, section B "Seller's Brokerage Firm") — use as fallback if no MLS is provided.
+- seller_agent_name: agent's full name.
+- seller_agent_dre: agent's DRE license number.
+- seller_agent_brokerage_name: brokerage/office name.
+- seller_agent_brokerage_dre: brokerage DRE license number.
+- seller_agent_address: agent's office address.
+- seller_agent_email: agent's email address.
+- seller_agent_phone: agent's phone number.
 
 SELLER ENTITY RULES:
 - For seller_entity_name: if the seller is a trust, LLC, estate or other entity, put the full legal entity name here. Leave empty if seller is an individual.
