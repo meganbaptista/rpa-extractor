@@ -70,16 +70,44 @@ exports.handler = async function(event, context) {
     // Use custom prompt if provided (RLA), otherwise use default RPA prompt
     const extractionPrompt = body.prompt_override || `Extract all of the following fields from the uploaded documents. Cross-reference all documents to fill gaps. Return ONLY valid JSON with exactly these keys, no preamble, no markdown:
 {"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","seller_entity_name":"","seller_type":"","seller_signer_1":"","seller_signer_2":"","seller_signer_3":"","seller_signer_4":"","trust_full_name":"","trust_date":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":"","hoa_fee":"","hoa_name":"","property_type":""}
+
 Important rules:
-- Use ISO format YYYY-MM-DD for all dates.
-- For seller_names: list all seller names combined as they appear on the contract.
+
+SELLER NAME (highest priority source order — use the first source that has it):
+1. Property Profile Report "Owner Name" field — this is always the most accurate source. Use it if present.
+2. MLS Listing seller/owner name field.
+3. RPA paragraph 33 Acceptance section — only use as last resort. Do NOT use the printed label text (e.g. "Owner of Record") — only use the actual handwritten or DocuSigned name value.
+
+BUYER & SELLER AGENT INFO (Real Estate Brokers Section, last page of RPA):
+- buyer_agent_name: the name signed or printed in the "By" line under "Buyer's Brokerage Firm" (section A). This is often a DocuSign signature — read the printed name below it.
+- buyer_agent_dre: the DRE license number on the same "By" line, labeled "DRE Lic. #".
+- buyer_agent_brokerage_name: the firm name on the "Buyer's Brokerage Firm" line.
+- buyer_agent_brokerage_dre: the DRE Lic. # next to the brokerage firm name.
+- buyer_agent_address: the Address field in the buyer's brokerage section.
+- buyer_agent_email: the Email field in the buyer's brokerage section.
+- buyer_agent_phone: the Phone # field in the buyer's brokerage section.
+- seller_agent_name: same pattern in section B "Seller's Brokerage Firm".
+- seller_agent_dre: DRE Lic. # on the seller agent "By" line.
+- seller_agent_brokerage_name: the firm name on the "Seller's Brokerage Firm" line.
+- seller_agent_brokerage_dre: the DRE Lic. # next to the seller brokerage firm name.
+- seller_agent_address: the Address field in the seller's brokerage section.
+- seller_agent_email: the Email field in the seller's brokerage section.
+- seller_agent_phone: the Phone # field in the seller's brokerage section.
+
+SELLER ENTITY RULES:
 - For seller_entity_name: if the seller is a trust, LLC, estate or other entity, put the full legal entity name here. Leave empty if seller is an individual.
 - For seller_type: use exactly one of these values — Individual, Trust, LLC, Estate, Power of Attorney. Default to Individual if unclear.
 - For seller_signer_1 through seller_signer_4: list the actual human signers. These are the real people who sign, not the entity name.
 - For trust_full_name: full legal name of the trust if applicable.
 - For trust_date: date the trust was established if shown.
+
+OTHER RULES:
+- Use ISO format YYYY-MM-DD for all dates.
+- For buyer_names: list all buyer names as they appear on the contract.
 - For sqft_structure and sqft_lot: pull the full line as it appears in the document.
-- Leave any field as empty string if not found. For property_type: always use the SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex. Normalize all text to proper case — never return values in ALL CAPS even if the source document is in all caps.`;
+- For property_type: always use the SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
+- Normalize all text to proper case — never return values in ALL CAPS even if the source document is in all caps.
+- Leave any field as empty string if not found.`;
 
     content.push({ type: 'text', text: extractionPrompt });
 
