@@ -3,18 +3,21 @@ const https = require('https');
 const PS_API_KEY = process.env.PS_API_KEY;
 const SLACK_WEBHOOK = process.env.SLACK_WEBHOOK;
 const WORKFLOW_NAME = 'ESCROW CHECKLIST';
-const DATE_FIELDS = ['CLOSE OF ESCROW', 'CR - Inspection Due Date', 'Disclosures Received by Seller'];
 
 function httpsGet(url, headers) {
   return new Promise((resolve, reject) => {
     const opts = new URL(url);
-    const options = { hostname: opts.hostname, path: opts.pathname + opts.search, headers };
+    const options = {
+      hostname: opts.hostname,
+      path: opts.pathname + opts.search,
+      headers
+    };
     https.get(options, res => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
         try { resolve(JSON.parse(data)); }
-        catch(e) { reject(new Error('Parse error: ' + data.slice(0, 200))); }
+        catch(e) { reject(new Error('Parse error: ' + data.slice(0, 300))); }
       });
     }).on('error', reject);
   });
@@ -25,9 +28,13 @@ function httpsPost(url, body) {
     const opts = new URL(url);
     const payload = JSON.stringify(body);
     const options = {
-      hostname: opts.hostname, path: opts.pathname,
+      hostname: opts.hostname,
+      path: opts.pathname,
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
     };
     const req = https.request(options, res => {
       let data = '';
@@ -44,7 +51,10 @@ function formatDate(dateStr) {
   if (!dateStr) return null;
   const d = new Date(dateStr);
   if (isNaN(d)) return null;
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/Los_Angeles' });
+  return d.toLocaleDateString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric',
+    timeZone: 'America/Los_Angeles'
+  });
 }
 
 function daysFromNow(dateStr) {
@@ -52,139 +62,156 @@ function daysFromNow(dateStr) {
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   const d = new Date(dateStr);
+  if (isNaN(d)) return null;
   d.setHours(0, 0, 0, 0);
   return Math.round((d - now) / (1000 * 60 * 60 * 24));
 }
 
-function urgencyEmoji(days) {
+function urgencyLabel(days) {
   if (days === null) return '';
-  if (days < 0) return '🔴 OVERDUE';
+  if (days < 0) return '🔴 OVERDUE by ' + Math.abs(days) + ' day(s)';
   if (days === 0) return '🚨 TODAY';
   if (days === 1) return '⚠️ TOMORROW';
-  if (days <= 3) return '🟠 ' + days + ' days';
-  if (days <= 7) return '🟡 ' + days + ' days';
-  return '🟢 ' + days + ' days';
+  if (days <= 3) return '🟠 In ' + days + ' days';
+  if (days <= 7) return '🟡 In ' + days + ' days';
+  return '🟢 In ' + days + ' days';
 }
 
 exports.handler = async function(event, context) {
   try {
-    // 1. Get all workflow runs for ESCROW CHECKLIST
-    const headers = { 'Authorization': 'Bearer ' + PS_API_KEY, 'Content-Type': 'application/json' };
+    const headers = {
+      'X-API-KEY': PS_API_KEY,
+      'Content-Type': 'application/json'
+    };
 
-    // Get templates first to find ESCROW CHECKLIST id
-    const templates = await httpsGet('https://api.process.st/api/v1/templates', headers);
-    const template = (templates.data || templates).find(t => t.name === WORKFLOW_NAME);
-    if (!template) throw new Error('Workflow "' + WORKFLOW_NAME + '" not found');
+    // 1. Get all checklists (workflow runs) for ESCROW CHECKLIST template
+    // First find the template
+    const templatesResp = await httpsGet('https://public-api.process.st/api/v1/templates', headers);
+    const templates = templatesResp.data || templatesResp;
+    const template = Array.isArray(templates)
+      ? templates.find(t => t.name === WORKFLOW_NAME)
+      : null;
 
-    // Get active runs for this template
-    const runsResp = await httpsGet(
-      'https://api.process.st/api/v1/workflow-runs?templateId=' + template.id + '&status=active',
-      headers
-    );
-    const runs = runsResp.data || runsResp;
-    if (!runs || !runs.length) {
-      await httpsPost(SLACK_WEBHOOK, {
-        text: '☀️ *Good morning, MTC team!* No active escrows found for today.'
-      });
-      return { statusCode: 200, body: 'No active runs' };
+    if (!template) {
+      // Log what we got to help debug
+      throw new Error('Template "' + WORKFLOW_NAME + '" not found. Available: ' +
+        JSON.stringify((Array.isArray(templates) ? templates : []).map(t => t.name)));
     }
 
-    // 2. For each run, get its form fields
+    // 2. Get active checklists for this template
+    const checklistsResp = await httpsGet(
+      'https://public-api.process.st/api/v1/checklists?templateId=' + template.id + '&status=active',
+      headers
+    );
+    const checklists = checklistsResp.data || checklistsResp;
+
+    if (!checklists || !Array.isArray(checklists) || checklists.length === 0) {
+      await httpsPost(SLACK_WEBHOOK, {
+        text: '☀️ *Good morning, MTC team!* No active escrows found today.'
+      });
+      return { statusCode: 200, body: 'No active checklists' };
+    }
+
+    // 3. For each checklist, get form field values
     const transactions = [];
-    for (const run of runs) {
+    for (const cl of checklists) {
       try {
         const fieldsResp = await httpsGet(
-          'https://api.process.st/api/v1/workflow-runs/' + run.id + '/form-fields',
+          'https://public-api.process.st/api/v1/checklists/' + cl.id + '/form-fields',
           headers
         );
         const fields = fieldsResp.data || fieldsResp;
         const fieldMap = {};
-        (fields || []).forEach(f => { fieldMap[f.label] = f.value; });
+        if (Array.isArray(fields)) {
+          fields.forEach(f => {
+            if (f.label) fieldMap[f.label] = f.value || '';
+          });
+        }
 
-        // Get property address — try common field names
-        const address = fieldMap['Property Address'] || fieldMap['PROPERTY ADDRESS'] ||
-                        fieldMap['Address'] || fieldMap['address'] || run.name || 'Unknown Address';
+        const address = fieldMap['Property Address'] ||
+                        fieldMap['PROPERTY ADDRESS'] ||
+                        fieldMap['Street Address'] ||
+                        cl.name || 'Unknown Address';
 
-        const coe = fieldMap['CLOSE OF ESCROW'];
-        const inspection = fieldMap['CR - Inspection Due Date'];
-        const disclosures = fieldMap['Disclosures Received by Seller'];
-
-        transactions.push({ address, coe, inspection, disclosures });
+        transactions.push({
+          address,
+          coe: fieldMap['CLOSE OF ESCROW'] || '',
+          inspection: fieldMap['CR - Inspection Due Date'] || '',
+          disclosures: fieldMap['Disclosures Received by Seller'] || ''
+        });
       } catch(e) {
-        console.error('Error fetching fields for run ' + run.id, e);
+        console.error('Error fetching fields for checklist ' + cl.id + ':', e.message);
       }
     }
 
-    // 3. Sort transactions — soonest COE first
+    // 4. Sort by COE date soonest first
     transactions.sort((a, b) => {
       const da = a.coe ? new Date(a.coe) : new Date('9999-12-31');
       const db = b.coe ? new Date(b.coe) : new Date('9999-12-31');
       return da - db;
     });
 
-    // 4. Build Slack message
+    // 5. Build Slack message
     const today = new Date().toLocaleDateString('en-US', {
-      weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/Los_Angeles'
+      weekday: 'long', month: 'long', day: 'numeric',
+      timeZone: 'America/Los_Angeles'
     });
 
-    // Separate into urgent (due within 7 days) and upcoming
+    // Split into urgent (anything due within 7 days) and the rest
     const urgent = [];
-    const upcoming = [];
+    const rest = [];
     transactions.forEach(tx => {
-      const coeDays = daysFromNow(tx.coe);
-      const inspDays = daysFromNow(tx.inspection);
-      const discDays = daysFromNow(tx.disclosures);
-      const isUrgent = [coeDays, inspDays, discDays].some(d => d !== null && d <= 7);
+      const days = [daysFromNow(tx.coe), daysFromNow(tx.inspection), daysFromNow(tx.disclosures)];
+      const isUrgent = days.some(d => d !== null && d <= 7);
       if (isUrgent) urgent.push(tx);
-      else upcoming.push(tx);
+      else rest.push(tx);
     });
 
-    let message = '☀️ *Good morning, MTC team!* Here\'s your daily escrow briefing for *' + today + '*\n';
-    message += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
-    message += '*📋 Active Escrows: ' + transactions.length + '*\n\n';
+    let msg = '☀️ *Good morning, MTC team!*\n';
+    msg += '*Daily Escrow Briefing — ' + today + '*\n';
+    msg += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
+    msg += '*Active Escrows: ' + transactions.length + '*\n\n';
 
     if (urgent.length > 0) {
-      message += '*🚨 NEEDS ATTENTION THIS WEEK (' + urgent.length + ')*\n\n';
+      msg += '*🚨 NEEDS ATTENTION (' + urgent.length + ' escrow' + (urgent.length > 1 ? 's' : '') + ')*\n\n';
       urgent.forEach(tx => {
-        message += '*' + tx.address + '*\n';
+        msg += '*' + tx.address + '*\n';
         if (tx.coe) {
-          const days = daysFromNow(tx.coe);
-          if (days !== null && days <= 7) message += '  🏁 COE: ' + formatDate(tx.coe) + ' — ' + urgencyEmoji(days) + '\n';
+          const d = daysFromNow(tx.coe);
+          if (d !== null && d <= 7) msg += '  🏁 Close of Escrow: ' + formatDate(tx.coe) + '  ' + urgencyLabel(d) + '\n';
         }
         if (tx.inspection) {
-          const days = daysFromNow(tx.inspection);
-          if (days !== null && days <= 7) message += '  🔍 Inspection contingency: ' + formatDate(tx.inspection) + ' — ' + urgencyEmoji(days) + '\n';
+          const d = daysFromNow(tx.inspection);
+          if (d !== null && d <= 7) msg += '  🔍 Inspection contingency: ' + formatDate(tx.inspection) + '  ' + urgencyLabel(d) + '\n';
         }
         if (tx.disclosures) {
-          const days = daysFromNow(tx.disclosures);
-          if (days !== null && days <= 7) message += '  📄 Seller disclosures: ' + formatDate(tx.disclosures) + ' — ' + urgencyEmoji(days) + '\n';
+          const d = daysFromNow(tx.disclosures);
+          if (d !== null && d <= 7) msg += '  📄 Seller disclosures: ' + formatDate(tx.disclosures) + '  ' + urgencyLabel(d) + '\n';
         }
-        message += '\n';
+        msg += '\n';
       });
     }
 
-    if (upcoming.length > 0) {
-      message += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
-      message += '*📅 UPCOMING CLOSINGS*\n\n';
-      upcoming.forEach(tx => {
-        message += '*' + tx.address + '*\n';
-        if (tx.coe) message += '  🏁 COE: ' + formatDate(tx.coe) + ' — ' + urgencyEmoji(daysFromNow(tx.coe)) + '\n';
-        if (tx.inspection) message += '  🔍 Inspection: ' + formatDate(tx.inspection) + '\n';
-        if (tx.disclosures) message += '  📄 Disclosures: ' + formatDate(tx.disclosures) + '\n';
-        message += '\n';
+    if (rest.length > 0) {
+      msg += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
+      msg += '*📅 UPCOMING (' + rest.length + ')*\n\n';
+      rest.forEach(tx => {
+        msg += '*' + tx.address + '*\n';
+        if (tx.coe) msg += '  🏁 COE: ' + formatDate(tx.coe) + '  ' + urgencyLabel(daysFromNow(tx.coe)) + '\n';
+        if (tx.inspection) msg += '  🔍 Inspection: ' + formatDate(tx.inspection) + '\n';
+        if (tx.disclosures) msg += '  📄 Disclosures: ' + formatDate(tx.disclosures) + '\n';
+        msg += '\n';
       });
     }
 
-    message += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
-    message += '_Have a great day! — Keeva 🏡_';
+    msg += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
+    msg += '_Have a great day! — Keeva 🏡_';
 
-    await httpsPost(SLACK_WEBHOOK, { text: message });
-
-    return { statusCode: 200, body: 'Briefing sent! ' + transactions.length + ' transactions.' };
+    await httpsPost(SLACK_WEBHOOK, { text: msg });
+    return { statusCode: 200, body: 'Sent! ' + transactions.length + ' transactions.' };
 
   } catch(err) {
     console.error('Briefing error:', err);
-    // Notify Slack of error too
     try {
       await httpsPost(SLACK_WEBHOOK, {
         text: '⚠️ *Keeva daily briefing failed:* ' + err.message
