@@ -1,6 +1,0 @@
-[functions]
-  node_bundler = "esbuild"
-  timeout = 26
-
-[functions."slack-briefing"]
-  schedule = "0 15 * * 1-5"
