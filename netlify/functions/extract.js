@@ -97,12 +97,12 @@ BUYER AGENT INFO (source: RPA ONLY — never use the MLS for buyer agent info):
 
 SELLER AGENT INFO (priority source order — use the first source that has it):
 1. MLS Listing Agent/Office section (most accurate) — look for LA (Listing Agent) and CoLA (Co-Listing Agent) fields. If both are present, combine as "LA Name / CoLA Name" for seller_agent_name and "LA DRE / CoLA DRE" for seller_agent_dre. Use LO (Listing Office) for brokerage name and LO State License for brokerage DRE.
-2. RPA page 1, paragraph 2 Agency section — "Seller's Brokerage Firm" and "Seller's Agent" lines.
-3. RPA Real Estate Brokers Section (last page, section B "Seller's Brokerage Firm") — use as last resort.
+2. RPA page 1, paragraph 2 Agency section — "Seller's Brokerage Firm" and "Seller's Agent" lines. The License Number next to "Seller's Brokerage Firm" is the seller_agent_brokerage_dre. The License Number next to "Seller's Agent" is the seller_agent_dre.
+3. RPA Real Estate Brokers Section (last page, section B "Seller's Brokerage Firm") — the DRE Lic. # printed on the same line as the brokerage firm name is the seller_agent_brokerage_dre. The DRE Lic. # on the "By" agent line is the seller_agent_dre.
 - seller_agent_name: agent's full name (or "Agent 1 / Agent 2" if two listing agents).
-- seller_agent_dre: agent's DRE license number (or "DRE1 / DRE2" if two listing agents).
+- seller_agent_dre: agent's individual DRE license number (or "DRE1 / DRE2" if two listing agents).
 - seller_agent_brokerage_name: brokerage/office name.
-- seller_agent_brokerage_dre: brokerage DRE license number.
+- seller_agent_brokerage_dre: the brokerage's DRE license number — this is on the same line as the brokerage firm name, NOT the agent's line. Do not confuse agent DRE with brokerage DRE.
 - seller_agent_address: agent's office address.
 - seller_agent_email: agent's email address (use Offers Email from MLS if available).
 - seller_agent_phone: agent's phone number.
