@@ -371,6 +371,15 @@ function showStatus(type, msg, cls) {
   el.textContent=msg; el.className='status-box status-'+cls; el.style.display='block';
 }
 
+async function callExtractAPI(payload) {
+  const resp = await fetch(FUNCTION_URL, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const text = await resp.text();
+  let result;
+  try { result = JSON.parse(text); } catch(e) { throw new Error('Server error — please try again. ('+text.substring(0,80)+')'); }
+  if (result.error) throw new Error(result.error.message||JSON.stringify(result.error));
+  return result;
+}
+
 async function runExtraction(type) {
   document.getElementById(type+'-results-card').style.display='none';
   document.getElementById(type+'-send-section').style.display='none';
@@ -384,11 +393,17 @@ async function runExtraction(type) {
     for(let i=0;i<3;i++) {
       if(FILES[type][i]) { const data=await toBase64(FILES[type][i]); documents.push({label:docLabels[i],data}); }
     }
+    const payload = {documents, prompt_override: type==='rla' ? RLA_PROMPT : null};
     showStatus(type,'Sending to Claude for analysis — this takes about 60 seconds...','info'); setProgress(type,40);
-    const resp=await fetch(FUNCTION_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({documents,prompt_override:type==='rla'?RLA_PROMPT:null})});
+    let result;
+    try {
+      result = await callExtractAPI(payload);
+    } catch(err) {
+      showStatus(type,'First attempt failed, retrying in 5 seconds... ('+err.message+')','info');
+      await new Promise(r => setTimeout(r, 5000));
+      result = await callExtractAPI(payload);
+    }
     setProgress(type,80);
-    const result=await resp.json();
-    if(result.error) throw new Error(result.error.message||JSON.stringify(result.error));
     const text=result.content.map(b=>b.text||'').join('');
     extracted[type]=JSON.parse(text.replace(/```json|```/g,'').trim());
     const labels=type==='rpa'?RPA_FIELD_LABELS:RLA_FIELD_LABELS;
