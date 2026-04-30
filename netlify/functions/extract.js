@@ -69,7 +69,7 @@ exports.handler = async function(event, context) {
 
     // Use custom prompt if provided (RLA), otherwise use default RPA prompt
     const extractionPrompt = body.prompt_override || `The purchase agreement may be a C.A.R. RPA, VLPA, RIPA, or other California purchase agreement form — all follow the same structure, so treat them identically. Extract all of the following fields from the uploaded documents. Cross-reference all documents to fill gaps. Return ONLY valid JSON with exactly these keys, no preamble, no markdown:
-{"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","seller_entity_name":"","seller_type":"","seller_signer_1":"","seller_signer_2":"","seller_signer_3":"","seller_signer_4":"","trust_full_name":"","trust_date":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":"","hoa_fee":"","hoa_name":"","property_type":""}
+{"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","seller_entity_name":"","seller_type":"","seller_signer_1":"","seller_signer_2":"","seller_signer_3":"","seller_signer_4":"","trust_full_name":"","trust_date":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","mls_list_price":"","mls_list_date":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":"","hoa_fee":"","hoa_name":"","property_type":""}
 
 Important rules:
 
@@ -90,16 +90,21 @@ BUYER AGENT INFO (two reliable sources — check both and use the clearest value
 - buyer_agent_phone: Phone # field in the buyer's brokerage section on the last page.
 
 SELLER AGENT INFO (priority source order — use the first source that has it):
-1. MLS Listing — use the Agent and Office/Brokerage fields in the listing agent section. This is the preferred source.
+1. MLS Listing Agent/Office section (most accurate) — look for LA (Listing Agent) and CoLA (Co-Listing Agent) fields. If both are present, combine as "LA Name / CoLA Name" for seller_agent_name and "LA DRE / CoLA DRE" for seller_agent_dre. Use LO (Listing Office) for brokerage name and LO State License for brokerage DRE.
 2. RPA page 1, paragraph 2 Agency section — "Seller's Brokerage Firm" and "Seller's Agent" lines.
 3. RPA Real Estate Brokers Section (last page, section B "Seller's Brokerage Firm") — use as last resort.
-- seller_agent_name: agent's full name.
-- seller_agent_dre: agent's DRE license number.
+- seller_agent_name: agent's full name (or "Agent 1 / Agent 2" if two listing agents).
+- seller_agent_dre: agent's DRE license number (or "DRE1 / DRE2" if two listing agents).
 - seller_agent_brokerage_name: brokerage/office name.
 - seller_agent_brokerage_dre: brokerage DRE license number.
 - seller_agent_address: agent's office address.
-- seller_agent_email: agent's email address.
+- seller_agent_email: agent's email address (use Offers Email from MLS if available).
 - seller_agent_phone: agent's phone number.
+
+MLS FIELDS:
+- mls_number: use the Listing ID field from the MLS (e.g. "OC25196571"). Do not use the APN or any other number.
+- mls_list_price: the current list price from the MLS listing header or LIST PRICE field.
+- mls_list_date: use the LIST CONTRACT DATE or ON MARKET DATE from the MLS. Use ISO format YYYY-MM-DD.
 
 DATE RULES:
 - date_rpa_prepared: ALWAYS use the "Date Prepared" field at the top of page 1 of the RPA only. Never pull this from a counter offer, addendum, or any other document.
@@ -116,7 +121,7 @@ SELLER ENTITY RULES:
 OTHER RULES:
 - For buyer_names: ONLY use the "THIS IS AN OFFER FROM ___" line on page 1 of the RPA. Do not pull buyer names from the property profile, MLS, or any other source. The property profile owner is the SELLER, not the buyer.
 - For sqft_structure and sqft_lot: pull the full line as it appears in the document.
-- For property_type: always use the SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
+- For property_type: always use the PROP SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
 - Normalize all text to proper case — never return values in ALL CAPS even if the source document is in all caps.
 - Leave any field as empty string if not found.`;
 
