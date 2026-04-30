@@ -114,7 +114,7 @@ SELLER ENTITY RULES:
 - For trust_date: date the trust was established if shown.
 
 OTHER RULES:
-- For buyer_names: list all buyer names as they appear on the contract.
+- For buyer_names: ONLY use the "THIS IS AN OFFER FROM ___" line on page 1 of the RPA. Do not pull buyer names from the property profile, MLS, or any other source. The property profile owner is the SELLER, not the buyer.
 - For sqft_structure and sqft_lot: pull the full line as it appears in the document.
 - For property_type: always use the SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
 - Normalize all text to proper case — never return values in ALL CAPS even if the source document is in all caps.
