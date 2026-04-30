@@ -78,18 +78,21 @@ SELLER NAME (highest priority source order — use the first source that has it)
 2. MLS Listing seller/owner name field.
 3. RPA paragraph 33 Acceptance section — only use as last resort. Do NOT use the printed label text (e.g. "Owner of Record") — only use the actual handwritten or DocuSigned name value.
 
-BUYER AGENT INFO (source: RPA Real Estate Brokers Section, last page):
-- buyer_agent_name: the name signed or printed in the "By" line under "Buyer's Brokerage Firm" (section A). This is often a DocuSign signature — read the printed name below it.
-- buyer_agent_dre: the DRE license number on the same "By" line, labeled "DRE Lic. #".
-- buyer_agent_brokerage_name: the firm name on the "Buyer's Brokerage Firm" line.
-- buyer_agent_brokerage_dre: the DRE Lic. # next to the brokerage firm name.
-- buyer_agent_address: the Address field in the buyer's brokerage section.
-- buyer_agent_email: the Email field in the buyer's brokerage section.
-- buyer_agent_phone: the Phone # field in the buyer's brokerage section.
+BUYER AGENT INFO (two reliable sources — check both and use the clearest values):
+- Primary source: RPA page 1, paragraph 2 Agency section — "Buyer's Brokerage Firm" and "Buyer's Agent" lines. These have the brokerage name, agent name, and license numbers clearly printed.
+- Secondary source: RPA Real Estate Brokers Section (last page, Section A) — use the first signed "By" line for the agent name and DRE. If two agents appear on two "By" lines, use the first one.
+- buyer_agent_brokerage_name: firm name on the "Buyer's Brokerage Firm" line.
+- buyer_agent_brokerage_dre: DRE Lic. # or License Number next to the brokerage firm name.
+- buyer_agent_name: agent's full name from the "Buyer's Agent" line (page 1) or the first signed "By" line (last page).
+- buyer_agent_dre: DRE Lic. # or License Number next to the buyer agent name.
+- buyer_agent_address: Address field in the buyer's brokerage section on the last page.
+- buyer_agent_email: Email field in the buyer's brokerage section on the last page.
+- buyer_agent_phone: Phone # field in the buyer's brokerage section on the last page.
 
 SELLER AGENT INFO (priority source order — use the first source that has it):
 1. MLS Listing — use the Agent and Office/Brokerage fields in the listing agent section. This is the preferred source.
-2. RPA Real Estate Brokers Section (last page, section B "Seller's Brokerage Firm") — use as fallback if no MLS is provided.
+2. RPA page 1, paragraph 2 Agency section — "Seller's Brokerage Firm" and "Seller's Agent" lines.
+3. RPA Real Estate Brokers Section (last page, section B "Seller's Brokerage Firm") — use as last resort.
 - seller_agent_name: agent's full name.
 - seller_agent_dre: agent's DRE license number.
 - seller_agent_brokerage_name: brokerage/office name.
@@ -97,6 +100,11 @@ SELLER AGENT INFO (priority source order — use the first source that has it):
 - seller_agent_address: agent's office address.
 - seller_agent_email: agent's email address.
 - seller_agent_phone: agent's phone number.
+
+DATE RULES:
+- date_rpa_prepared: ALWAYS use the "Date Prepared" field at the top of page 1 of the RPA only. Never pull this from a counter offer, addendum, or any other document.
+- date_of_acceptance: the date the seller signed or accepted the offer, found in the RPA acceptance section or a counter offer acceptance date.
+- All dates must be in ISO format YYYY-MM-DD.
 
 SELLER ENTITY RULES:
 - For seller_entity_name: if the seller is a trust, LLC, estate or other entity, put the full legal entity name here. Leave empty if seller is an individual.
@@ -106,7 +114,6 @@ SELLER ENTITY RULES:
 - For trust_date: date the trust was established if shown.
 
 OTHER RULES:
-- Use ISO format YYYY-MM-DD for all dates.
 - For buyer_names: list all buyer names as they appear on the contract.
 - For sqft_structure and sqft_lot: pull the full line as it appears in the document.
 - For property_type: always use the SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
