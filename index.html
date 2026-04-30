@@ -239,15 +239,16 @@ const ZAPIER = {
   rpa: 'https://hooks.zapier.com/hooks/catch/4252316/uvbvfoa/',
   rla: 'https://hooks.zapier.com/hooks/catch/4252316/uv140hh/'
 };
-const MAX_BYTES = 8 * 1024 * 1024; // 8MB threshold — compress above this
+const MAX_BYTES = 8 * 1024 * 1024;
 const FILES = { rpa: [null,null,null], rla: [null,null,null] };
 const extracted = { rpa: {}, rla: {} };
 
 const RPA_FIELD_LABELS = {
-  property_address:'Property address',date_of_acceptance:'Date of acceptance',emd_due_date:'EMD due date',emd_amount:'EMD amount',close_of_escrow_date:'Close of escrow date',loan_contingency_date:'Loan contingency date',appraisal_contingency_date:'Appraisal contingency date',inspection_contingency_date:'Inspection contingency date',seller_disclosures_due_date:'Seller disclosures due date',sprp_date:'SPRP date',cop_date:'COP date',date_rpa_prepared:'Date RPA prepared',final_purchase_price:'Final purchase price',buyer_agent_commission_amount:'Buyer agent commission amount',seller_credit_referenced:'Seller credit referenced',is_all_cash:'All cash offer',home_warranty:'Home warranty',home_warranty_who_pays:'Home warranty — who pays',home_warranty_amount:'Home warranty amount',home_warranty_company:'Home warranty company',buyer_names:'Buyer name(s)',seller_names:'Seller name(s)',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',county:'County',city:'City',zip_code:'Zip code',mls_number:'MLS number',year_built:'Year built',buyer_agent_name:'Buyer agent name',buyer_agent_dre:'Buyer agent DRE',buyer_agent_brokerage_name:'Buyer brokerage name',buyer_agent_brokerage_dre:'Buyer brokerage DRE',buyer_agent_address:'Buyer agent address',buyer_agent_email:'Buyer agent email',buyer_agent_phone:'Buyer agent phone',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage_name:'Seller brokerage name',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone',escrow_company:'Escrow company',escrow_officer_name:'Escrow officer name',title_company:'Title company',hoa_fee:'HOA fee',hoa_name:'HOA name',property_type:'Property type'
+  property_address:'Property address',date_of_acceptance:'Date of acceptance',emd_due_date:'EMD due date',emd_amount:'EMD amount',close_of_escrow_date:'Close of escrow date',loan_contingency_date:'Loan contingency date',appraisal_contingency_date:'Appraisal contingency date',inspection_contingency_date:'Inspection contingency date',seller_disclosures_due_date:'Seller disclosures due date',sprp_date:'SPRP date',cop_date:'COP date',date_rpa_prepared:'Date RPA prepared',final_purchase_price:'Final purchase price',buyer_agent_commission_amount:'Buyer agent commission amount',seller_credit_referenced:'Seller credit referenced',is_all_cash:'All cash offer',home_warranty:'Home warranty',home_warranty_who_pays:'Home warranty — who pays',home_warranty_amount:'Home warranty amount',home_warranty_company:'Home warranty company',buyer_names:'Buyer name(s)',seller_names:'Seller name(s)',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',county:'County',city:'City',zip_code:'Zip code',mls_number:'MLS number',mls_list_price:'MLS list price',mls_list_date:'MLS list date',year_built:'Year built',buyer_agent_name:'Buyer agent name',buyer_agent_dre:'Buyer agent DRE',buyer_agent_brokerage_name:'Buyer brokerage name',buyer_agent_brokerage_dre:'Buyer brokerage DRE',buyer_agent_address:'Buyer agent address',buyer_agent_email:'Buyer agent email',buyer_agent_phone:'Buyer agent phone',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage_name:'Seller brokerage name',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone',escrow_company:'Escrow company',escrow_officer_name:'Escrow officer name',title_company:'Title company',hoa_fee:'HOA fee',hoa_name:'HOA name',property_type:'Property type'
 };
+
 const RPA_SECTIONS = {
-  'Property':['property_address','apn','city','zip_code','county','mls_number','year_built','sqft_structure','sqft_lot','property_type','hoa_fee','hoa_name'],
+  'Property':['property_address','apn','city','zip_code','county','mls_number','mls_list_price','mls_list_date','year_built','sqft_structure','sqft_lot','property_type','hoa_fee','hoa_name'],
   'Parties':['buyer_names','seller_names'],
   'Key dates & price':['date_rpa_prepared','date_of_acceptance','final_purchase_price','close_of_escrow_date','is_all_cash'],
   'Deposit & financing':['emd_amount','emd_due_date','seller_credit_referenced','buyer_agent_commission_amount'],
@@ -257,6 +258,7 @@ const RPA_SECTIONS = {
   'Seller agent':['seller_agent_name','seller_agent_dre','seller_agent_brokerage_name','seller_agent_brokerage_dre','seller_agent_address','seller_agent_email','seller_agent_phone'],
   'Escrow & title':['escrow_company','escrow_officer_name','title_company']
 };
+
 const RLA_FIELD_LABELS = {
   property_address:'Property address',property_type:'Type of property',county:'County',city:'City',zip_code:'Zip code',apn:'APN',sqft_structure:'Structure sq ft',sqft_lot:'Lot sq ft',year_built:'Year built',hoa_name:'HOA name',hoa_fee:'HOA fee',seller_names:'Seller name(s)',seller_email:'Seller email address',listing_price:'Listing price',listing_date:'Listing date',listing_expiration_date:'Listing expiration date',listing_agent_commission:'Listing agent commission amount',seller_agent_name:'Seller agent name',seller_agent_dre:'Seller agent DRE',seller_agent_brokerage:'Seller agent brokerage',seller_agent_brokerage_dre:'Seller brokerage DRE',seller_agent_address:'Seller agent office address',seller_agent_email:'Seller agent email',seller_agent_phone:'Seller agent phone'
 };
@@ -298,7 +300,6 @@ function handleInput(type, idx, input) {
   if (input.files[0]) processFile(type, idx, input.files[0]);
 }
 
-// PROCESS FILE — auto compress if over limit
 async function processFile(type, idx, file) {
   const slot = document.getElementById(type+'-slot'+idx);
   const fn = document.getElementById(type+'-fn'+idx);
@@ -307,7 +308,6 @@ async function processFile(type, idx, file) {
   const origMB = (file.size / 1024 / 1024).toFixed(1);
 
   if (file.size > MAX_BYTES) {
-    // Show compressing state
     slot.className = 'upload-slot compressing';
     fn.textContent = file.name;
     sz.textContent = 'Compressing ' + origMB + 'MB...';
@@ -326,7 +326,6 @@ async function processFile(type, idx, file) {
       badge.textContent = 'Ready';
       badge.className = 'slot-badge badge-ready';
     } catch(err) {
-      // Compression failed — use original with warning
       FILES[type][idx] = file;
       slot.className = 'upload-slot ready';
       fn.textContent = file.name;
@@ -347,7 +346,6 @@ async function processFile(type, idx, file) {
   document.getElementById(type+'-extract-btn').disabled = !FILES[type][0];
 }
 
-// PDF COMPRESSION using pdf-lib
 async function compressPDF(file) {
   const buf = await file.arrayBuffer();
   const pdfDoc = await PDFLib.PDFDocument.load(buf, { ignoreEncryption: true });
@@ -355,7 +353,6 @@ async function compressPDF(file) {
   return new File([bytes], file.name, { type: 'application/pdf' });
 }
 
-// BASE64
 async function toBase64(file) {
   return new Promise((res,rej) => {
     const r = new FileReader();
@@ -374,7 +371,6 @@ function showStatus(type, msg, cls) {
   el.textContent=msg; el.className='status-box status-'+cls; el.style.display='block';
 }
 
-// EXTRACTION
 async function runExtraction(type) {
   document.getElementById(type+'-results-card').style.display='none';
   document.getElementById(type+'-send-section').style.display='none';
@@ -424,7 +420,6 @@ async function runExtraction(type) {
   }
 }
 
-// SEND TO ZAPIER
 async function sendToZapier(type) {
   const btn=document.getElementById(type+'-send-btn');
   const statusEl=document.getElementById(type+'-send-status');
