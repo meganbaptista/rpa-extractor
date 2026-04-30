@@ -73,21 +73,27 @@ exports.handler = async function(event, context) {
 
 Important rules:
 
+PROPERTY ADDRESS (highest priority source order — use the first source that has it):
+1. Property Profile Report — always the most accurate source for the property address. Use it if present.
+2. MLS Listing — use the address from the listing header.
+3. RPA — only use as last resort. Agents sometimes mistype the street type (e.g. "Drive" instead of "Terrace"). Never prefer the RPA address over the property profile or MLS.
+
 SELLER NAME (highest priority source order — use the first source that has it):
 1. Property Profile Report "Owner Name" field — this is always the most accurate source. Use it if present.
 2. MLS Listing seller/owner name field.
 3. RPA paragraph 33 Acceptance section — only use as last resort. Do NOT use the printed label text (e.g. "Owner of Record") — only use the actual handwritten or DocuSigned name value.
 
-BUYER AGENT INFO (two reliable sources — check both and use the clearest values):
-- Primary source: RPA page 1, paragraph 2 Agency section — "Buyer's Brokerage Firm" and "Buyer's Agent" lines. These have the brokerage name, agent name, and license numbers clearly printed.
-- Secondary source: RPA Real Estate Brokers Section (last page, Section A) — use the first signed "By" line for the agent name and DRE. If two agents appear on two "By" lines, use the first one.
-- buyer_agent_brokerage_name: firm name on the "Buyer's Brokerage Firm" line.
-- buyer_agent_brokerage_dre: DRE Lic. # or License Number next to the brokerage firm name.
-- buyer_agent_name: agent's full name from the "Buyer's Agent" line (page 1) or the first signed "By" line (last page).
-- buyer_agent_dre: DRE Lic. # or License Number next to the buyer agent name.
-- buyer_agent_address: Address field in the buyer's brokerage section on the last page.
-- buyer_agent_email: Email field in the buyer's brokerage section on the last page.
-- buyer_agent_phone: Phone # field in the buyer's brokerage section on the last page.
+BUYER AGENT INFO (source: RPA ONLY — never use the MLS for buyer agent info):
+- The buyer agent is ALWAYS in the RPA, never in the MLS. The MLS only contains seller/listing agent info.
+- Primary source: RPA page 1, paragraph 2 Agency section — "Buyer's Brokerage Firm" and "Buyer's Agent" lines.
+- Secondary source: RPA Real Estate Brokers Section (last page, Section A "Buyer's Brokerage Firm") — the first signed "By" line. If two agents appear, use the first one.
+- buyer_agent_brokerage_name: firm name on the "Buyer's Brokerage Firm" line in the RPA.
+- buyer_agent_brokerage_dre: DRE Lic. # or License Number next to the buyer brokerage firm name in the RPA.
+- buyer_agent_name: agent's full name from the "Buyer's Agent" line (page 1) or the first signed "By" line under Section A (last page) of the RPA.
+- buyer_agent_dre: DRE Lic. # or License Number next to the buyer agent name in the RPA.
+- buyer_agent_address: Address field in the buyer's brokerage section on the last page of the RPA.
+- buyer_agent_email: Email field in the buyer's brokerage section on the last page of the RPA.
+- buyer_agent_phone: Phone # field in the buyer's brokerage section on the last page of the RPA.
 
 SELLER AGENT INFO (priority source order — use the first source that has it):
 1. MLS Listing Agent/Office section (most accurate) — look for LA (Listing Agent) and CoLA (Co-Listing Agent) fields. If both are present, combine as "LA Name / CoLA Name" for seller_agent_name and "LA DRE / CoLA DRE" for seller_agent_dre. Use LO (Listing Office) for brokerage name and LO State License for brokerage DRE.
