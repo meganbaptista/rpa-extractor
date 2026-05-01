@@ -86,7 +86,7 @@ CRITICAL: seller_names must NEVER be empty. If the seller is an entity (LLC, tru
 
 BUYER AGENT INFO (source: RPA ONLY — never use the MLS for buyer agent info):
 - The buyer agent is ALWAYS in the RPA, never in the MLS. The MLS only contains seller/listing agent info.
-- Primary source: RPA page 1, paragraph 2 Agency section — "Buyer's Brokerage Firm" and "Buyer's Agent" lines.
+- Primary source: purchase agreement page 1, paragraph 2 Agency Confirmation section — "Buyer's Brokerage Firm" and "Buyer's Agent" lines. These are clearly printed in a confirmation table on page 1, not handwritten. Always check this section first as it is the most reliable source for buyer agent info.
 - Secondary source: RPA Real Estate Brokers Section (last page, Section A "Buyer's Brokerage Firm") — the first signed "By" line. If two agents appear, use the first one.
 - buyer_agent_brokerage_name: firm name on the "Buyer's Brokerage Firm" line in the RPA.
 - buyer_agent_brokerage_dre: DRE Lic. # or License Number next to the buyer brokerage firm name in the RPA.
@@ -115,7 +115,7 @@ MLS FIELDS:
 - mls_list_date: use the LIST CONTRACT DATE or ON MARKET DATE from the MLS. Use ISO format YYYY-MM-DD.
 
 DATE RULES:
-- date_rpa_prepared: ALWAYS use the "Date Prepared" field at the top of page 1 of the RPA only. Never pull this from a counter offer, addendum, or any other document.
+- date_rpa_prepared: ALWAYS use the "Date Prepared:" field printed at the top left of page 1 of the purchase agreement (RPA, VLPA, RIPA, etc.) only. This field is labeled exactly "Date Prepared:" on the first page. Never pull this date from a counter offer (BCO, SCO), addendum, or any other document even if those documents have an earlier date in the packet.
 - date_of_acceptance: the date the seller signed or accepted the offer, found in the RPA acceptance section or a counter offer acceptance date.
 - All dates must be in ISO format YYYY-MM-DD.
 
