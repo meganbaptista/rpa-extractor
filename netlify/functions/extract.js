@@ -116,7 +116,7 @@ MLS FIELDS:
 DATE RULES:
 - date_rpa_prepared: ALWAYS use the "Date Prepared" field at the top of page 1 of the RPA only. Never pull this from a counter offer, addendum, or any other document.
 - date_of_acceptance: the date the seller signed or accepted the offer, found in the RPA acceptance section or a counter offer acceptance date.
-- All dates must be in ISO format MM-DD-YYYY.
+- All dates must be in ISO format YYYY-MM-DD.
 
 SELLER ENTITY RULES:
 - For seller_entity_name: if the seller is a trust, LLC, estate or other entity, put the full legal entity name here. Leave empty if seller is an individual.
@@ -127,7 +127,8 @@ SELLER ENTITY RULES:
 
 OTHER RULES:
 - For buyer_names: ONLY use the "THIS IS AN OFFER FROM ___" line on page 1 of the RPA. Do not pull buyer names from the property profile, MLS, or any other source. The property profile owner is the SELLER, not the buyer.
-- For sqft_structure and sqft_lot: ALWAYS pull from the Property Profile Report first — use the "Building Sq Ft" field for sqft_structure and "Lot Area" field for sqft_lot. Copy the value exactly as it appears in the property profile (e.g. "Tax: 1,666 MLS: 6,087"). Only use the MLS or RPA as a fallback if no property profile is provided.
+- For sqft_structure: ALWAYS use the Property Profile Report "Building Sq Ft" field first. Copy the ENTIRE value character-for-character exactly as it appears — do not simplify, do not pick one number, do not reformat. For example if the property profile shows "Tax: 1,666 MLS: 6,087" you must return exactly "Tax: 1,666 MLS: 6,087". Only fall back to MLS or RPA if no property profile is provided.
+- For sqft_lot: ALWAYS use the Property Profile Report "Lot Area" field first. Copy the value exactly as it appears. Only fall back to MLS or RPA if no property profile is provided.
 - For property_type: always use the PROP SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
 - Normalize all text to proper case — never return values in ALL CAPS even if the source document is in all caps.
 - Leave any field as empty string if not found.`;
