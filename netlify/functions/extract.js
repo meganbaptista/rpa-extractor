@@ -127,8 +127,8 @@ SELLER ENTITY RULES:
 
 OTHER RULES:
 - For buyer_names: ONLY use the "THIS IS AN OFFER FROM ___" line on page 1 of the RPA. Do not pull buyer names from the property profile, MLS, or any other source. The property profile owner is the SELLER, not the buyer.
-- For sqft_structure: ALWAYS use the Property Profile Report "Building Sq Ft" field first. Copy the ENTIRE value character-for-character exactly as it appears — do not simplify, do not pick one number, do not reformat. For example if the property profile shows "Tax: 1,666 MLS: 6,087" you must return exactly "Tax: 1,666 MLS: 6,087". Only fall back to MLS or RPA if no property profile is provided.
-- For sqft_lot: ALWAYS use the Property Profile Report "Lot Area" field first. Copy the value exactly as it appears. Only fall back to MLS or RPA if no property profile is provided.
+- For sqft_structure: ALWAYS use the "Building Sq Ft" field from the Property Profile Report. Copy the value exactly as it appears — do not simplify or choose just one number. If the property profile shows a single number like "6,087" return "6,087". If it shows both tax and MLS figures like "Tax: 1,666 MLS: 6,087" return the full string "Tax: 1,666 MLS: 6,087" — not just one of the numbers. Only use MLS or RPA if no property profile is provided.
+- For sqft_lot: ALWAYS use the "Lot Area" field from the Property Profile Report. Copy the exact value as written. Only use MLS or RPA if no property profile is provided.
 - For property_type: always use the PROP SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
 - Normalize all text to proper case — never return values in ALL CAPS even if the source document is in all caps.
 - Leave any field as empty string if not found.`;
