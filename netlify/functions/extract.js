@@ -128,8 +128,8 @@ SELLER ENTITY RULES:
 
 OTHER RULES:
 - For buyer_names: ONLY use the "THIS IS AN OFFER FROM ___" line on page 1 of the RPA. Do not pull buyer names from the property profile, MLS, or any other source. The property profile owner is the SELLER, not the buyer.
-- For sqft_structure: ALWAYS use the Property Profile Report. Find the row labeled "Building Sq Ft" in the Characteristics section and return the entire value cell contents verbatim — every number and label in that cell, nothing added, nothing removed. The property profile may show "Tax: 1,666 MLS: 6,087" or just "6,087" or "1,666" — whatever is in that cell, return it as-is. Do not interpret, do not select the larger or more recent number, do not reformat. Only use MLS or RPA if no property profile is provided.
-- For sqft_lot: ALWAYS use the "Lot Area" field from the Property Profile Report. Copy the exact value as written. Only use MLS or RPA if no property profile is provided.
+- For sqft_structure: use ONLY the Property Profile Report — never the MLS or RPA for this field. Find the row labeled "Building Sq Ft" in the Characteristics section and return the complete value exactly as written in that row, including all labels and numbers (e.g. "Tax: 1,666 MLS: 6,087"). If no property profile is provided, leave this field empty.
+- For sqft_lot: use ONLY the Property Profile Report — never the MLS or RPA for this field. Find the row labeled "Lot Area" in the Characteristics section and return the value exactly as written. If no property profile is provided, leave this field empty.
 - For property_type: always use the PROP SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
 - Normalize all text to proper case — never return values in ALL CAPS even if the source document is in all caps.
 - Leave any field as empty string if not found.`;
