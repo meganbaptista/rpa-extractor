@@ -120,6 +120,7 @@ DATE RULES:
 
 SELLER ENTITY RULES:
 - For seller_entity_name: if the seller is a trust, LLC, estate or other entity, put the full legal entity name here. Leave empty if seller is an individual.
+- For seller_names: always populate this field. If the seller is an individual, use their full name. If the seller is an entity (trust, LLC, estate etc.), copy the entity name here as well so this field is never blank.
 - For seller_type: use exactly one of these values — Individual, Trust, LLC, Estate, Power of Attorney. Default to Individual if unclear.
 - For seller_signer_1 through seller_signer_4: list the actual human signers. These are the real people who sign, not the entity name.
 - For trust_full_name: full legal name of the trust if applicable.
