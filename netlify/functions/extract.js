@@ -120,7 +120,7 @@ DATE RULES:
 
 SELLER ENTITY RULES:
 - For seller_entity_name: if the seller is a trust, LLC, estate or other entity, put the full legal entity name here. Leave empty if seller is an individual.
-- For seller_names: always populate this field. If the seller is an individual, use their full name. If the seller is an entity (trust, LLC, estate etc.), copy the entity name here as well so this field is never blank.
+- For seller_names: this field must NEVER be left blank. If the seller is an individual, use their full name. If the seller is a trust, LLC, estate, or any other entity, copy the entity name into seller_names as well. Example: if seller_entity_name is "Basad LLC" then seller_names must also be "Basad LLC".
 - For seller_type: use exactly one of these values — Individual, Trust, LLC, Estate, Power of Attorney. Default to Individual if unclear.
 - For seller_signer_1 through seller_signer_4: list the actual human signers. These are the real people who sign, not the entity name.
 - For trust_full_name: full legal name of the trust if applicable.
@@ -128,7 +128,7 @@ SELLER ENTITY RULES:
 
 OTHER RULES:
 - For buyer_names: ONLY use the "THIS IS AN OFFER FROM ___" line on page 1 of the RPA. Do not pull buyer names from the property profile, MLS, or any other source. The property profile owner is the SELLER, not the buyer.
-- For sqft_structure: use ONLY the Property Profile Report — never the MLS or RPA for this field. You MUST look in the CHARACTERISTICS section (usually on page 2 of the property profile) for the row labeled "Building Sq Ft". This row may contain both tax and MLS values like "Tax: 1,666 MLS: 6,087" — return the complete value exactly as written. Do NOT use the "MLS Sq Ft" value from the summary box at the top of page 1 of the property profile — that is a different field. If no property profile is provided, leave this field empty.
+- For sqft_structure: use ONLY the Property Profile Report. IMPORTANT: The property profile has TWO different square footage fields — you must use the correct one. WRONG: "MLS Sq Ft" in the summary box at the top of page 1 — do NOT use this. CORRECT: "Building Sq Ft" in the CHARACTERISTICS section on page 2 — always use this one. The Characteristics "Building Sq Ft" row often contains both tax and MLS values, e.g. "Tax: 1,666 MLS: 6,087" — return the entire string exactly as written. If no property profile is provided, leave empty.
 - For sqft_lot: use ONLY the Property Profile Report — never the MLS or RPA for this field. Find the row labeled "Lot Area" in the Characteristics section and return the value exactly as written. If no property profile is provided, leave this field empty.
 - For property_type: always use the PROP SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
 - Normalize all text to proper case — never return values in ALL CAPS even if the source document is in all caps.
