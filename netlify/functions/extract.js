@@ -68,7 +68,19 @@ exports.handler = async function(event, context) {
     });
 
     // Use custom prompt if provided (RLA), otherwise use default RPA prompt
-    const extractionPrompt = body.prompt_override || `The purchase agreement may be a C.A.R. RPA, VLPA, RIPA, or other California purchase agreement form — all follow the same structure, so treat them identically. Extract all of the following fields from the uploaded documents. Cross-reference all documents to fill gaps. Return ONLY valid JSON with exactly these keys, no preamble, no markdown:
+    const extractionPrompt = body.prompt_override || `The purchase agreement may be a C.A.R. RPA, VLPA, RIPA, or other California purchase agreement form — all follow the same structure, so treat them identically.
+
+STEP 1 — ANALYZE THE DOCUMENTS FIRST:
+Before extracting any fields, answer these questions in a brief analysis:
+1. Which document is the original purchase agreement and what is the exact "Date Prepared:" value from the top left of page 1 of that document only?
+2. Are there any counter offers (SCO, BCO, SMCO)? If so, list them in order and note what key terms each one modified (price, dates, contingencies, etc.).
+3. What is the final date of acceptance — the date the last party signed the final counter offer or original agreement?
+4. What are the final agreed terms that supersede the original purchase agreement?
+5. Who is the buyer agent — look at page 1 paragraph 2 Agency Confirmation section for "Buyer's Agent" and "Buyer's Brokerage Firm". Also note if there are two buyer agents on the last page Section A.
+
+STEP 2 — EXTRACT FIELDS:
+Based on your analysis above, extract all of the following fields. Output your analysis first, then output the JSON on a new line. The JSON must start with { and end with } with no markdown or code fences.
+
 {"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","seller_entity_name":"","seller_type":"","seller_signer_1":"","seller_signer_2":"","seller_signer_3":"","seller_signer_4":"","trust_full_name":"","trust_date":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","mls_list_price":"","mls_list_date":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_email_2":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":"","hoa_fee":"","hoa_name":"","property_type":""}
 
 Important rules:
@@ -87,11 +99,11 @@ CRITICAL: seller_names must NEVER be empty. If the seller is an entity (LLC, tru
 BUYER AGENT INFO (source: RPA ONLY — never use the MLS for buyer agent info):
 - The buyer agent is ALWAYS in the RPA, never in the MLS. The MLS only contains seller/listing agent info.
 - Primary source: purchase agreement page 1, paragraph 2 Agency Confirmation section — "Buyer's Brokerage Firm" and "Buyer's Agent" lines. These are clearly printed in a confirmation table on page 1, not handwritten. Always check this section first as it is the most reliable source for buyer agent info.
-- Secondary source: RPA Real Estate Brokers Section (last page, Section A "Buyer's Brokerage Firm") — the first signed "By" line. If two agents appear, use the first one.
+- Secondary source: RPA Real Estate Brokers Section (last page, Section A "Buyer's Brokerage Firm") — if two agents appear on two "By" lines, combine them as "Agent 1 / Agent 2" for buyer_agent_name and "DRE1 / DRE2" for buyer_agent_dre.
 - buyer_agent_brokerage_name: firm name on the "Buyer's Brokerage Firm" line in the RPA.
 - buyer_agent_brokerage_dre: DRE Lic. # or License Number next to the buyer brokerage firm name in the RPA.
-- buyer_agent_name: agent's full name from the "Buyer's Agent" line (page 1) or the first signed "By" line under Section A (last page) of the RPA.
-- buyer_agent_dre: DRE Lic. # or License Number next to the buyer agent name in the RPA.
+- buyer_agent_name: agent's full name from the "Buyer's Agent" line (page 1). If two agents appear on the last page Section A, combine as "Agent 1 / Agent 2".
+- buyer_agent_dre: DRE Lic. # next to the buyer agent name. If two agents, combine as "DRE1 / DRE2".
 - buyer_agent_address: Address field in the buyer's brokerage section on the last page of the RPA.
 - buyer_agent_email: Email field in the buyer's brokerage section on the last page of the RPA.
 - buyer_agent_phone: Phone # field in the buyer's brokerage section on the last page of the RPA.
@@ -115,8 +127,8 @@ MLS FIELDS:
 - mls_list_date: use the LIST CONTRACT DATE or ON MARKET DATE from the MLS. Use ISO format YYYY-MM-DD.
 
 DATE RULES:
-- date_rpa_prepared: ALWAYS use the "Date Prepared:" field printed at the top left of page 1 of the purchase agreement (RPA, VLPA, RIPA, etc.) only. This field is labeled exactly "Date Prepared:" on the first page. Never pull this date from a counter offer (BCO, SCO), addendum, or any other document even if those documents have an earlier date in the packet.
-- date_of_acceptance: the date the seller signed or accepted the offer, found in the RPA acceptance section or a counter offer acceptance date.
+- date_rpa_prepared: ALWAYS use the "Date Prepared:" field printed at the top left of page 1 of the purchase agreement (RPA, VLPA, RIPA, etc.) only. This field is labeled exactly "Date Prepared:" on the first page. Never pull this date from a counter offer (BCO, SCO), addendum, or any other document even if those documents appear first in the packet.
+- date_of_acceptance: the date the last party signed the final counter offer or original agreement — whichever is the final accepted document.
 - All dates must be in ISO format YYYY-MM-DD.
 
 SELLER ENTITY RULES:
@@ -129,8 +141,8 @@ SELLER ENTITY RULES:
 
 OTHER RULES:
 - For buyer_names: ONLY use the "THIS IS AN OFFER FROM ___" line on page 1 of the RPA. Do not pull buyer names from the property profile, MLS, or any other source. The property profile owner is the SELLER, not the buyer.
-- For sqft_structure: use ONLY the Property Profile Report. IMPORTANT: The property profile has TWO different square footage fields — you must use the correct one. WRONG: "MLS Sq Ft" in the summary box at the top of page 1 — do NOT use this. CORRECT: "Building Sq Ft" in the CHARACTERISTICS section on page 2 — always use this one. The Characteristics "Building Sq Ft" row often contains both tax and MLS values, e.g. "Tax: 1,666 MLS: 6,087" — return the entire string exactly as written. If no property profile is provided, leave empty.
-- For sqft_lot: use ONLY the Property Profile Report — never the MLS or RPA for this field. Find the row labeled "Lot Area" in the Characteristics section and return the value exactly as written. If no property profile is provided, leave this field empty.
+- For sqft_structure: use ONLY the Property Profile Report. Find the "Building Sq Ft" row in the CHARACTERISTICS section (page 2) — NOT the "MLS Sq Ft" summary box on page 1. Return the complete value exactly as written including all labels (e.g. "Tax: 1,666 MLS: 6,087"). If no property profile provided, leave empty.
+- For sqft_lot: use ONLY the Property Profile Report. Find the "Lot Area" row in the CHARACTERISTICS section and return the value exactly as written. If no property profile provided, leave empty.
 - For property_type: always use the PROP SUB TYPE field from the MLS listing or the Type field from the Property Profile report — never derive it from the contract form name. Valid values are: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
 - Normalize all text to proper case — never return values in ALL CAPS even if the source document is in all caps.
 - Leave any field as empty string if not found.`;
@@ -146,7 +158,7 @@ OTHER RULES:
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
+        max_tokens: 4000,
         messages: [{ role: 'user', content }]
       })
     });
