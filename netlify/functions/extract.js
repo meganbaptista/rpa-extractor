@@ -85,16 +85,16 @@ SELLER NAME (highest priority source order — use the first source that has it)
 CRITICAL: seller_names must NEVER be empty. If the seller is an entity (LLC, trust, estate), copy the entity name into seller_names. Example: seller is "Basad LLC" → seller_names: "Basad LLC", seller_entity_name: "Basad LLC".
 
 BUYER AGENT INFO (source: RPA ONLY — never use the MLS for buyer agent info):
-- The buyer agent is ALWAYS in the RPA, never in the MLS. The MLS only contains seller/listing agent info.
-- buyer_agent_brokerage_name: firm name on the "Buyer's Brokerage Firm" line in the RPA (page 1 paragraph 2 or last page Section A).
-- buyer_agent_brokerage_dre: DRE Lic. # or License Number next to the brokerage firm name.
-- buyer_agent_name: the primary buyer agent from the "Buyer's Agent" line on page 1 paragraph 2.
-- buyer_agent_dre: the DRE number next to the primary buyer agent name on page 1.
-- buyer_agent_name_2: go to the LAST PAGE of the purchase agreement, find the Real Estate Brokers Section, Section A "Buyer's Brokerage Firm". There are TWO "By" lines. The first "By" line has the primary agent. Look specifically at the SECOND "By" line — if it has a signed name and a printed name with a DRE number next to it, that is the second buyer agent. Extract that name here. This agent will NOT appear on page 1 — they are only on the last page. Leave empty if the second "By" line is blank or unsigned.
-- buyer_agent_dre_2: the DRE Lic. # printed on the SECOND "By" line under Section A on the last page. Leave empty if no second agent.
-- buyer_agent_address: Address field in the buyer's brokerage section on the last page of the RPA.
-- buyer_agent_email: Email field in the buyer's brokerage section on the last page of the RPA.
-- buyer_agent_phone: Phone # field in the buyer's brokerage section on the last page of the RPA.
+- The buyer agent is ALWAYS in the RPA last page, never in the MLS. Always go to the LAST PAGE of the purchase agreement, Real Estate Brokers Section A "Buyer's Brokerage Firm" for all buyer agent fields. Do NOT use page 1 for agent name or DRE — page 1 causes confusion between brokerage DRE and agent DRE.
+- buyer_agent_brokerage_name: firm name on the "Buyer's Brokerage Firm" line in Section A (last page).
+- buyer_agent_brokerage_dre: DRE Lic. # on the same line as the brokerage firm name in Section A (last page).
+- buyer_agent_name: the printed name next to or below the FIRST signed "By" line in Section A (last page). This is the agent's name, not the buyer's name.
+- buyer_agent_dre: the DRE Lic. # on the FIRST "By" line in Section A (last page). This is the agent's individual DRE, not the brokerage DRE.
+- buyer_agent_name_2: if a SECOND "By" line in Section A (last page) is signed, extract that agent's printed name here. Leave empty if the second "By" line is blank or unsigned.
+- buyer_agent_dre_2: the DRE Lic. # on the SECOND "By" line in Section A (last page). Leave empty if no second agent.
+- buyer_agent_address: Address field in Section A on the last page.
+- buyer_agent_email: Email field in Section A on the last page.
+- buyer_agent_phone: Phone # field in Section A on the last page.
 
 SELLER AGENT INFO (priority source order — use the first source that has it):
 1. MLS Listing Agent/Office section (most accurate) — look for LA (Listing Agent) and CoLA (Co-Listing Agent) fields. If both are present, combine as "LA Name / CoLA Name" for seller_agent_name and "LA DRE / CoLA DRE" for seller_agent_dre. Use LO (Listing Office) for brokerage name and LO State License for brokerage DRE.
