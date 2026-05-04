@@ -68,7 +68,17 @@ exports.handler = async function(event, context) {
     });
 
     // Use custom prompt if provided (RLA), otherwise use default RPA prompt
-    const extractionPrompt = body.prompt_override || `The purchase agreement may be a C.A.R. RPA, VLPA, RIPA, or other California purchase agreement form — all follow the same structure, so treat them identically. Extract all of the following fields from the uploaded documents. Cross-reference all documents to fill gaps. Return ONLY valid JSON with exactly these keys, no preamble, no markdown:
+    const extractionPrompt = body.prompt_override || `The purchase agreement may be a C.A.R. RPA, VLPA, RIPA, or other California purchase agreement form — all follow the same structure, so treat them identically.
+
+Before extracting fields, briefly analyze the documents by answering these questions:
+1. Which document is the original purchase agreement and what is the exact "Date Prepared:" value from the top of page 1?
+2. Are there any counter offers (SCO, BCO, SMCO)? If so, list them in order and note what terms each one modified.
+3. What is the final date of acceptance — the date the last party signed the final counter offer or original agreement?
+4. What are the final agreed terms that supersede the original purchase agreement?
+
+Write your analysis first, then output the JSON below it. The JSON parser will extract only the JSON portion.
+
+Now extract all of the following fields based on your analysis above. Return valid JSON with exactly these keys:
 {"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","seller_entity_name":"","seller_type":"","seller_signer_1":"","seller_signer_2":"","seller_signer_3":"","seller_signer_4":"","trust_full_name":"","trust_date":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","mls_list_price":"","mls_list_date":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_email_2":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":"","hoa_fee":"","hoa_name":"","property_type":""}
 
 Important rules:
@@ -146,7 +156,7 @@ OTHER RULES:
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
+        max_tokens: 4000,
         messages: [{ role: 'user', content }]
       })
     });
