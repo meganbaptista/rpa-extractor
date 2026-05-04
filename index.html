@@ -405,11 +405,7 @@ async function runExtraction(type) {
     }
     setProgress(type,80);
     const text=result.content.map(b=>b.text||'').join('');
-    // Extract JSON from response which may contain reasoning text before it
-    const cleanText = text.replace(/```json|```/g,'').trim();
-    const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON found in response');
-    extracted[type]=JSON.parse(jsonMatch[0]);
+    extracted[type]=JSON.parse(text.replace(/```json|```/g,'').trim());
     const labels=type==='rpa'?RPA_FIELD_LABELS:RLA_FIELD_LABELS;
     const sections=type==='rpa'?RPA_SECTIONS:RLA_SECTIONS;
     const tbody=document.getElementById(type+'-results-body');
