@@ -90,7 +90,8 @@ BUYER AGENT INFO (source: RPA ONLY — never use the MLS for buyer agent info):
 - Secondary source: RPA Real Estate Brokers Section (last page, Section A "Buyer's Brokerage Firm") — if two agents appear on two "By" lines, combine them as "Agent 1 / Agent 2" for buyer_agent_name and "DRE1 / DRE2" for buyer_agent_dre.
 - buyer_agent_brokerage_name: firm name on the "Buyer's Brokerage Firm" line in the RPA.
 - buyer_agent_brokerage_dre: DRE Lic. # or License Number next to the buyer brokerage firm name in the RPA.
-- buyer_agent_name: agent's full name from the "Buyer's Agent" line (page 1). If two agents appear on the last page Section A, combine as "Agent 1 / Agent 2".
+- buyer_agent_name: agent's full name from the "Buyer's Agent" line (page 1) for the primary agent. Then check the last page Section A for ALL signed "By" lines — if a second agent appears on a second "By" line, combine both as "Agent 1 / Agent 2".
+- buyer_agent_dre: DRE Lic. # next to the primary buyer agent name on page 1. Then check the last page Section A second "By" line for a second DRE — combine as "DRE1 / DRE2".
 - buyer_agent_dre: DRE Lic. # next to the buyer agent name. If two agents, combine as "DRE1 / DRE2".
 - buyer_agent_address: Address field in the buyer's brokerage section on the last page of the RPA.
 - buyer_agent_email: Email field in the buyer's brokerage section on the last page of the RPA.
