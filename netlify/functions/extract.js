@@ -116,7 +116,7 @@ MLS FIELDS:
 - mls_list_date: use the LIST CONTRACT DATE or ON MARKET DATE from the MLS. Use ISO format YYYY-MM-DD.
 
 DATE RULES:
-- date_rpa_prepared: ALWAYS use the "Date Prepared:" field printed at the top left of page 1 of the ORIGINAL purchase agreement (RPA, VLPA, RIPA) only. The original purchase agreement is the document titled "California Residential Purchase Agreement" or "Vacant Land Purchase Agreement" etc. — NOT a Seller Counter Offer (SCO), Buyer Counter Offer (BCO), or any addendum. Counter offers often appear before the RPA in the packet — ignore their dates entirely for this field. The correct document has "RPA REVISED" or "VLPA REVISED" etc. at the bottom.
+- date_rpa_prepared: Find the field explicitly labeled "Date Prepared:" — this label appears only on page 1 of the original purchase agreement (RPA, VLPA, RIPA etc.) directly above or next to the date. Read the date value next to that exact label. Counter offers and addenda do not have a "Date Prepared:" field — they have fields like "Date" or no date label at all. You can also confirm you are on the correct page by checking the footer which reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar. Never use a date from any document that does not have the "Date Prepared:" label.
 - date_of_acceptance: the date the last party signed the final counter offer or original agreement — whichever is the final accepted document.
 - All dates must be in ISO format YYYY-MM-DD.
 
