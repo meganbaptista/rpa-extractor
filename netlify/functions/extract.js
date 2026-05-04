@@ -86,13 +86,10 @@ CRITICAL: seller_names must NEVER be empty. If the seller is an entity (LLC, tru
 
 BUYER AGENT INFO (source: RPA ONLY — never use the MLS for buyer agent info):
 - The buyer agent is ALWAYS in the RPA, never in the MLS. The MLS only contains seller/listing agent info.
-- Primary source: purchase agreement page 1, paragraph 2 Agency Confirmation section — "Buyer's Brokerage Firm" and "Buyer's Agent" lines. These are clearly printed in a confirmation table on page 1, not handwritten. Always check this section first as it is the most reliable source for buyer agent info.
-- Secondary source: RPA Real Estate Brokers Section (last page, Section A "Buyer's Brokerage Firm") — if two agents appear on two "By" lines, combine them as "Agent 1 / Agent 2" for buyer_agent_name and "DRE1 / DRE2" for buyer_agent_dre.
-- buyer_agent_brokerage_name: firm name on the "Buyer's Brokerage Firm" line in the RPA.
-- buyer_agent_brokerage_dre: DRE Lic. # or License Number next to the buyer brokerage firm name in the RPA.
-- buyer_agent_name: agent's full name from the "Buyer's Agent" line (page 1) for the primary agent. Then check the last page Section A for ALL signed "By" lines — if a second agent appears on a second "By" line, combine both as "Agent 1 / Agent 2".
-- buyer_agent_dre: DRE Lic. # next to the primary buyer agent name on page 1. Then check the last page Section A second "By" line for a second DRE — combine as "DRE1 / DRE2".
-- buyer_agent_dre: DRE Lic. # next to the buyer agent name. If two agents, combine as "DRE1 / DRE2".
+- buyer_agent_brokerage_name: firm name on the "Buyer's Brokerage Firm" line in the RPA (page 1 paragraph 2 or last page Section A).
+- buyer_agent_brokerage_dre: DRE Lic. # or License Number next to the brokerage firm name.
+- buyer_agent_name: look at TWO places and combine results — (1) the "Buyer's Agent" line on page 1 paragraph 2, AND (2) the last page Section A "By" lines. If only one agent appears across both places, use that name. If a DIFFERENT second agent appears on a second "By" line on the last page that was not listed on page 1, combine both as "Primary Agent / Second Agent". Example: page 1 shows "Laura Martinez" and last page shows both "Laura Martinez" and "Rob Kallick" — return "Laura Martinez / Rob Kallick".
+- buyer_agent_dre: same logic as buyer_agent_name — find the DRE for each agent and combine as "DRE1 / DRE2" if two agents.
 - buyer_agent_address: Address field in the buyer's brokerage section on the last page of the RPA.
 - buyer_agent_email: Email field in the buyer's brokerage section on the last page of the RPA.
 - buyer_agent_phone: Phone # field in the buyer's brokerage section on the last page of the RPA.
