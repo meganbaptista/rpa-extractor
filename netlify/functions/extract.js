@@ -97,6 +97,7 @@ BUYER AGENT INFO (source: RPA ONLY — never use the MLS for buyer agent info):
 - buyer_agent_phone: Phone # field in Section A on the last page.
 
 SELLER AGENT INFO (priority source order — use the first source that has it):
+IMPORTANT: Do NOT use the property profile report for seller agent info — it contains historical listing data that may be from a previous sale, not the current transaction.
 1. MLS Listing Agent/Office section (most accurate) — look for LA (Listing Agent) and CoLA (Co-Listing Agent) fields. If both are present, combine as "LA Name / CoLA Name" for seller_agent_name and "LA DRE / CoLA DRE" for seller_agent_dre. Use LO (Listing Office) for brokerage name and LO State License for brokerage DRE.
 2. RPA page 1, paragraph 2 Agency section — "Seller's Brokerage Firm" and "Seller's Agent" lines. The License Number next to "Seller's Brokerage Firm" is the seller_agent_brokerage_dre. The License Number next to "Seller's Agent" is the seller_agent_dre.
 3. RPA Real Estate Brokers Section (last page, section B "Seller's Brokerage Firm") — the DRE Lic. # printed on the same line as the brokerage firm name is the seller_agent_brokerage_dre. The DRE Lic. # on the "By" agent line is the seller_agent_dre.
@@ -115,7 +116,7 @@ MLS FIELDS:
 - mls_list_date: use the LIST CONTRACT DATE or ON MARKET DATE from the MLS. Use ISO format YYYY-MM-DD.
 
 DATE RULES:
-- date_rpa_prepared: ALWAYS use the "Date Prepared:" field printed at the top left of page 1 of the purchase agreement (RPA, VLPA, RIPA, etc.) only. This field is labeled exactly "Date Prepared:" on the first page. Never pull this date from a counter offer (BCO, SCO), addendum, or any other document even if those documents appear first in the packet.
+- date_rpa_prepared: ALWAYS use the "Date Prepared:" field printed at the top left of page 1 of the ORIGINAL purchase agreement (RPA, VLPA, RIPA) only. The original purchase agreement is the document titled "California Residential Purchase Agreement" or "Vacant Land Purchase Agreement" etc. — NOT a Seller Counter Offer (SCO), Buyer Counter Offer (BCO), or any addendum. Counter offers often appear before the RPA in the packet — ignore their dates entirely for this field. The correct document has "RPA REVISED" or "VLPA REVISED" etc. at the bottom.
 - date_of_acceptance: the date the last party signed the final counter offer or original agreement — whichever is the final accepted document.
 - All dates must be in ISO format YYYY-MM-DD.
 
