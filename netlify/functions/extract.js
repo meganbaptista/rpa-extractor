@@ -131,17 +131,19 @@ Extract as follows:
 • buyer_agent_name_2          ← printed name on the SECOND "By" line — leave empty string if that line is blank or unsigned
 • buyer_agent_dre_2           ← DRE Lic. # on the SECOND "By" line — leave empty string if no second agent
 • buyer_agent_address         ← combine street + city + state + zip into one string
-• buyer_agent_email           ← email field
-• buyer_agent_phone           ← phone field
+• buyer_agent_email           ← the email address that appears on the line starting with "Email" inside subsection A. This line sits BETWEEN the Address line and the checkbox lines, and shares the line with "Phone #". It will look like "Email name@domain.com   Phone # (xxx) xxx-xxxx". You MUST extract this — it is never blank when an agent is filled in. Do NOT pull email from any other section (CCPA, advisories, broker compensation forms, brokerage footer). Only the one inside subsection A on the last page.
+• buyer_agent_phone           ← phone number on the SAME line as the email, after "Phone #"
+
+REMINDER: buyer_agent_email and buyer_agent_phone come from the SAME physical line. If you successfully extracted the phone, the email is on that same line — do not return empty for one and not the other.
 
 CRITICAL CHECKBOX HINT: When the "More than one agent from the same firm represents Buyer" checkbox is marked (X or checked), there ARE two agents and you MUST populate buyer_agent_name_2 and buyer_agent_dre_2. If you see two filled "By" lines but leave the _2 fields blank, that is a bug.
 
-EXAMPLE — for the contract attached, the RPA page 17 (last page) shows:
+EXAMPLE 1 — extraction with two agents:
 "A. Buyer's Brokerage Firm Rodeo Realty, Inc. - Beverly Hills    DRE Lic. # 00951359
     By Jennifer Perez                                            DRE Lic. # 02125070   Date 4/27/2026
     By Jimmy Heckenberg                                          DRE Lic. # 01910100   Date 4/27/2026
     Address 202 N. Canon Dr.   City Beverly Hills   State CA   Zip 90210
-    Email j.perez@rodeore.com
+    Email j.perez@rodeore.com                                    Phone # (818) 299-3880
     [X] More than one agent from the same firm represents Buyer."
 
 → buyer_agent_brokerage_name: "Rodeo Realty, Inc. - Beverly Hills"
@@ -152,6 +154,24 @@ EXAMPLE — for the contract attached, the RPA page 17 (last page) shows:
 → buyer_agent_dre_2:          "01910100"
 → buyer_agent_address:        "202 N. Canon Dr., Beverly Hills, CA 90210"
 → buyer_agent_email:          "j.perez@rodeore.com"
+→ buyer_agent_phone:          "(818) 299-3880"
+
+EXAMPLE 2 — extraction with one agent (showing email/phone pairing):
+"A. Buyer's Brokerage Firm Century 21 On Target                  DRE Lic. # 01257829
+    By Jack Lopez                                                DRE Lic. # 02150816   Date 05/03/2026
+    By                                                           DRE Lic. #            Date
+    Address 5515 E. Stearns St.   City Long Beach   State CA   Zip 90815
+    Email jack@century21ontarget.com                             Phone # (562) 431-2011"
+
+→ buyer_agent_brokerage_name: "Century 21 On Target"
+→ buyer_agent_brokerage_dre:  "01257829"
+→ buyer_agent_name:           "Jack Lopez"
+→ buyer_agent_dre:            "02150816"
+→ buyer_agent_name_2:         ""
+→ buyer_agent_dre_2:          ""
+→ buyer_agent_address:        "5515 E. Stearns St., Long Beach, CA 90815"
+→ buyer_agent_email:          "jack@century21ontarget.com"
+→ buyer_agent_phone:          "(562) 431-2011"
 
 ══════════════════════════════════════════════════════════════
 JSON SCHEMA (return EXACTLY these keys)
