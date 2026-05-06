@@ -67,175 +67,165 @@ exports.handler = async function(event, context) {
       });
     });
 
-    // Use custom prompt if provided (RLA), otherwise use default RPA prompt
-    const extractionPrompt = body.prompt_override || `You are extracting fields from a California real estate purchase agreement package. The package may include the original purchase agreement (RPA, VLPA, RIPA, or CPA) plus counter offers (BCO, SCO), addenda, MLS listings, and property profile reports.
+    // ── RLA / CUSTOM PROMPT PATH (unchanged JSON-text behavior) ───────────────
+    if (body.prompt_override) {
+      content.push({ type: 'text', text: body.prompt_override });
 
-Return ONLY valid JSON with exactly the keys shown in the schema below. No preamble, no markdown, no commentary.
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5',
+          max_tokens: 2500,
+          messages: [{ role: 'user', content }]
+        })
+      });
 
-══════════════════════════════════════════════════════════════
-TWO HIGH-PRIORITY FIELDS — READ THESE RULES BEFORE ANY OTHERS
-══════════════════════════════════════════════════════════════
+      const data = await response.json();
+      return { statusCode: 200, headers, body: JSON.stringify(data) };
+    }
 
-▼ FIELD: date_rpa_prepared
+    // ── RPA PATH: TOOL USE (structured outputs) ───────────────────────────────
+    // Each field is defined as a tool parameter with its own description.
+    // The model fills each field with the field's description in active context,
+    // which dramatically improves accuracy on commonly-missed fields like
+    // date_rpa_prepared and buyer_agent_*.
 
-The ONLY valid source is the literal text "Date Prepared:" (with the colon) found at the top-left of page 1 of the original purchase agreement (RPA / VLPA / RIPA / CPA).
+    const FIELDS = {
+      // ─── PROPERTY ─────────────────────────────────────────────────────────
+      property_address: {
+        type: "string",
+        description: "Full street address. Priority: (1) Property Profile Report, (2) MLS Listing header, (3) RPA paragraph 1B (last resort — agents sometimes mistype street type, e.g. 'Drive' vs 'Terrace'). Empty string if not found."
+      },
+      apn: { type: "string", description: "Assessor's Parcel Number from RPA page 1 paragraph 1B or property profile. Empty string if not found." },
+      county: { type: "string", description: "County name. Proper case." },
+      city: { type: "string", description: "City name. Proper case." },
+      zip_code: { type: "string", description: "5-digit ZIP code." },
+      year_built: { type: "string", description: "Year structure was built, from MLS or property profile." },
+      property_type: {
+        type: "string",
+        description: "Use PROP SUB TYPE from MLS or Type from Property Profile. NEVER derive from contract form name. Valid values: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex."
+      },
 
-How to find it:
-1. Scan every page in the document set for the exact label "Date Prepared:"
-2. Confirm you are on page 1 of the RPA by checking the footer — it will read "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar (VLPA / RIPA / CPA equivalents are also valid).
-3. The date value sits immediately next to or directly below the "Date Prepared:" label.
-4. Convert to ISO format YYYY-MM-DD.
+      // ─── SQUARE FOOTAGE — return ONLY numeric values, never the field label ─
+      sqft_structure: {
+        type: "string",
+        description: "Building square footage from the Property Profile Report ONLY. Find the 'Building Sq Ft' row in the CHARACTERISTICS section on page 2 (NOT the 'MLS Sq Ft' summary box on page 1). RETURN ONLY THE VALUE — do NOT include the field label 'Building Sq Ft:'. Example: source shows 'Building Sq Ft: 2,888' → return '2,888'. EXCEPTION: if the property profile shows BOTH a tax-recorded value AND an MLS value distinctly (e.g. 'Tax: 1,666 / MLS: 6,087'), return both with their qualifying labels: 'Tax: 1,666 MLS: 6,087'. Empty string if no property profile is provided."
+      },
+      sqft_lot: {
+        type: "string",
+        description: "Lot size from the Property Profile Report ONLY. Find the 'Lot Area' row in the CHARACTERISTICS section. RETURN ONLY THE NUMERIC VALUE — do NOT include the field label 'Lot Area:'. Example: source shows 'Lot Area: 8,712' → return '8,712'. Empty string if no property profile is provided."
+      },
 
-DO NOT use any of these (common errors):
-✗ The "Date" field at the top of a Buyer Counter Offer (BCO) — that label is "Date", not "Date Prepared:"
-✗ The "Date" field at the top of a Seller Counter Offer (SCO) — same reason
-✗ Any signature date next to a "By" or "Buyer" or "Seller" line
-✗ The acceptance date in paragraph 33
-✗ The date stamped in the document header by DocuSign
-✗ The date in the property address line at the top of pages 2-17 of the RPA
+      // ─── DATES ────────────────────────────────────────────────────────────
+      date_rpa_prepared: {
+        type: "string",
+        description: "ISO date (YYYY-MM-DD) of the RPA. The ONLY valid source is the literal label 'Date Prepared:' (with the colon) at the top-left of page 1 of the original purchase agreement (RPA / VLPA / RIPA / CPA). Confirm you are on page 1 by checking the footer for 'RPA REVISED 12/25 (PAGE 1 OF 17)' or similar. CRITICAL — DO NOT use any of these (every one of these is a known wrong-source error): the 'Date' field at the top of a Buyer Counter Offer (BCO), the 'Date' field at the top of a Seller Counter Offer (SCO), any signature/acceptance date, paragraph 33 acceptance date, the DocuSign envelope timestamp in the document header, or the property-address-line date that appears on pages 2-17 of the RPA. The label 'Date Prepared:' appears EXACTLY ONCE in the entire document set, on RPA page 1 only. If you cannot locate the literal label 'Date Prepared:', return empty string — do NOT substitute any other date."
+      },
+      date_of_acceptance: { type: "string", description: "ISO date (YYYY-MM-DD) the last party signed the FINAL accepted document — that is, the latest counter offer if any exist, otherwise the original RPA acceptance in paragraph 33." },
+      emd_due_date: { type: "string", description: "Earnest money deposit due date in ISO format. Calculated from RPA paragraph 3D(1) ('within 3 business days after Acceptance' by default)." },
+      emd_amount: { type: "string", description: "Initial deposit dollar amount from RPA paragraph 3D(1), e.g. '39,000' or '39000.00'." },
+      close_of_escrow_date: { type: "string", description: "ISO date for COE from RPA paragraph 3B (either days-after-acceptance calculated, or specific date)." },
+      loan_contingency_date: { type: "string", description: "ISO date for loan contingency removal per RPA paragraph 3L(1). Empty if 'No loan contingency' is checked." },
+      appraisal_contingency_date: { type: "string", description: "ISO date for appraisal contingency removal per RPA paragraph 3L(2). Empty if 'No appraisal contingency' is checked." },
+      inspection_contingency_date: { type: "string", description: "ISO date for investigation/inspection contingency per RPA paragraph 3L(3)." },
+      seller_disclosures_due_date: { type: "string", description: "ISO date Seller must deliver disclosures per RPA paragraph 3N(1)." },
+      sprp_date: { type: "string", description: "Seller Purchase of Replacement Property contingency date if SPRP addendum attached. Empty if not applicable." },
+      cop_date: { type: "string", description: "Sale of Buyer's Property contingency date if COP addendum attached. Empty if not applicable." },
 
-If "Date Prepared:" cannot be located on any page, return empty string. Do not substitute another date.
+      // ─── PRICE & FINANCIAL ────────────────────────────────────────────────
+      final_purchase_price: { type: "string", description: "Final agreed purchase price. Use the LATEST counter offer price (BCO or SCO) if any exist; otherwise use RPA paragraph 3A. Numeric only, e.g. '1315000' or '1,315,000'." },
+      buyer_agent_commission_amount: { type: "string", description: "Buyer's broker compensation from RPA paragraph 3G(3). Either percentage (e.g. '2.5%') or fixed amount (e.g. '$15,000')." },
+      seller_credit_referenced: { type: "string", description: "Yes/No. 'Yes' if any Seller credit to Buyer is referenced in paragraph 3G(1) or 3G(2); 'No' otherwise." },
+      is_all_cash: { type: "string", description: "Yes/No. 'Yes' if 'All Cash' box is checked in RPA paragraph 3A; 'No' if a loan amount is specified." },
 
-EXAMPLE — for the contract attached, the RPA page 1 shows:
-"Date Prepared: April 27, 2026"
-→ date_rpa_prepared: "2026-04-27"
+      // ─── HOME WARRANTY ────────────────────────────────────────────────────
+      home_warranty: { type: "string", description: "Yes/No. 'Yes' if home warranty is included per RPA paragraph 3Q(18); 'No' if 'Buyer waives home warranty plan' is checked." },
+      home_warranty_who_pays: { type: "string", description: "'Buyer', 'Seller', or 'Both' per RPA paragraph 3Q(18). Empty if waived." },
+      home_warranty_amount: { type: "string", description: "Dollar cap on Seller's contribution to home warranty per paragraph 3Q(18) (e.g. '800.00'). Empty if not specified or waived." },
+      home_warranty_company: { type: "string", description: "Issuer/company name from paragraph 3Q(18) 'Issued by:' field. Empty if not specified." },
 
-▼ FIELDS: buyer_agent_name, buyer_agent_dre, buyer_agent_name_2, buyer_agent_dre_2, buyer_agent_brokerage_name, buyer_agent_brokerage_dre, buyer_agent_address, buyer_agent_email, buyer_agent_phone
+      // ─── BUYER ────────────────────────────────────────────────────────────
+      buyer_names: { type: "string", description: "Buyer name(s). The ONLY valid source is the 'THIS IS AN OFFER FROM ___' line on page 1 of the RPA (paragraph 1A). Do NOT use property profile (that's the seller), MLS, or anywhere else. Multiple buyers separated by ' and '." },
 
-The ONLY valid source is the LAST PAGE of the RPA / VLPA / RIPA / CPA. This page is titled "REAL ESTATE BROKERS SECTION" and is the final numbered page (e.g. "PAGE 17 OF 17").
+      // ─── SELLER ───────────────────────────────────────────────────────────
+      seller_names: {
+        type: "string",
+        description: "Seller name(s). NEVER blank — if seller is an entity, copy the entity name in here too. Priority: (1) Property Profile Report 'Owner Name', (2) MLS owner field, (3) RPA paragraph 33 Acceptance signatures (use the actual signed/printed name, NOT the printed label like 'Owner of Record'). If seller is 'Basad LLC' → seller_names: 'Basad LLC'."
+      },
+      seller_entity_name: { type: "string", description: "Full legal entity name if seller is a trust, LLC, estate, or corporation. Empty string if seller is an individual." },
+      seller_type: { type: "string", description: "Exactly one of: Individual, Trust, LLC, Estate, Power of Attorney. Default to Individual if unclear." },
+      seller_signer_1: { type: "string", description: "First actual human signer on the seller side (real person, not entity name). From paragraph 33." },
+      seller_signer_2: { type: "string", description: "Second human signer. Empty if only one." },
+      seller_signer_3: { type: "string", description: "Third human signer. Empty if not applicable." },
+      seller_signer_4: { type: "string", description: "Fourth human signer. Empty if not applicable." },
+      trust_full_name: { type: "string", description: "Full legal trust name if seller is a trust. Empty otherwise." },
+      trust_date: { type: "string", description: "Date trust was established (ISO format if known). Empty otherwise." },
 
-DO NOT extract buyer agent fields from:
-✗ Page 1 of the RPA (paragraph 2 "Agency Confirmation") — this section conflates brokerage DRE and agent DRE and is a known source of errors
-✗ The MLS listing — MLS only has SELLER agent info, never buyer agent
-✗ The property profile report — never has buyer info
-✗ The Buyer Representation Agreement (BRBC) — this is a separate listing-style document and may name a different agent than the one who actually wrote the offer
+      // ─── MLS ──────────────────────────────────────────────────────────────
+      mls_number: { type: "string", description: "MLS Listing ID from the MLS document (e.g. 'OC25196571'). NOT the APN. Empty if no MLS provided." },
+      mls_list_price: { type: "string", description: "Current list price from MLS LIST PRICE field." },
+      mls_list_date: { type: "string", description: "ISO date from MLS LIST CONTRACT DATE or ON MARKET DATE." },
 
-The "REAL ESTATE BROKERS SECTION" has two subsections labeled "A." and "B.":
-• Subsection A is "Buyer's Brokerage Firm" → use ONLY this for buyer fields
-• Subsection B is "Seller's Brokerage Firm" → do NOT use for buyer fields
+      // ─── BUYER AGENT — LAST PAGE OF RPA ONLY ───────────────────────────────
+      buyer_agent_name: {
+        type: "string",
+        description: "Buyer's primary agent name. Source: ONLY the LAST PAGE of the RPA (e.g. 'PAGE 17 OF 17'), titled 'REAL ESTATE BROKERS SECTION', subsection A 'Buyer's Brokerage Firm'. The agent name is the printed name on the FIRST 'By' line under that subsection. NEVER source from: page 1 paragraph 2 (Agency Confirmation) — that section confuses brokerage DRE with agent DRE; the MLS (MLS only has seller agents); the property profile; or the BRBC (Buyer Representation Agreement is a separate document and may name a different agent than the one who actually wrote this offer). Example: line reads 'By Jack Lopez   DRE Lic. # 02150816   Date 05/03/2026' → return 'Jack Lopez'."
+      },
+      buyer_agent_dre: {
+        type: "string",
+        description: "Buyer's primary agent INDIVIDUAL DRE license number from the FIRST 'By' line in subsection A on the LAST PAGE of the RPA. This is the individual agent's DRE, NOT the brokerage's DRE (the brokerage DRE sits on a different line, next to the firm name). Example: 'By Jack Lopez   DRE Lic. # 02150816' → return '02150816'."
+      },
+      buyer_agent_name_2: {
+        type: "string",
+        description: "Second buyer agent name from the SECOND 'By' line in subsection A on the LAST PAGE of the RPA. Empty string if that line is blank or unsigned. CRITICAL: if the checkbox 'More than one agent from the same firm represents Buyer' is marked (X or checked) in subsection A, then there ARE two agents and you MUST populate this field — do not leave it blank when the checkbox is marked."
+      },
+      buyer_agent_dre_2: { type: "string", description: "Second buyer agent's DRE on the SECOND 'By' line in subsection A. Empty if no second agent. If buyer_agent_name_2 is populated, this MUST be populated too." },
+      buyer_agent_brokerage_name: { type: "string", description: "Buyer's brokerage firm name from the 'Buyer's Brokerage Firm' line in subsection A on the LAST PAGE of the RPA. Example: 'Century 21 On Target' or 'Rodeo Realty, Inc. - Beverly Hills'." },
+      buyer_agent_brokerage_dre: { type: "string", description: "Brokerage DRE on the SAME LINE as the brokerage firm name in subsection A (NOT the agent's line). Example: 'Buyer's Brokerage Firm Century 21 On Target   DRE Lic. # 01257829' → return '01257829'." },
+      buyer_agent_address: { type: "string", description: "Buyer agent office address from subsection A. Combine the Address + City + State + Zip line into one string. Example: '5515 E. Stearns St., Long Beach, CA 90815'." },
+      buyer_agent_email: {
+        type: "string",
+        description: "Buyer agent email from subsection A on the LAST PAGE of the RPA. The email line sits BETWEEN the Address line and the checkbox lines, and SHARES the line with 'Phone #'. The line reads: 'Email name@domain.com   Phone # (xxx) xxx-xxxx'. NEVER source from CCPA pages, broker compensation forms, advisories, the document footer, or any other 'Email' label outside subsection A. Example: 'Email jack@century21ontarget.com' → return 'jack@century21ontarget.com'. CRITICAL: if you successfully extracted buyer_agent_phone, the email is on the SAME line — they appear together. Never return one without the other when an agent is filled in."
+      },
+      buyer_agent_phone: { type: "string", description: "Buyer agent phone from subsection A, on the SAME line as buyer_agent_email, after 'Phone #'. Example: '(562) 431-2011'." },
 
-Subsection A is laid out exactly like this:
+      // ─── SELLER AGENT ──────────────────────────────────────────────────────
+      seller_agent_name: { type: "string", description: "Seller agent name. Priority: (1) MLS Listing Agent (LA) — combine with CoLA as 'LA Name / CoLA Name' if both present; (2) RPA page 1 paragraph 2 'Seller's Agent' line; (3) RPA last page subsection B. NEVER use property profile for seller agent (that's historical listing data and may be from a previous sale)." },
+      seller_agent_dre: { type: "string", description: "Seller agent individual DRE. Combine as 'DRE1 / DRE2' if two listing agents. Same priority as seller_agent_name." },
+      seller_agent_brokerage_name: { type: "string", description: "Seller's brokerage/listing office name. Use MLS LO field first, then RPA." },
+      seller_agent_brokerage_dre: { type: "string", description: "Seller brokerage DRE. This is on the same line as the brokerage firm name, NOT the agent's line." },
+      seller_agent_address: { type: "string", description: "Seller agent office address." },
+      seller_agent_email: { type: "string", description: "Primary listing agent email. Use LA EMAIL from MLS if available, otherwise Offers Email." },
+      seller_agent_email_2: { type: "string", description: "Co-listing agent email (CoLA EMAIL from MLS). Empty if no co-listing agent." },
+      seller_agent_phone: { type: "string", description: "Seller agent phone number." },
 
-  A. Buyer's Brokerage Firm  [FIRM_NAME]                          DRE Lic. # [BROKERAGE_DRE]
-     By [AGENT_1_NAME]                                            DRE Lic. # [AGENT_1_DRE]   Date [...]
-     By [AGENT_2_NAME]                                            DRE Lic. # [AGENT_2_DRE]   Date [...]
-     Address [STREET]              City [CITY]                    State [ST]   Zip [ZIP]
-     Email [EMAIL]                                                Phone # [PHONE]
-     ☐ More than one agent from the same firm represents Buyer.
+      // ─── ESCROW / TITLE / HOA ─────────────────────────────────────────────
+      escrow_company: { type: "string", description: "Escrow holder/company from RPA paragraph 3Q(7) 'Escrow Holder:' field. May be 'Seller's Choice' or 'Buyer's Choice' if not yet selected." },
+      escrow_officer_name: { type: "string", description: "Named escrow officer if specified. Empty if not yet assigned." },
+      title_company: { type: "string", description: "Title company from RPA paragraph 3Q(8). May be 'Seller's Choice' if same as escrow." },
+      hoa_fee: { type: "string", description: "Monthly HOA fee if disclosed. Empty if not applicable or not disclosed." },
+      hoa_name: { type: "string", description: "HOA name if disclosed. Empty if not applicable." }
+    };
 
-Extract as follows:
-• buyer_agent_brokerage_name  ← firm name on the "Buyer's Brokerage Firm" line
-• buyer_agent_brokerage_dre   ← DRE Lic. # on the SAME line as the brokerage firm name
-• buyer_agent_name            ← printed name on the FIRST "By" line
-• buyer_agent_dre             ← DRE Lic. # on the FIRST "By" line (this is the agent's INDIVIDUAL DRE, not the brokerage DRE)
-• buyer_agent_name_2          ← printed name on the SECOND "By" line — leave empty string if that line is blank or unsigned
-• buyer_agent_dre_2           ← DRE Lic. # on the SECOND "By" line — leave empty string if no second agent
-• buyer_agent_address         ← combine street + city + state + zip into one string
-• buyer_agent_email           ← the email address that appears on the line starting with "Email" inside subsection A. This line sits BETWEEN the Address line and the checkbox lines, and shares the line with "Phone #". It will look like "Email name@domain.com   Phone # (xxx) xxx-xxxx". You MUST extract this — it is never blank when an agent is filled in. Do NOT pull email from any other section (CCPA, advisories, broker compensation forms, brokerage footer). Only the one inside subsection A on the last page.
-• buyer_agent_phone           ← phone number on the SAME line as the email, after "Phone #"
+    const extractionTool = {
+      name: "extract_contract_fields",
+      description: "Extract structured fields from a California real estate purchase agreement package. The package may include the original purchase agreement (RPA, VLPA, RIPA, or CPA — all use the same structure), counter offers (BCO, SCO), addenda, MLS listing, and property profile report. Cross-reference all documents to fill gaps. Each field below has its own specific extraction rules — read each field's description carefully before populating it. Normalize all text to proper case (never ALL CAPS). Use empty string for any field not found.",
+      input_schema: {
+        type: "object",
+        properties: FIELDS,
+        required: Object.keys(FIELDS)
+      }
+    };
 
-REMINDER: buyer_agent_email and buyer_agent_phone come from the SAME physical line. If you successfully extracted the phone, the email is on that same line — do not return empty for one and not the other.
-
-CRITICAL CHECKBOX HINT: When the "More than one agent from the same firm represents Buyer" checkbox is marked (X or checked), there ARE two agents and you MUST populate buyer_agent_name_2 and buyer_agent_dre_2. If you see two filled "By" lines but leave the _2 fields blank, that is a bug.
-
-EXAMPLE 1 — extraction with two agents:
-"A. Buyer's Brokerage Firm Rodeo Realty, Inc. - Beverly Hills    DRE Lic. # 00951359
-    By Jennifer Perez                                            DRE Lic. # 02125070   Date 4/27/2026
-    By Jimmy Heckenberg                                          DRE Lic. # 01910100   Date 4/27/2026
-    Address 202 N. Canon Dr.   City Beverly Hills   State CA   Zip 90210
-    Email j.perez@rodeore.com                                    Phone # (818) 299-3880
-    [X] More than one agent from the same firm represents Buyer."
-
-→ buyer_agent_brokerage_name: "Rodeo Realty, Inc. - Beverly Hills"
-→ buyer_agent_brokerage_dre:  "00951359"
-→ buyer_agent_name:           "Jennifer Perez"
-→ buyer_agent_dre:            "02125070"
-→ buyer_agent_name_2:         "Jimmy Heckenberg"
-→ buyer_agent_dre_2:          "01910100"
-→ buyer_agent_address:        "202 N. Canon Dr., Beverly Hills, CA 90210"
-→ buyer_agent_email:          "j.perez@rodeore.com"
-→ buyer_agent_phone:          "(818) 299-3880"
-
-EXAMPLE 2 — extraction with one agent (showing email/phone pairing):
-"A. Buyer's Brokerage Firm Century 21 On Target                  DRE Lic. # 01257829
-    By Jack Lopez                                                DRE Lic. # 02150816   Date 05/03/2026
-    By                                                           DRE Lic. #            Date
-    Address 5515 E. Stearns St.   City Long Beach   State CA   Zip 90815
-    Email jack@century21ontarget.com                             Phone # (562) 431-2011"
-
-→ buyer_agent_brokerage_name: "Century 21 On Target"
-→ buyer_agent_brokerage_dre:  "01257829"
-→ buyer_agent_name:           "Jack Lopez"
-→ buyer_agent_dre:            "02150816"
-→ buyer_agent_name_2:         ""
-→ buyer_agent_dre_2:          ""
-→ buyer_agent_address:        "5515 E. Stearns St., Long Beach, CA 90815"
-→ buyer_agent_email:          "jack@century21ontarget.com"
-→ buyer_agent_phone:          "(562) 431-2011"
-
-══════════════════════════════════════════════════════════════
-JSON SCHEMA (return EXACTLY these keys)
-══════════════════════════════════════════════════════════════
-
-{"property_address":"","date_of_acceptance":"","emd_due_date":"","emd_amount":"","close_of_escrow_date":"","loan_contingency_date":"","appraisal_contingency_date":"","inspection_contingency_date":"","seller_disclosures_due_date":"","sprp_date":"","cop_date":"","date_rpa_prepared":"","final_purchase_price":"","buyer_agent_commission_amount":"","seller_credit_referenced":"","is_all_cash":"","home_warranty":"","home_warranty_who_pays":"","home_warranty_amount":"","home_warranty_company":"","buyer_names":"","seller_names":"","seller_entity_name":"","seller_type":"","seller_signer_1":"","seller_signer_2":"","seller_signer_3":"","seller_signer_4":"","trust_full_name":"","trust_date":"","apn":"","sqft_structure":"","sqft_lot":"","county":"","city":"","zip_code":"","mls_number":"","mls_list_price":"","mls_list_date":"","year_built":"","buyer_agent_name":"","buyer_agent_dre":"","buyer_agent_name_2":"","buyer_agent_dre_2":"","buyer_agent_brokerage_name":"","buyer_agent_brokerage_dre":"","buyer_agent_address":"","buyer_agent_email":"","buyer_agent_phone":"","seller_agent_name":"","seller_agent_dre":"","seller_agent_brokerage_name":"","seller_agent_brokerage_dre":"","seller_agent_address":"","seller_agent_email":"","seller_agent_email_2":"","seller_agent_phone":"","escrow_company":"","escrow_officer_name":"","title_company":"","hoa_fee":"","hoa_name":"","property_type":""}
-
-══════════════════════════════════════════════════════════════
-REMAINING FIELD RULES
-══════════════════════════════════════════════════════════════
-
-PROPERTY ADDRESS — priority source order:
-1. Property Profile Report — most accurate, use if present
-2. MLS Listing header
-3. RPA page 1 — last resort only (agents sometimes mistype the street type, e.g. "Drive" instead of "Terrace")
-
-SELLER NAME — priority source order:
-1. Property Profile Report "Owner Name" field — most accurate, use if present
-2. MLS Listing seller/owner name field
-3. RPA paragraph 33 Acceptance section — last resort. Do NOT use the printed label text (e.g. "Owner of Record"); only use the actual handwritten or DocuSigned name value.
-
-CRITICAL: seller_names must NEVER be empty. If the seller is an entity (LLC, trust, estate), copy the entity name into seller_names. Example: seller is "Basad LLC" → seller_names: "Basad LLC", seller_entity_name: "Basad LLC".
-
-SELLER AGENT INFO — priority source order:
-IMPORTANT: Do NOT use the property profile report for seller agent info — it contains historical listing data that may be from a previous sale.
-1. MLS Listing Agent/Office section (most accurate) — look for LA (Listing Agent) and CoLA (Co-Listing Agent) fields. If both are present, combine as "LA Name / CoLA Name" for seller_agent_name and "LA DRE / CoLA DRE" for seller_agent_dre. Use LO (Listing Office) for brokerage name and LO State License for brokerage DRE.
-2. RPA page 1, paragraph 2 Agency section — "Seller's Brokerage Firm" and "Seller's Agent" lines. The License Number next to "Seller's Brokerage Firm" is the seller_agent_brokerage_dre. The License Number next to "Seller's Agent" is the seller_agent_dre.
-3. RPA Real Estate Brokers Section (last page, subsection B "Seller's Brokerage Firm") — same line-by-line layout as buyer subsection A described above, but for the seller side.
-
-• seller_agent_name: agent's full name (or "Agent 1 / Agent 2" if two listing agents).
-• seller_agent_dre: agent's individual DRE (or "DRE1 / DRE2" if two listing agents).
-• seller_agent_brokerage_name: brokerage/office name.
-• seller_agent_brokerage_dre: brokerage's DRE — same line as the brokerage firm name, NOT the agent's line.
-• seller_agent_address: agent's office address.
-• seller_agent_email: primary listing agent's email (use LA EMAIL from MLS if available, otherwise Offers Email).
-• seller_agent_email_2: co-listing agent's email (use CoLA EMAIL from MLS if available); empty if no co-listing agent.
-• seller_agent_phone: agent's phone number.
-
-MLS FIELDS:
-• mls_number: use the Listing ID from the MLS (e.g. "OC25196571"). Do not use APN or any other number.
-• mls_list_price: current list price from the MLS listing header or LIST PRICE field.
-• mls_list_date: use the LIST CONTRACT DATE or ON MARKET DATE from the MLS. ISO format YYYY-MM-DD.
-
-DATE RULES:
-• date_of_acceptance: the date the last party signed the final counter offer or original agreement — whichever is the final accepted document.
-• All dates must be in ISO format YYYY-MM-DD.
-
-SELLER ENTITY RULES:
-• seller_entity_name: if the seller is a trust, LLC, estate, or other entity, put the full legal entity name here. Empty if seller is an individual.
-• seller_names: NEVER blank. If individual, use full name. If entity, copy entity name in.
-• seller_type: exactly one of — Individual, Trust, LLC, Estate, Power of Attorney. Default to Individual if unclear.
-• seller_signer_1 through seller_signer_4: the actual human signers — real people, not the entity name.
-• trust_full_name: full legal name of the trust if applicable.
-• trust_date: date the trust was established if shown.
-
-OTHER RULES:
-• buyer_names: ONLY use the "THIS IS AN OFFER FROM ___" line on page 1 of the RPA. Do not pull from property profile, MLS, or anywhere else. The property profile owner is the SELLER, not the buyer.
-• sqft_structure: use ONLY the Property Profile Report. Find the "Building Sq Ft" row in the CHARACTERISTICS section (page 2) — NOT the "MLS Sq Ft" summary box on page 1. Return value exactly as written including all labels (e.g. "Tax: 1,666 MLS: 6,087"). Empty if no property profile.
-• sqft_lot: use ONLY the Property Profile Report. Find the "Lot Area" row in the CHARACTERISTICS section. Empty if no property profile.
-• property_type: always use the PROP SUB TYPE field from the MLS or the Type field from the Property Profile — never derive from the contract form name. Valid values: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex.
-• Normalize all text to proper case — never return values in ALL CAPS even if the source is in all caps.
-• Leave any field as empty string if not found.`;
-
-    content.push({ type: 'text', text: extractionPrompt });
+    content.push({
+      type: 'text',
+      text: 'Extract all required fields from the attached California real estate purchase agreement package by calling the extract_contract_fields tool. Read each field description carefully — they contain specific source-priority and disambiguation rules. Pay particular attention to: (a) date_rpa_prepared must come from the literal "Date Prepared:" label on RPA page 1, never from a counter offer; (b) all buyer_agent_* fields come from the LAST PAGE of the RPA (Real Estate Brokers Section, subsection A), never from page 1 or the BRBC; (c) sqft_structure and sqft_lot return numeric values only, never the field label.'
+    });
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -246,12 +236,32 @@ OTHER RULES:
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
-        max_tokens: 2500,
+        max_tokens: 4096,
+        tools: [extractionTool],
+        tool_choice: { type: "tool", name: "extract_contract_fields" },
         messages: [{ role: 'user', content }]
       })
     });
 
     const data = await response.json();
+
+    // Reshape tool_use response to match the caller's existing parsing.
+    // Caller currently does: JSON.parse(data.content[0].text)
+    // We extract the tool input and put it back in that shape so no
+    // downstream code has to change.
+    const toolUseBlock = Array.isArray(data.content)
+      ? data.content.find(b => b.type === 'tool_use')
+      : null;
+
+    if (toolUseBlock && toolUseBlock.input) {
+      const reshaped = {
+        ...data,
+        content: [{ type: 'text', text: JSON.stringify(toolUseBlock.input) }]
+      };
+      return { statusCode: 200, headers, body: JSON.stringify(reshaped) };
+    }
+
+    // Fallback: return raw response if tool call didn't happen for any reason.
     return { statusCode: 200, headers, body: JSON.stringify(data) };
 
   } catch (err) {
