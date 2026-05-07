@@ -155,14 +155,49 @@ exports.handler = async function(event, context) {
       // ─── SELLER ───────────────────────────────────────────────────────────
       seller_names: {
         type: "string",
-        description: "Seller name(s). NEVER blank — if seller is an entity, copy the entity name in here too. Priority: (1) Property Profile Report 'Owner Name', (2) MLS owner field, (3) RPA paragraph 33 Acceptance signatures (use the actual signed/printed name, NOT the printed label like 'Owner of Record'). If seller is 'Basad LLC' → seller_names: 'Basad LLC'. PRESERVE the exact separator used in the source document — if sellers are listed with commas (e.g. 'John Doe, Jane Doe'), return them with commas. Do not change commas to ' and ' or vice versa. Mirror the source formatting exactly."
+        description: `Seller name(s) in natural First-Last order, NEVER blank. PRIORITY 1: when a Property Profile Report is provided, the 'Owner Name' and 'Owner Name 2' fields are the authoritative source — but they are in courthouse 'Last First' order and MUST be rebuilt to natural 'First Last' order. DO NOT use the 'Mail Owner Name' field even though it appears to be in the right order — it sometimes silently omits co-owners with different last names. Always rebuild from Owner Name and Owner Name 2.
+
+REBUILD RULES:
+• Single name: 'Walters Shauna' → 'Shauna Walters'. The first word is the surname; everything after is the given name(s).
+• Couple sharing surname: 'Avedissian Nick & Marina' → 'Nick & Marina Avedissian'. Surname is first word; the remainder describes one or more given names joined with '&' or ','.
+• With middle initial: 'Wingard Joseph A' → 'Joseph A Wingard'.
+• Two Owner Name fields with same surname (e.g. Owner Name 'Wingard Joseph A' + Owner Name 2 'Wingard Susan L'): combine as 'Joseph A & Susan L Wingard'.
+• Two Owner Name fields with DIFFERENT surnames (e.g. 'Avedissian Nick & Marina' + 'Derian Michael R & Rina'): rebuild each independently and join with ' & ' between them: 'Nick & Marina Avedissian & Michael R & Rina Derian'. NEVER drop a co-owner just because the surname differs.
+
+COURTHOUSE CODES: County records sometimes append codes in parentheses like '(Te)' for trustee, '(Tr)' for trustee, '(JT)' for joint tenants, '(TC)' for tenants in common, '(Et Al)' meaning 'and others'. PRESERVE these codes in the rebuilt name in their original position relative to the person they describe. Example: 'Grinberg Benjamin (Te) & Ellen' → 'Benjamin (Te) & Ellen Grinberg'. The code stays attached to the same given name it was attached to in the source.
+
+EDGE CASES: For names with particles like 'de la' or 'van der', or hyphenated surnames, the surname may be more than one word. Use judgment based on capitalization and common patterns — e.g. 'De La Cruz Maria' → 'Maria De La Cruz'.
+
+PRIORITY 2 (only if no Property Profile): use MLS owner field. PRIORITY 3 (only if no profile and no MLS): use RPA paragraph 33 acceptance signatures (the actual signed/printed names, NOT the printed label like 'Owner of Record').
+
+ENTITY SELLERS: If seller is an entity (LLC, trust, estate, corporation), copy the full entity name into seller_names. Example: seller is 'Basad LLC' → seller_names: 'Basad LLC'. Entity names do not need rebuilding since they are not in Last-First order.
+
+PRESERVE the exact separator used in the source document for entity-vs-entity or co-owner separation — if source uses commas, use commas; if source uses '&', use '&'. Mirror the source formatting exactly. seller_names must NEVER be blank.`
       },
       seller_entity_name: { type: "string", description: "Full legal entity name if seller is a trust, LLC, estate, or corporation. Empty string if seller is an individual." },
-      seller_type: { type: "string", description: "Exactly one of: Individual, Trust, LLC, Estate, Power of Attorney. Default to Individual if unclear." },
+      seller_type: { type: "string", description: "Exactly one of: Individual, Trust, LLC, Estate, Power of Attorney. Default to Individual if unclear. SIGNAL FROM PROPERTY PROFILE: county records sometimes append courthouse codes in the Owner Name field that indicate ownership form. If you see '(Tr)' or '(Te)' or 'Trustee' next to a name → seller_type is 'Trust'. If you see '(LLC)' or the name itself ends in 'LLC' → seller_type is 'LLC'. If you see 'Estate of' or '(Et Al)' alone (without a trust indicator) → consider 'Estate'. These codes from the property profile are reliable signals. If the seller name is a clear entity (e.g. 'Basad LLC', 'Smith Family Trust'), match accordingly even without explicit codes." },
       seller_signer_1: { type: "string", description: "First actual human signer on the seller side (real person, not entity name). From paragraph 33." },
       seller_signer_2: { type: "string", description: "Second human signer. Empty if only one." },
       seller_signer_3: { type: "string", description: "Third human signer. Empty if not applicable." },
       seller_signer_4: { type: "string", description: "Fourth human signer. Empty if not applicable." },
+      seller_1: {
+        type: "string",
+        description: `First seller, split out for downstream systems that need one seller per field. ONE HUMAN OR ONE ENTITY PER SLOT.
+
+Splitting rule for property profile sources (rebuilt from Owner Name fields):
+• Single owner like 'Walters Shauna' → seller_1: 'Shauna Walters'.
+• Couple sharing surname like 'Avedissian Nick & Marina' → seller_1: 'Nick Avedissian', seller_2: 'Marina Avedissian'. The '&' between two given names means TWO DISTINCT PEOPLE who happen to share a surname — they go in separate slots, each with the full surname appended.
+• Owner Name + Owner Name 2 with same surname like 'Wingard Joseph A' + 'Wingard Susan L' → seller_1: 'Joseph A Wingard', seller_2: 'Susan L Wingard'.
+• Two Owner Name fields with different surnames like 'Avedissian Nick & Marina' + 'Derian Michael R & Rina' → seller_1: 'Nick Avedissian', seller_2: 'Marina Avedissian', seller_3: 'Michael R Derian', seller_4: 'Rina Derian'. Up to 4 humans across all owner fields.
+• Courthouse codes stay attached: 'Grinberg Benjamin (Te) & Ellen' → seller_1: 'Benjamin Grinberg (Te)', seller_2: 'Ellen Grinberg'.
+
+ENTITIES: an entity (LLC, trust, estate, corporation) is ONE legal seller that fills exactly ONE slot regardless of how many trustees or members it has. Examples: 'Basad LLC' → seller_1: 'Basad LLC'. 'Smith Family Trust' → seller_1: 'Smith Family Trust'. The trustees who sign on behalf of the entity are captured in seller_signer_1 through seller_signer_4, NOT here.
+
+If no Property Profile is provided, fall back to MLS or RPA paragraph 33 signatures, applying the same one-human-per-slot rule to whatever source you're using. seller_1 must NEVER be blank — at minimum the primary seller goes here.`
+      },
+      seller_2: { type: "string", description: "Second seller, one human or entity per slot. See seller_1 description for splitting rules. Empty string if there is only one seller." },
+      seller_3: { type: "string", description: "Third seller, one human or entity per slot. See seller_1 description for splitting rules. Empty string if there are fewer than three sellers." },
+      seller_4: { type: "string", description: "Fourth seller, one human or entity per slot. See seller_1 description for splitting rules. Empty string if there are fewer than four sellers." },
       trust_full_name: { type: "string", description: "Full legal trust name if seller is a trust. Empty otherwise." },
       trust_date: { type: "string", description: "Date trust was established (ISO format if known). Empty otherwise." },
 
