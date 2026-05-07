@@ -150,12 +150,12 @@ exports.handler = async function(event, context) {
       home_warranty_company: { type: "string", description: "Issuer/company name from paragraph 3Q(18) 'Issued by:' field. Empty if not specified." },
 
       // ─── BUYER ────────────────────────────────────────────────────────────
-      buyer_names: { type: "string", description: "Buyer name(s). The ONLY valid source is the 'THIS IS AN OFFER FROM ___' line on page 1 of the RPA (paragraph 1A). Do NOT use property profile (that's the seller), MLS, or anywhere else. Multiple buyers separated by ' and '." },
+      buyer_names: { type: "string", description: "Buyer name(s). The ONLY valid source is the 'THIS IS AN OFFER FROM ___' line on page 1 of the RPA (paragraph 1A). Do NOT use property profile (that's the seller), MLS, or anywhere else. PRESERVE the exact separator used in the source document — if buyers are listed with commas (e.g. 'John Smith, Jane Smith'), return them with commas. Do not change commas to ' and ' or vice versa. Mirror the source formatting exactly." },
 
       // ─── SELLER ───────────────────────────────────────────────────────────
       seller_names: {
         type: "string",
-        description: "Seller name(s). NEVER blank — if seller is an entity, copy the entity name in here too. Priority: (1) Property Profile Report 'Owner Name', (2) MLS owner field, (3) RPA paragraph 33 Acceptance signatures (use the actual signed/printed name, NOT the printed label like 'Owner of Record'). If seller is 'Basad LLC' → seller_names: 'Basad LLC'."
+        description: "Seller name(s). NEVER blank — if seller is an entity, copy the entity name in here too. Priority: (1) Property Profile Report 'Owner Name', (2) MLS owner field, (3) RPA paragraph 33 Acceptance signatures (use the actual signed/printed name, NOT the printed label like 'Owner of Record'). If seller is 'Basad LLC' → seller_names: 'Basad LLC'. PRESERVE the exact separator used in the source document — if sellers are listed with commas (e.g. 'John Doe, Jane Doe'), return them with commas. Do not change commas to ' and ' or vice versa. Mirror the source formatting exactly."
       },
       seller_entity_name: { type: "string", description: "Full legal entity name if seller is a trust, LLC, estate, or corporation. Empty string if seller is an individual." },
       seller_type: { type: "string", description: "Exactly one of: Individual, Trust, LLC, Estate, Power of Attorney. Default to Individual if unclear." },
@@ -222,12 +222,48 @@ exports.handler = async function(event, context) {
       }
     };
 
-    content.push({
-      type: 'text',
-      text: 'Extract all required fields from the attached California real estate purchase agreement package by calling the extract_contract_fields tool. Read each field description carefully — they contain specific source-priority and disambiguation rules. Pay particular attention to: (a) date_rpa_prepared must come from the literal "Date Prepared:" label on RPA page 1, never from a counter offer; (b) all buyer_agent_* fields come from the LAST PAGE of the RPA (Real Estate Brokers Section, subsection A), never from page 1 or the BRBC; (c) sqft_structure and sqft_lot return numeric values only, never the field label.'
-    });
+    // ─── TARGETED EXTRACTION TOOL ─────────────────────────────────────────────
+    // A second, focused tool that ONLY extracts the fields that have been
+    // unreliable in the main call (date_rpa_prepared, buyer_agent_*).
+    // With only ~10 fields to fill across 2 specific pages, the model has
+    // far more attention per field. This call runs in parallel with the main
+    // call and its results override the main call's results for these fields.
+    const TARGETED_FIELDS = {
+      date_rpa_prepared: FIELDS.date_rpa_prepared,
+      buyer_agent_name: FIELDS.buyer_agent_name,
+      buyer_agent_dre: FIELDS.buyer_agent_dre,
+      buyer_agent_name_2: FIELDS.buyer_agent_name_2,
+      buyer_agent_dre_2: FIELDS.buyer_agent_dre_2,
+      buyer_agent_brokerage_name: FIELDS.buyer_agent_brokerage_name,
+      buyer_agent_brokerage_dre: FIELDS.buyer_agent_brokerage_dre,
+      buyer_agent_address: FIELDS.buyer_agent_address,
+      buyer_agent_email: FIELDS.buyer_agent_email,
+      buyer_agent_phone: FIELDS.buyer_agent_phone
+    };
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const targetedTool = {
+      name: "extract_targeted_fields",
+      description: "Extract a small set of fields from a California real estate purchase agreement package. You have ONE job: locate two specific pages and extract from them. (1) Find page 1 of the original RPA/VLPA/RIPA/CPA — identifiable by the literal label 'Date Prepared:' at the top-left and the footer 'PAGE 1 OF 17' or similar — and extract the date next to that label. (2) Find the LAST PAGE of the same RPA — identifiable by the 'REAL ESTATE BROKERS SECTION' header and the footer 'PAGE 17 OF 17' or similar — and extract everything from subsection A 'Buyer's Brokerage Firm'. Both pages exist in the package. The RPA is always present. Read each field description carefully and return values directly from those two pages.",
+      input_schema: {
+        type: "object",
+        properties: TARGETED_FIELDS,
+        required: Object.keys(TARGETED_FIELDS)
+      }
+    };
+
+    // Build content arrays for each call. Both share the same documents.
+    const mainContent = [...content, {
+      type: 'text',
+      text: 'Extract all required fields from the attached California real estate purchase agreement package by calling the extract_contract_fields tool. Read each field description carefully — they contain specific source-priority and disambiguation rules.'
+    }];
+
+    const targetedContent = [...content, {
+      type: 'text',
+      text: 'Your task is narrow and specific. The attached package contains a California real estate purchase agreement (RPA / VLPA / RIPA / CPA). Find these two pages in the document set and extract from them by calling the extract_targeted_fields tool:\n\n• Page 1 of the RPA — top-left contains the literal text "Date Prepared:" followed by a date. The footer on this page reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant. Extract the date for date_rpa_prepared.\n\n• Last page of the RPA (typically PAGE 17 OF 17) — titled "REAL ESTATE BROKERS SECTION". This page has subsection A "Buyer\'s Brokerage Firm" near the top. Extract every buyer agent field from subsection A.\n\nThe RPA is always present in the package. If you have already located these two pages, the values are clearly visible — do not return empty strings unless a field is genuinely blank on the page itself.'
+    }];
+
+    // Fire both calls in parallel — wall-clock latency is just the slower one.
+    const callApi = (msgContent, tool) => fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -237,32 +273,54 @@ exports.handler = async function(event, context) {
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
         max_tokens: 4096,
-        tools: [extractionTool],
-        tool_choice: { type: "tool", name: "extract_contract_fields" },
-        messages: [{ role: 'user', content }]
+        tools: [tool],
+        tool_choice: { type: "tool", name: tool.name },
+        messages: [{ role: 'user', content: msgContent }]
       })
-    });
+    }).then(r => r.json());
 
-    const data = await response.json();
+    const [mainData, targetedData] = await Promise.all([
+      callApi(mainContent, extractionTool),
+      callApi(targetedContent, targetedTool)
+    ]);
 
-    // Reshape tool_use response to match the caller's existing parsing.
-    // Caller currently does: JSON.parse(data.content[0].text)
-    // We extract the tool input and put it back in that shape so no
-    // downstream code has to change.
-    const toolUseBlock = Array.isArray(data.content)
-      ? data.content.find(b => b.type === 'tool_use')
+    // Extract tool_use blocks from each response.
+    const findToolUse = (resp) => Array.isArray(resp.content)
+      ? resp.content.find(b => b.type === 'tool_use')
       : null;
 
-    if (toolUseBlock && toolUseBlock.input) {
+    const mainTool = findToolUse(mainData);
+    const targetedToolBlock = findToolUse(targetedData);
+
+    // Merge: targeted call wins for its fields IF it returned a non-empty value.
+    // If targeted also returned empty, fall back to main (which is still empty
+    // in that case, but at least we don't overwrite a main-call success with
+    // a targeted-call failure on some future edge case).
+    let mergedFields = mainTool && mainTool.input ? { ...mainTool.input } : {};
+
+    if (targetedToolBlock && targetedToolBlock.input) {
+      for (const [key, value] of Object.entries(targetedToolBlock.input)) {
+        if (value && value.trim() !== '') {
+          mergedFields[key] = value;
+        } else if (!mergedFields[key]) {
+          // Both empty — keep empty string for shape consistency
+          mergedFields[key] = '';
+        }
+      }
+    }
+
+    if (Object.keys(mergedFields).length > 0) {
+      // Reshape to match the caller's existing parsing: data.content[0].text
+      // is the JSON string of all fields, exactly as before.
       const reshaped = {
-        ...data,
-        content: [{ type: 'text', text: JSON.stringify(toolUseBlock.input) }]
+        ...mainData,
+        content: [{ type: 'text', text: JSON.stringify(mergedFields) }]
       };
       return { statusCode: 200, headers, body: JSON.stringify(reshaped) };
     }
 
-    // Fallback: return raw response if tool call didn't happen for any reason.
-    return { statusCode: 200, headers, body: JSON.stringify(data) };
+    // Fallback: return raw main response if neither tool call produced output.
+    return { statusCode: 200, headers, body: JSON.stringify(mainData) };
 
   } catch (err) {
     return {
