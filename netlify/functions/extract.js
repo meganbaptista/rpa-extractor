@@ -178,21 +178,21 @@ exports.handler = async function(event, context) {
       },
       buyer_agent_dre: {
         type: "string",
-        description: "Buyer's primary agent INDIVIDUAL DRE license number from the FIRST 'By' line in subsection A on the LAST PAGE of the RPA. This is the individual agent's DRE, NOT the brokerage's DRE (the brokerage DRE sits on a different line, next to the firm name). Example: 'By Jack Lopez   DRE Lic. # 02150816' → return '02150816'."
+        description: "Buyer's primary agent INDIVIDUAL DRE license number from the FIRST 'By' line in subsection A on the LAST PAGE of the RPA. This is the individual agent's DRE, NOT the brokerage's DRE (the brokerage DRE sits on a different line, next to the firm name). CRITICAL: subsection B 'Seller's Brokerage Firm' sits directly below subsection A on the same page with an identical layout. DO NOT pull this DRE from subsection B — that is the seller's agent DRE, a completely different number. The buyer agent DRE you want is on the line directly under 'A. Buyer's Brokerage Firm'. Example: 'By Jack Lopez   DRE Lic. # 02150816' → return '02150816'."
       },
       buyer_agent_name_2: {
         type: "string",
-        description: "Second buyer agent name from the SECOND 'By' line in subsection A on the LAST PAGE of the RPA. Empty string if that line is blank or unsigned. CRITICAL: if the checkbox 'More than one agent from the same firm represents Buyer' is marked (X or checked) in subsection A, then there ARE two agents and you MUST populate this field — do not leave it blank when the checkbox is marked."
+        description: "Second buyer agent name from the SECOND 'By' line in subsection A on the LAST PAGE of the RPA. Empty string if that line is blank or unsigned. CRITICAL: if the checkbox 'More than one agent from the same firm represents Buyer' is marked (X or checked) in subsection A, then there ARE two agents and you MUST populate this field — do not leave it blank when the checkbox is marked. DO NOT pull this from subsection B (Seller's Brokerage Firm)."
       },
-      buyer_agent_dre_2: { type: "string", description: "Second buyer agent's DRE on the SECOND 'By' line in subsection A. Empty if no second agent. If buyer_agent_name_2 is populated, this MUST be populated too." },
-      buyer_agent_brokerage_name: { type: "string", description: "Buyer's brokerage firm name from the 'Buyer's Brokerage Firm' line in subsection A on the LAST PAGE of the RPA. Example: 'Century 21 On Target' or 'Rodeo Realty, Inc. - Beverly Hills'." },
-      buyer_agent_brokerage_dre: { type: "string", description: "Brokerage DRE on the SAME LINE as the brokerage firm name in subsection A (NOT the agent's line). Example: 'Buyer's Brokerage Firm Century 21 On Target   DRE Lic. # 01257829' → return '01257829'." },
-      buyer_agent_address: { type: "string", description: "Buyer agent office address from subsection A. Combine the Address + City + State + Zip line into one string. Example: '5515 E. Stearns St., Long Beach, CA 90815'." },
+      buyer_agent_dre_2: { type: "string", description: "Second buyer agent's DRE on the SECOND 'By' line in subsection A. Empty if no second agent. If buyer_agent_name_2 is populated, this MUST be populated too. DO NOT pull from subsection B." },
+      buyer_agent_brokerage_name: { type: "string", description: "Buyer's brokerage firm name from the 'Buyer's Brokerage Firm' line in subsection A on the LAST PAGE of the RPA. CRITICAL: subsection B 'Seller's Brokerage Firm' is directly below on the same page and has its own brokerage name (the listing brokerage) — that is NOT the buyer's brokerage. The buyer's brokerage name appears on the line that begins 'A. Buyer's Brokerage Firm'. Example: 'A. Buyer's Brokerage Firm Anvil Real Estate' → return 'Anvil Real Estate'." },
+      buyer_agent_brokerage_dre: { type: "string", description: "Brokerage DRE on the SAME LINE as the buyer brokerage firm name in subsection A (NOT the agent's line). DO NOT pull from subsection B (Seller's Brokerage Firm) — that is the seller's brokerage DRE, a different number. The buyer brokerage DRE is on the same line as the firm named in subsection A. Example: 'A. Buyer's Brokerage Firm Anvil Real Estate   DRE Lic. # 02014153' → return '02014153'." },
+      buyer_agent_address: { type: "string", description: "Buyer agent OFFICE STREET ADDRESS from subsection A on the LAST PAGE of the RPA. The Address line sits between the 'By' lines and the Email line. Combine the Address + City + State + Zip into one string. CRITICAL: this field is a STREET ADDRESS, never a phone number — if you find yourself returning digits like '949-707-4400', that is a phone number and is wrong. The address line begins with the label 'Address' followed by a street, then 'City', 'State', 'Zip'. DO NOT pull from subsection B — that is the seller agent's office address. Example: source shows 'Address 23046 Avenida De La Carlota, Ste 600   City Laguna Hills   State CA   Zip 92653-1537' → return '23046 Avenida De La Carlota, Ste 600, Laguna Hills, CA 92653-1537'." },
       buyer_agent_email: {
         type: "string",
-        description: "Buyer agent email from subsection A on the LAST PAGE of the RPA. The email line sits BETWEEN the Address line and the checkbox lines, and SHARES the line with 'Phone #'. The line reads: 'Email name@domain.com   Phone # (xxx) xxx-xxxx'. NEVER source from CCPA pages, broker compensation forms, advisories, the document footer, or any other 'Email' label outside subsection A. Example: 'Email jack@century21ontarget.com' → return 'jack@century21ontarget.com'. CRITICAL: if you successfully extracted buyer_agent_phone, the email is on the SAME line — they appear together. Never return one without the other when an agent is filled in."
+        description: "Buyer agent email from subsection A on the LAST PAGE of the RPA. The email line sits BETWEEN the Address line and the checkbox lines, and SHARES the line with 'Phone #'. The line reads: 'Email name@domain.com   Phone # (xxx) xxx-xxxx'. NEVER source from CCPA pages, broker compensation forms, advisories, the document footer, or any other 'Email' label outside subsection A. CRITICAL: subsection B (Seller's Brokerage Firm) on the same page also has an Email line — DO NOT use that one, that is the seller agent's email. The buyer agent email is in the upper half of the page under 'A. Buyer's Brokerage Firm'. Example: 'Email jack@century21ontarget.com' → return 'jack@century21ontarget.com'. CRITICAL: if you successfully extracted buyer_agent_phone, the email is on the SAME line — they appear together. Never return one without the other when an agent is filled in."
       },
-      buyer_agent_phone: { type: "string", description: "Buyer agent phone from subsection A, on the SAME line as buyer_agent_email, after 'Phone #'. Example: '(562) 431-2011'." },
+      buyer_agent_phone: { type: "string", description: "Buyer agent phone from subsection A, on the SAME line as buyer_agent_email, after 'Phone #'. DO NOT pull from subsection B — that is the seller agent's phone. Example: '(562) 431-2011'." },
 
       // ─── SELLER AGENT ──────────────────────────────────────────────────────
       seller_agent_name: { type: "string", description: "Seller agent name. Priority: (1) MLS Listing Agent (LA) — combine with CoLA as 'LA Name / CoLA Name' if both present; (2) RPA page 1 paragraph 2 'Seller's Agent' line; (3) RPA last page subsection B. NEVER use property profile for seller agent (that's historical listing data and may be from a previous sale)." },
@@ -304,7 +304,31 @@ exports.handler = async function(event, context) {
 
       const targetedContent = [...content, {
         type: 'text',
-        text: 'Your task is narrow and specific. The attached package contains a California real estate purchase agreement (RPA / VLPA / RIPA / CPA). Find these two pages in the document set and extract from them by calling the extract_targeted_fields tool:\n\n• Page 1 of the RPA — top-left contains the literal text "Date Prepared:" followed by a date. The footer on this page reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant. Extract the date for date_rpa_prepared.\n\n• Last page of the RPA (typically PAGE 17 OF 17) — titled "REAL ESTATE BROKERS SECTION". This page has subsection A "Buyer\'s Brokerage Firm" near the top. Extract every buyer agent field from subsection A.\n\nThe RPA is always present in the package. If you have already located these two pages, the values are clearly visible — do not return empty strings unless a field is genuinely blank on the page itself.'
+        text: `Your task is narrow and specific. The attached package contains a California real estate purchase agreement (RPA / VLPA / RIPA / CPA). Find these two pages in the document set and extract from them by calling the extract_targeted_fields tool:
+
+• Page 1 of the RPA — top-left contains the literal text "Date Prepared:" followed by a date. The footer on this page reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant. Extract the date for date_rpa_prepared.
+
+• Last page of the RPA (typically PAGE 17 OF 17) — titled "REAL ESTATE BROKERS SECTION". This page contains TWO subsections that look almost identical:
+
+  ┌─────────────────────────────────────────────────────────┐
+  │ A. Buyer's Brokerage Firm  [BUYER firm]    DRE # [...]  │  ← extract from HERE
+  │    By [BUYER agent 1]                      DRE # [...]  │  ← extract from HERE
+  │    By [BUYER agent 2 if any]               DRE # [...]  │  ← extract from HERE
+  │    Address [BUYER office addr]  City  State  Zip        │  ← extract from HERE
+  │    Email [BUYER agent email]    Phone # [BUYER phone]   │  ← extract from HERE
+  │    ☐ More than one agent from the same firm...          │
+  ├─────────────────────────────────────────────────────────┤
+  │ B. Seller's Brokerage Firm [SELLER firm]   DRE # [...]  │  ← DO NOT use this
+  │    By [SELLER agent 1]                     DRE # [...]  │  ← DO NOT use this
+  │    Address [SELLER office addr] City State Zip          │  ← DO NOT use this
+  │    Email [SELLER email]         Phone # [SELLER phone]  │  ← DO NOT use this
+  └─────────────────────────────────────────────────────────┘
+
+EVERY buyer_agent_* field MUST come from subsection A only. Subsection B is the seller's information and is a trap — it has the same field labels (DRE, Address, Email, Phone) but the values are completely different people. A common failure mode is correctly identifying subsection A for the agent name, then drifting into subsection B for the remaining fields. Do not do this. Re-anchor on "A. Buyer's Brokerage Firm" before each field.
+
+The buyer_agent_address field is a STREET ADDRESS like "23046 Avenida De La Carlota, Ste 600, Laguna Hills, CA 92653" — never a phone number. If you are about to return digits like "949-707-4400" for an address, stop and re-read the Address line in subsection A.
+
+The RPA is always present in the package. If you have already located these two pages, the values are clearly visible — do not return empty strings unless a field is genuinely blank on the page itself.`
       }];
 
       try {
