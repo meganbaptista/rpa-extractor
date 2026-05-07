@@ -222,47 +222,12 @@ exports.handler = async function(event, context) {
       }
     };
 
-    // ─── TARGETED EXTRACTION TOOL ─────────────────────────────────────────────
-    // A second, focused tool that ONLY extracts the fields that have been
-    // unreliable in the main call (date_rpa_prepared, buyer_agent_*).
-    // With only ~10 fields to fill across 2 specific pages, the model has
-    // far more attention per field. This call runs in parallel with the main
-    // call and its results override the main call's results for these fields.
-    const TARGETED_FIELDS = {
-      date_rpa_prepared: FIELDS.date_rpa_prepared,
-      buyer_agent_name: FIELDS.buyer_agent_name,
-      buyer_agent_dre: FIELDS.buyer_agent_dre,
-      buyer_agent_name_2: FIELDS.buyer_agent_name_2,
-      buyer_agent_dre_2: FIELDS.buyer_agent_dre_2,
-      buyer_agent_brokerage_name: FIELDS.buyer_agent_brokerage_name,
-      buyer_agent_brokerage_dre: FIELDS.buyer_agent_brokerage_dre,
-      buyer_agent_address: FIELDS.buyer_agent_address,
-      buyer_agent_email: FIELDS.buyer_agent_email,
-      buyer_agent_phone: FIELDS.buyer_agent_phone
-    };
-
-    const targetedTool = {
-      name: "extract_targeted_fields",
-      description: "Extract a small set of fields from a California real estate purchase agreement package. You have ONE job: locate two specific pages and extract from them. (1) Find page 1 of the original RPA/VLPA/RIPA/CPA — identifiable by the literal label 'Date Prepared:' at the top-left and the footer 'PAGE 1 OF 17' or similar — and extract the date next to that label. (2) Find the LAST PAGE of the same RPA — identifiable by the 'REAL ESTATE BROKERS SECTION' header and the footer 'PAGE 17 OF 17' or similar — and extract everything from subsection A 'Buyer's Brokerage Firm'. Both pages exist in the package. The RPA is always present. Read each field description carefully and return values directly from those two pages.",
-      input_schema: {
-        type: "object",
-        properties: TARGETED_FIELDS,
-        required: Object.keys(TARGETED_FIELDS)
-      }
-    };
-
-    // Build content arrays for each call. Both share the same documents.
+    // Build content for the main extraction call.
     const mainContent = [...content, {
       type: 'text',
       text: 'Extract all required fields from the attached California real estate purchase agreement package by calling the extract_contract_fields tool. Read each field description carefully — they contain specific source-priority and disambiguation rules.'
     }];
 
-    const targetedContent = [...content, {
-      type: 'text',
-      text: 'Your task is narrow and specific. The attached package contains a California real estate purchase agreement (RPA / VLPA / RIPA / CPA). Find these two pages in the document set and extract from them by calling the extract_targeted_fields tool:\n\n• Page 1 of the RPA — top-left contains the literal text "Date Prepared:" followed by a date. The footer on this page reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant. Extract the date for date_rpa_prepared.\n\n• Last page of the RPA (typically PAGE 17 OF 17) — titled "REAL ESTATE BROKERS SECTION". This page has subsection A "Buyer\'s Brokerage Firm" near the top. Extract every buyer agent field from subsection A.\n\nThe RPA is always present in the package. If you have already located these two pages, the values are clearly visible — do not return empty strings unless a field is genuinely blank on the page itself.'
-    }];
-
-    // Fire both calls in parallel — wall-clock latency is just the slower one.
     const callApi = (msgContent, tool) => fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -279,33 +244,86 @@ exports.handler = async function(event, context) {
       })
     }).then(r => r.json());
 
-    const [mainData, targetedData] = await Promise.all([
-      callApi(mainContent, extractionTool),
-      callApi(targetedContent, targetedTool)
-    ]);
-
-    // Extract tool_use blocks from each response.
     const findToolUse = (resp) => Array.isArray(resp.content)
       ? resp.content.find(b => b.type === 'tool_use')
       : null;
 
+    // ─── MAIN CALL ────────────────────────────────────────────────────────────
+    // Always runs. Extracts all 60 fields.
+    const mainData = await callApi(mainContent, extractionTool);
     const mainTool = findToolUse(mainData);
-    const targetedToolBlock = findToolUse(targetedData);
-
-    // Merge: targeted call wins for its fields IF it returned a non-empty value.
-    // If targeted also returned empty, fall back to main (which is still empty
-    // in that case, but at least we don't overwrite a main-call success with
-    // a targeted-call failure on some future edge case).
     let mergedFields = mainTool && mainTool.input ? { ...mainTool.input } : {};
 
-    if (targetedToolBlock && targetedToolBlock.input) {
-      for (const [key, value] of Object.entries(targetedToolBlock.input)) {
-        if (value && value.trim() !== '') {
-          mergedFields[key] = value;
-        } else if (!mergedFields[key]) {
-          // Both empty — keep empty string for shape consistency
-          mergedFields[key] = '';
+    // ─── TARGETED CALL — CONDITIONAL ──────────────────────────────────────────
+    // Only fire if the main call missed any of the high-failure fields.
+    // This means small/normal contracts pay one API call; only the contracts
+    // that genuinely need the targeted help pay for two. Big contracts that
+    // succeed on the first pass don't risk the function timeout.
+    const TARGETED_FIELD_NAMES = [
+      'date_rpa_prepared',
+      'buyer_agent_name',
+      'buyer_agent_dre',
+      'buyer_agent_brokerage_name',
+      'buyer_agent_brokerage_dre',
+      'buyer_agent_address',
+      'buyer_agent_email',
+      'buyer_agent_phone'
+      // buyer_agent_name_2 and _dre_2 intentionally NOT in the trigger list —
+      // they're legitimately empty when only one agent signs, so an empty
+      // value here doesn't mean the main call failed.
+    ];
+
+    const mainCallMissedFields = TARGETED_FIELD_NAMES.some(fieldName => {
+      const value = mergedFields[fieldName];
+      return !value || value.trim() === '';
+    });
+
+    if (mainCallMissedFields) {
+      const TARGETED_FIELDS = {
+        date_rpa_prepared: FIELDS.date_rpa_prepared,
+        buyer_agent_name: FIELDS.buyer_agent_name,
+        buyer_agent_dre: FIELDS.buyer_agent_dre,
+        buyer_agent_name_2: FIELDS.buyer_agent_name_2,
+        buyer_agent_dre_2: FIELDS.buyer_agent_dre_2,
+        buyer_agent_brokerage_name: FIELDS.buyer_agent_brokerage_name,
+        buyer_agent_brokerage_dre: FIELDS.buyer_agent_brokerage_dre,
+        buyer_agent_address: FIELDS.buyer_agent_address,
+        buyer_agent_email: FIELDS.buyer_agent_email,
+        buyer_agent_phone: FIELDS.buyer_agent_phone
+      };
+
+      const targetedTool = {
+        name: "extract_targeted_fields",
+        description: "Extract a small set of fields from a California real estate purchase agreement package. You have ONE job: locate two specific pages and extract from them. (1) Find page 1 of the original RPA/VLPA/RIPA/CPA — identifiable by the literal label 'Date Prepared:' at the top-left and the footer 'PAGE 1 OF 17' or similar — and extract the date next to that label. (2) Find the LAST PAGE of the same RPA — identifiable by the 'REAL ESTATE BROKERS SECTION' header and the footer 'PAGE 17 OF 17' or similar — and extract everything from subsection A 'Buyer's Brokerage Firm'. Both pages exist in the package. The RPA is always present. Read each field description carefully and return values directly from those two pages.",
+        input_schema: {
+          type: "object",
+          properties: TARGETED_FIELDS,
+          required: Object.keys(TARGETED_FIELDS)
         }
+      };
+
+      const targetedContent = [...content, {
+        type: 'text',
+        text: 'Your task is narrow and specific. The attached package contains a California real estate purchase agreement (RPA / VLPA / RIPA / CPA). Find these two pages in the document set and extract from them by calling the extract_targeted_fields tool:\n\n• Page 1 of the RPA — top-left contains the literal text "Date Prepared:" followed by a date. The footer on this page reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant. Extract the date for date_rpa_prepared.\n\n• Last page of the RPA (typically PAGE 17 OF 17) — titled "REAL ESTATE BROKERS SECTION". This page has subsection A "Buyer\'s Brokerage Firm" near the top. Extract every buyer agent field from subsection A.\n\nThe RPA is always present in the package. If you have already located these two pages, the values are clearly visible — do not return empty strings unless a field is genuinely blank on the page itself.'
+      }];
+
+      try {
+        const targetedData = await callApi(targetedContent, targetedTool);
+        const targetedToolBlock = findToolUse(targetedData);
+
+        if (targetedToolBlock && targetedToolBlock.input) {
+          for (const [key, value] of Object.entries(targetedToolBlock.input)) {
+            // Targeted call wins ONLY if it produced a non-empty value.
+            // Never overwrite a main-call success with a targeted-call empty.
+            if (value && value.trim() !== '') {
+              mergedFields[key] = value;
+            }
+          }
+        }
+      } catch (targetedErr) {
+        // If the targeted call fails for any reason, we still have the main
+        // call's results. Better to return partial data than to fail entirely.
+        console.error('Targeted call failed, using main call results only:', targetedErr.message);
       }
     }
 
@@ -319,7 +337,7 @@ exports.handler = async function(event, context) {
       return { statusCode: 200, headers, body: JSON.stringify(reshaped) };
     }
 
-    // Fallback: return raw main response if neither tool call produced output.
+    // Fallback: return raw main response if main tool call didn't produce output.
     return { statusCode: 200, headers, body: JSON.stringify(mainData) };
 
   } catch (err) {
