@@ -502,17 +502,9 @@ If no Property Profile is provided, fall back to MLS or RPA paragraph 33 signatu
       ? resp.content.find(b => b.type === 'tool_use')
       : null;
 
-    // ─── MAIN CALL ────────────────────────────────────────────────────────────
-    // Always runs. Extracts all 60 fields.
-    const mainData = await callApi(mainContent, extractionTool);
-    const mainTool = findToolUse(mainData);
-    let mergedFields = mainTool && mainTool.input ? { ...mainTool.input } : {};
-
-    // ─── TARGETED CALL — CONDITIONAL ──────────────────────────────────────────
-    // Only fire if the main call missed any of the high-failure fields.
-    // This means small/normal contracts pay one API call; only the contracts
-    // that genuinely need the targeted help pay for two. Big contracts that
-    // succeed on the first pass don't risk the function timeout.
+    // ─── TARGETED CALL DEFINITIONS ────────────────────────────────────────────
+    // Pulled OUT of the conditional block so we can fire the targeted call in
+    // parallel with the main call (see PARALLEL EXECUTION below).
     const TARGETED_FIELD_NAMES = [
       'date_rpa_prepared',
       'buyer_agent_name',
@@ -527,68 +519,30 @@ If no Property Profile is provided, fall back to MLS or RPA paragraph 33 signatu
       // value here doesn't mean the main call failed.
     ];
 
-    const mainCallMissedFields = TARGETED_FIELD_NAMES.some(fieldName => {
-      const value = mergedFields[fieldName];
-      return !value || value.trim() === '';
-    });
+    const TARGETED_FIELDS = {
+      date_rpa_prepared: FIELDS.date_rpa_prepared,
+      buyer_agent_name: FIELDS.buyer_agent_name,
+      buyer_agent_dre: FIELDS.buyer_agent_dre,
+      buyer_agent_name_2: FIELDS.buyer_agent_name_2,
+      buyer_agent_dre_2: FIELDS.buyer_agent_dre_2,
+      buyer_agent_brokerage_name: FIELDS.buyer_agent_brokerage_name,
+      buyer_agent_brokerage_dre: FIELDS.buyer_agent_brokerage_dre,
+      buyer_agent_address: FIELDS.buyer_agent_address,
+      buyer_agent_email: FIELDS.buyer_agent_email,
+      buyer_agent_phone: FIELDS.buyer_agent_phone
+    };
 
-    if (mainCallMissedFields) {
-      const TARGETED_FIELDS = {
-        date_rpa_prepared: FIELDS.date_rpa_prepared,
-        buyer_agent_name: FIELDS.buyer_agent_name,
-        buyer_agent_dre: FIELDS.buyer_agent_dre,
-        buyer_agent_name_2: FIELDS.buyer_agent_name_2,
-        buyer_agent_dre_2: FIELDS.buyer_agent_dre_2,
-        buyer_agent_brokerage_name: FIELDS.buyer_agent_brokerage_name,
-        buyer_agent_brokerage_dre: FIELDS.buyer_agent_brokerage_dre,
-        buyer_agent_address: FIELDS.buyer_agent_address,
-        buyer_agent_email: FIELDS.buyer_agent_email,
-        buyer_agent_phone: FIELDS.buyer_agent_phone
-      };
-
-      const targetedTool = {
-        name: "extract_targeted_fields",
-        description: "Extract a small set of fields from a California real estate purchase agreement package. You have ONE job: locate two specific pages and extract from them. (1) Find page 1 of the original RPA/VLPA/RIPA/CPA — identifiable by the literal label 'Date Prepared:' at the top-left and the footer 'PAGE 1 OF 17' or similar — and extract the date next to that label. (2) Find the LAST PAGE of the same RPA — identifiable by the 'REAL ESTATE BROKERS SECTION' header and the footer 'PAGE 17 OF 17' or similar — and extract everything from subsection A 'Buyer's Brokerage Firm'. Both pages exist in the package. The RPA is always present. Read each field description carefully and return values directly from those two pages.",
-        input_schema: {
-          type: "object",
-          properties: TARGETED_FIELDS,
-          required: Object.keys(TARGETED_FIELDS)
-        }
-      };
-
-      // ── BUILD TRIMMED PDF FOR TARGETED CALL ──────────────────────────────
-      // Hybrid page detection: try text-layer extraction first (fast, free).
-      // If that misses (print/rescan PDFs with broken text layers), fall back
-      // to a vision-based Haiku call. Build a 2-page PDF from the located
-      // pages and send THAT to the targeted call instead of the full package.
-      // If both detection methods fail, fall back to sending the full package
-      // — that matches current behavior, no regression.
-      let targetedDocs = content; // default: full package
-      try {
-        const detection = await locateRpaPagesWithFallback(documents, process.env.ANTHROPIC_API_KEY);
-        const located = detection.located;
-        if (located.dpDoc !== -1 && located.brokersDoc !== -1) {
-          const trimmedBase64 = await buildTrimmedPdf(documents, located);
-          targetedDocs = [{
-            type: 'document',
-            source: { type: 'base64', media_type: 'application/pdf', data: trimmedBase64 },
-            title: 'RPA page 1 and brokers section (trimmed)'
-          }];
-          console.log(
-            'targeted call: trimmed to 2 pages via ' + detection.method + ' ' +
-            '(date_prepared=doc' + located.dpDoc + '/page' + (located.dpPage + 1) +
-            ', brokers_section=doc' + located.brokersDoc + '/page' + (located.brokersPage + 1) + ')'
-          );
-        } else {
-          console.warn('targeted call: page detection failed (' + detection.method + '), falling back to full package');
-        }
-      } catch (trimErr) {
-        console.warn('targeted call: trim failed (' + trimErr.message + '), falling back to full package');
+    const targetedTool = {
+      name: "extract_targeted_fields",
+      description: "Extract a small set of fields from a California real estate purchase agreement package. You have ONE job: locate two specific pages and extract from them. (1) Find page 1 of the original RPA/VLPA/RIPA/CPA — identifiable by the literal label 'Date Prepared:' at the top-left and the footer 'PAGE 1 OF 17' or similar — and extract the date next to that label. (2) Find the LAST PAGE of the same RPA — identifiable by the 'REAL ESTATE BROKERS SECTION' header and the footer 'PAGE 17 OF 17' or similar — and extract everything from subsection A 'Buyer's Brokerage Firm'. Both pages exist in the package. The RPA is always present. Read each field description carefully and return values directly from those two pages.",
+      input_schema: {
+        type: "object",
+        properties: TARGETED_FIELDS,
+        required: Object.keys(TARGETED_FIELDS)
       }
+    };
 
-      const targetedContent = [...targetedDocs, {
-        type: 'text',
-        text: `Your task is narrow and specific. The attached package contains a California real estate purchase agreement (RPA / VLPA / RIPA / CPA). Find these two pages in the document set and extract from them by calling the extract_targeted_fields tool:
+    const TARGETED_PROMPT = `Your task is narrow and specific. The attached package contains a California real estate purchase agreement (RPA / VLPA / RIPA / CPA). Find these two pages in the document set and extract from them by calling the extract_targeted_fields tool:
 
 • Page 1 of the RPA — top-left contains the literal text "Date Prepared:" followed by a date. The footer on this page reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant. Extract the date for date_rpa_prepared.
 
@@ -612,11 +566,73 @@ EVERY buyer_agent_* field MUST come from subsection A only. Subsection B is the 
 
 The buyer_agent_address field is a STREET ADDRESS like "23046 Avenida De La Carlota, Ste 600, Laguna Hills, CA 92653" — never a phone number. If you are about to return digits like "949-707-4400" for an address, stop and re-read the Address line in subsection A.
 
-The RPA is always present in the package. If you have already located these two pages, the values are clearly visible — do not return empty strings unless a field is genuinely blank on the page itself.`
-      }];
+The RPA is always present in the package. If you have already located these two pages, the values are clearly visible — do not return empty strings unless a field is genuinely blank on the page itself.`;
 
+    const buildTargetedContent = (docs) => [...docs, { type: 'text', text: TARGETED_PROMPT }];
+
+    // ─── PARALLEL EXECUTION ──────────────────────────────────────────────────
+    // Fire the main call AND page detection at the same time (T=0). As soon as
+    // detection finishes (~1s on the text path), fire the targeted call too —
+    // also in parallel with the still-running main call. The targeted call now
+    // executes during the main call's ~28s instead of after it, eliminating
+    // ~6s of sequential wait time on every contract.
+    //
+    // Speculative tradeoff: in the rare case where the main call succeeds
+    // without missing any TARGETED_FIELD_NAMES, we've still paid for the
+    // targeted call. For Megan's PDFs that case is essentially never — the
+    // targeted call fires every time anyway. Cost is unchanged in practice;
+    // latency drops by ~6 seconds.
+    const mainCallPromise = callApi(mainContent, extractionTool);
+    const detectionPromise = locateRpaPagesWithFallback(documents, process.env.ANTHROPIC_API_KEY);
+
+    let targetedCallPromise = null;
+    try {
+      const detection = await detectionPromise;
+      const located = detection.located;
+      if (located.dpDoc !== -1 && located.brokersDoc !== -1) {
+        const trimmedBase64 = await buildTrimmedPdf(documents, located);
+        const targetedDocs = [{
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: trimmedBase64 },
+          title: 'RPA page 1 and brokers section (trimmed)'
+        }];
+        targetedCallPromise = callApi(buildTargetedContent(targetedDocs), targetedTool);
+        console.log(
+          'targeted call: started in parallel with main, trimmed to 2 pages via ' + detection.method + ' ' +
+          '(date_prepared=doc' + located.dpDoc + '/page' + (located.dpPage + 1) +
+          ', brokers_section=doc' + located.brokersDoc + '/page' + (located.brokersPage + 1) + ')'
+        );
+      } else {
+        console.warn('targeted call: page detection failed (' + detection.method + '), will decide after main call returns');
+      }
+    } catch (trimErr) {
+      console.warn('targeted call: detection/trim errored (' + trimErr.message + '), will decide after main call returns');
+    }
+
+    // Wait for main call. If we already started the targeted call above, it's
+    // running in parallel and we'll await it next.
+    const mainData = await mainCallPromise;
+    const mainTool = findToolUse(mainData);
+    let mergedFields = mainTool && mainTool.input ? { ...mainTool.input } : {};
+
+    // FALLBACK PATH: detection failed → we didn't fire the targeted call
+    // speculatively. If the main call missed our target fields, fire the
+    // targeted call sequentially on the FULL package now. Matches old
+    // behavior for the detection-fails case so we don't regress edge cases.
+    if (!targetedCallPromise) {
+      const mainCallMissedFields = TARGETED_FIELD_NAMES.some(fieldName => {
+        const value = mergedFields[fieldName];
+        return !value || value.trim() === '';
+      });
+      if (mainCallMissedFields) {
+        console.log('targeted call: firing sequentially on full package (detection failed, main missed fields)');
+        targetedCallPromise = callApi(buildTargetedContent(content), targetedTool);
+      }
+    }
+
+    if (targetedCallPromise) {
       try {
-        const targetedData = await callApi(targetedContent, targetedTool);
+        const targetedData = await targetedCallPromise;
         const targetedToolBlock = findToolUse(targetedData);
 
         if (targetedToolBlock && targetedToolBlock.input) {
