@@ -1,3 +1,222 @@
+// ── DEPENDENCIES ────────────────────────────────────────────────────────────
+// pdf-parse 2.x: PDFParse class with getText() returning per-page text.
+// pdf-lib: copies selected pages into a fresh PDF for the targeted call.
+const { PDFDocument } = require('pdf-lib');
+const { PDFParse } = require('pdf-parse');
+
+// ── PAGE-DETECTION MARKERS ──────────────────────────────────────────────────
+// These two literal strings have been stable in CAR purchase agreement forms
+// for years and appear on EXACTLY the two RPA pages the targeted call needs:
+//   • "Date Prepared:" → top-left of page 1 of the RPA/VLPA/RIPA/CPA
+//   • "REAL ESTATE BROKERS SECTION" → header of the last page of the RPA
+// If CAR ever renames either, page detection silently fails and we fall back
+// to sending the full package (current behavior). No regression.
+const DATE_PREPARED_MARKER = 'Date Prepared:';
+const BROKERS_SECTION_MARKER = 'REAL ESTATE BROKERS SECTION';
+
+// ── HELPER: extract text from each page of a PDF buffer ─────────────────────
+// Returns an array of strings, one per page (page 1 at index 0).
+async function getPageTexts(buffer) {
+  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  try {
+    const result = await parser.getText();
+    // result.pages is [{num, text}, ...] sorted by page number.
+    return result.pages.map((p) => p.text || '');
+  } finally {
+    await parser.destroy();
+  }
+}
+
+// ── HELPER: TEXT-LAYER page detection (fast, free, works on born-digital PDFs) ──
+// Scans each document's text layer for the two markers. Returns -1 indices
+// for any marker not found. Fails on print-and-rescan PDFs whose text layer
+// has been destroyed — that's what the vision fallback below handles.
+async function locateRpaPagesViaText(documents) {
+  const result = { dpDoc: -1, dpPage: -1, brokersDoc: -1, brokersPage: -1 };
+
+  for (let docIdx = 0; docIdx < documents.length; docIdx++) {
+    const buffer = Buffer.from(documents[docIdx].data, 'base64');
+    let pageTexts;
+    try {
+      pageTexts = await getPageTexts(buffer);
+    } catch (err) {
+      console.warn('pdf-parse failed on document ' + docIdx + ' (' + (documents[docIdx].label || 'unlabeled') + '): ' + err.message);
+      continue;
+    }
+
+    for (let pageIdx = 0; pageIdx < pageTexts.length; pageIdx++) {
+      const text = pageTexts[pageIdx];
+      if (result.dpDoc === -1 && text.indexOf(DATE_PREPARED_MARKER) !== -1) {
+        result.dpDoc = docIdx;
+        result.dpPage = pageIdx;
+      }
+      if (result.brokersDoc === -1 && text.indexOf(BROKERS_SECTION_MARKER) !== -1) {
+        result.brokersDoc = docIdx;
+        result.brokersPage = pageIdx;
+      }
+    }
+
+    if (result.dpDoc !== -1 && result.brokersDoc !== -1) break;
+  }
+
+  return result;
+}
+
+// ── HELPER: VISION page detection (fallback for print-and-rescan PDFs) ─────
+// When text extraction can't find the markers (PDF text layer is broken or
+// missing), send the full PDF to Claude Haiku with a single-purpose tool that
+// returns the 1-indexed page numbers for the two markers. Haiku's vision
+// pipeline reads the rendered pages directly — same way the model reads pages
+// with broken text layers during normal extraction.
+//
+// Multi-document packages: the vision fallback only checks document 0. If a
+// caller ever splits the RPA across multiple uploaded files (uncommon), the
+// vision path won't find it and we fall through to the full-package behavior.
+async function locateRpaPagesViaVision(documents, apiKey) {
+  const result = { dpDoc: -1, dpPage: -1, brokersDoc: -1, brokersPage: -1 };
+
+  if (!documents.length) return result;
+  // Use the first document — typically the full package is uploaded as one file.
+  const docIdx = 0;
+
+  const locateTool = {
+    name: 'locate_pages',
+    description: 'Report the 1-indexed page numbers where two markers appear in the document.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        date_prepared_page: {
+          type: 'integer',
+          description: 'The 1-indexed page number where the literal label "Date Prepared:" appears at the top-left. This is page 1 of the California Residential Purchase Agreement (RPA/VLPA/RIPA/CPA). The page typically has a footer reading "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar. Return 0 if not found anywhere in the document.'
+        },
+        brokers_section_page: {
+          type: 'integer',
+          description: 'The 1-indexed page number where the heading "REAL ESTATE BROKERS SECTION" appears at the top of the page. This is the LAST page of the RPA, typically with a footer reading "PAGE 17 OF 17". Return 0 if not found anywhere in the document.'
+        }
+      },
+      required: ['date_prepared_page', 'brokers_section_page']
+    }
+  };
+
+  const body = {
+    model: 'claude-haiku-4-5',
+    max_tokens: 200,
+    tools: [locateTool],
+    tool_choice: { type: 'tool', name: 'locate_pages' },
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: documents[docIdx].data } },
+        { type: 'text', text: 'Find the two pages in this document and return their 1-indexed page numbers via the locate_pages tool. Page 1 of the RPA has the label "Date Prepared:" at the top-left. The LAST page of the RPA has the heading "REAL ESTATE BROKERS SECTION".' }
+      ]
+    }]
+  };
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json();
+
+  if (!Array.isArray(data.content)) {
+    console.warn('vision page-detection: unexpected response shape, no content array');
+    return result;
+  }
+  const toolUse = data.content.find((b) => b.type === 'tool_use');
+  if (!toolUse || !toolUse.input) {
+    console.warn('vision page-detection: no tool_use block in response');
+    return result;
+  }
+
+  const dpPageOneIndexed = toolUse.input.date_prepared_page;
+  const brokersPageOneIndexed = toolUse.input.brokers_section_page;
+
+  if (typeof dpPageOneIndexed === 'number' && dpPageOneIndexed > 0) {
+    result.dpDoc = docIdx;
+    result.dpPage = dpPageOneIndexed - 1; // convert to 0-indexed
+  }
+  if (typeof brokersPageOneIndexed === 'number' && brokersPageOneIndexed > 0) {
+    result.brokersDoc = docIdx;
+    result.brokersPage = brokersPageOneIndexed - 1;
+  }
+  return result;
+}
+
+// ── HELPER: orchestrate text-first, vision-fallback page detection ─────────
+// This is the hybrid: try free text extraction first. Only pay for a vision
+// call if text fails. Born-digital PDFs cost nothing extra; print/rescan PDFs
+// pay one cheap Haiku call.
+async function locateRpaPagesWithFallback(documents, apiKey) {
+  const textResult = await locateRpaPagesViaText(documents);
+  if (textResult.dpDoc !== -1 && textResult.brokersDoc !== -1) {
+    console.log('page detection: text-layer path succeeded');
+    return { located: textResult, method: 'text' };
+  }
+
+  console.log(
+    'page detection: text-layer path missed ' +
+    '(date_prepared_found=' + (textResult.dpDoc !== -1) +
+    ', brokers_section_found=' + (textResult.brokersDoc !== -1) + '), ' +
+    'trying vision fallback'
+  );
+
+  try {
+    const visionResult = await locateRpaPagesViaVision(documents, apiKey);
+    if (visionResult.dpDoc !== -1 && visionResult.brokersDoc !== -1) {
+      console.log('page detection: vision fallback succeeded ' +
+        '(date_prepared=page' + (visionResult.dpPage + 1) +
+        ', brokers_section=page' + (visionResult.brokersPage + 1) + ')');
+      return { located: visionResult, method: 'vision' };
+    }
+    console.warn(
+      'page detection: vision fallback also missed ' +
+      '(date_prepared_found=' + (visionResult.dpDoc !== -1) +
+      ', brokers_section_found=' + (visionResult.brokersDoc !== -1) + ')'
+    );
+    return { located: visionResult, method: 'vision-failed' };
+  } catch (visionErr) {
+    console.warn('page detection: vision fallback errored: ' + visionErr.message);
+    return { located: textResult, method: 'vision-errored' };
+  }
+}
+
+// ── HELPER: build a 2-page PDF from located pages, return base64 ───────────
+async function buildTrimmedPdf(documents, located) {
+  const newPdf = await PDFDocument.create();
+
+  if (located.dpDoc === located.brokersDoc) {
+    // Both target pages live in the same source PDF — load it once.
+    const srcBuffer = Buffer.from(documents[located.dpDoc].data, 'base64');
+    const srcPdf = await PDFDocument.load(srcBuffer);
+    const [dpPage, brokersPage] = await newPdf.copyPages(
+      srcPdf,
+      [located.dpPage, located.brokersPage]
+    );
+    newPdf.addPage(dpPage);
+    newPdf.addPage(brokersPage);
+  } else {
+    // The two target pages live in different source PDFs (e.g. RPA uploaded
+    // as two separate files). Load each source separately.
+    const dpBuffer = Buffer.from(documents[located.dpDoc].data, 'base64');
+    const dpSrc = await PDFDocument.load(dpBuffer);
+    const [dpPage] = await newPdf.copyPages(dpSrc, [located.dpPage]);
+    newPdf.addPage(dpPage);
+
+    const brokersBuffer = Buffer.from(documents[located.brokersDoc].data, 'base64');
+    const brokersSrc = await PDFDocument.load(brokersBuffer);
+    const [brokersPage] = await newPdf.copyPages(brokersSrc, [located.brokersPage]);
+    newPdf.addPage(brokersPage);
+  }
+
+  const newBytes = await newPdf.save();
+  return Buffer.from(newBytes).toString('base64');
+}
+
 exports.handler = async function(event, context) {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -337,7 +556,37 @@ If no Property Profile is provided, fall back to MLS or RPA paragraph 33 signatu
         }
       };
 
-      const targetedContent = [...content, {
+      // ── BUILD TRIMMED PDF FOR TARGETED CALL ──────────────────────────────
+      // Hybrid page detection: try text-layer extraction first (fast, free).
+      // If that misses (print/rescan PDFs with broken text layers), fall back
+      // to a vision-based Haiku call. Build a 2-page PDF from the located
+      // pages and send THAT to the targeted call instead of the full package.
+      // If both detection methods fail, fall back to sending the full package
+      // — that matches current behavior, no regression.
+      let targetedDocs = content; // default: full package
+      try {
+        const detection = await locateRpaPagesWithFallback(documents, process.env.ANTHROPIC_API_KEY);
+        const located = detection.located;
+        if (located.dpDoc !== -1 && located.brokersDoc !== -1) {
+          const trimmedBase64 = await buildTrimmedPdf(documents, located);
+          targetedDocs = [{
+            type: 'document',
+            source: { type: 'base64', media_type: 'application/pdf', data: trimmedBase64 },
+            title: 'RPA page 1 and brokers section (trimmed)'
+          }];
+          console.log(
+            'targeted call: trimmed to 2 pages via ' + detection.method + ' ' +
+            '(date_prepared=doc' + located.dpDoc + '/page' + (located.dpPage + 1) +
+            ', brokers_section=doc' + located.brokersDoc + '/page' + (located.brokersPage + 1) + ')'
+          );
+        } else {
+          console.warn('targeted call: page detection failed (' + detection.method + '), falling back to full package');
+        }
+      } catch (trimErr) {
+        console.warn('targeted call: trim failed (' + trimErr.message + '), falling back to full package');
+      }
+
+      const targetedContent = [...targetedDocs, {
         type: 'text',
         text: `Your task is narrow and specific. The attached package contains a California real estate purchase agreement (RPA / VLPA / RIPA / CPA). Find these two pages in the document set and extract from them by calling the extract_targeted_fields tool:
 
@@ -371,13 +620,22 @@ The RPA is always present in the package. If you have already located these two 
         const targetedToolBlock = findToolUse(targetedData);
 
         if (targetedToolBlock && targetedToolBlock.input) {
+          const filled = [];
+          const empty = [];
           for (const [key, value] of Object.entries(targetedToolBlock.input)) {
             // Targeted call wins ONLY if it produced a non-empty value.
             // Never overwrite a main-call success with a targeted-call empty.
             if (value && value.trim() !== '') {
               mergedFields[key] = value;
+              filled.push(key);
+            } else {
+              empty.push(key);
             }
           }
+          console.log(
+            'targeted call results: filled [' + filled.join(', ') + '], ' +
+            'still empty [' + empty.join(', ') + ']'
+          );
         }
       } catch (targetedErr) {
         // If the targeted call fails for any reason, we still have the main
