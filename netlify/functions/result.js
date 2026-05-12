@@ -14,7 +14,7 @@
 //   404 — jobId unknown
 //   410 — job expired (older than 24h)
 
-const { getStore } = require('@netlify/blobs');
+const { connectLambda, getStore } = require('@netlify/blobs');
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -39,6 +39,9 @@ exports.handler = async function(event) {
   }
 
   try {
+    // Blobs requires explicit Lambda context wiring in Lambda-compat mode.
+    connectLambda(event);
+
     const store = getStore('extraction-jobs');
     const data = await store.get(jobId, { type: 'json' });
 
