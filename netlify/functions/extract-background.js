@@ -48,6 +48,33 @@ function getJobStore() {
     token: process.env.NETLIFY_BLOBS_TOKEN
   });
 }
+
+// Separate store for the PDF payload, written by submit.js and read here.
+// We delete the payload after extraction completes (or fails) so we don't
+// retain PDF data longer than needed.
+function getPayloadStore() {
+  if (!process.env.NETLIFY_BLOBS_TOKEN) {
+    throw new Error('NETLIFY_BLOBS_TOKEN env var is not set — generate a Netlify Personal Access Token and add it as a site environment variable.');
+  }
+  return getStore({
+    name: 'extraction-payloads',
+    siteID: process.env.SITE_ID,
+    token: process.env.NETLIFY_BLOBS_TOKEN
+  });
+}
+// Best-effort cleanup of the payload blob once extraction completes (or
+// fails). If this throws, we just log — the payload's TTL will eventually
+// evict it anyway, no point failing the whole job for a cleanup miss.
+async function deletePayloadSafe(payloadStore, jobId) {
+  if (!payloadStore || !jobId) return;
+  try {
+    await payloadStore.delete(jobId);
+    console.log('extract-background: deleted payload for job ' + jobId);
+  } catch (cleanupErr) {
+    console.warn('extract-background: payload cleanup failed (non-fatal): ' + cleanupErr.message);
+  }
+}
+
 console.log('[extract-background] module fully loaded, handler ready');
 
 // ── PAGE-DETECTION MARKERS ──────────────────────────────────────────────────
@@ -382,6 +409,7 @@ exports.handler = async function(event, context) {
   // We respond { statusCode: 200 } at the end purely for log readability.
   let jobId = null;
   let store = null;
+  let payloadStore = null;
   let existing = {};
 
   try {
@@ -400,12 +428,23 @@ exports.handler = async function(event, context) {
     store = getJobStore();
     existing = (await store.get(jobId, { type: 'json' })) || {};
 
+    // Fetch the actual PDF payload from the payload store. Submit.js stashed
+    // it there because the 256 KB invocation-payload limit prevented sending
+    // PDFs through the fetch body.
+    payloadStore = getPayloadStore();
+    const payload = await payloadStore.get(jobId, { type: 'json' });
+    if (!payload || !payload.documents) {
+      throw new Error('Payload not found in extraction-payloads store for jobId=' + jobId);
+    }
+    console.log('extract-background: loaded payload (' + payload.documents.length + ' documents)');
+
     if (!process.env.ANTHROPIC_API_KEY) {
       throw new Error('ANTHROPIC_API_KEY not set');
     }
 
     const startedAt = Date.now();
-    const documents = body.documents || [];
+    const documents = payload.documents;
+    const promptOverride = payload.prompt_override;
     const content = [];
 
     documents.forEach(doc => {
@@ -417,8 +456,8 @@ exports.handler = async function(event, context) {
     });
 
     // ── RLA / CUSTOM PROMPT PATH (unchanged JSON-text behavior) ───────────────
-    if (body.prompt_override) {
-      content.push({ type: 'text', text: body.prompt_override });
+    if (promptOverride) {
+      content.push({ type: 'text', text: promptOverride });
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -443,6 +482,7 @@ exports.handler = async function(event, context) {
         duration_ms: Date.now() - startedAt
       });
       console.log('extract-background: job ' + jobId + ' complete (RLA path)');
+      await deletePayloadSafe(payloadStore, jobId);
       return { statusCode: 200 };
     }
 
@@ -907,6 +947,7 @@ The RPA is always present in the package. If you have already located these two 
         duration_ms: Date.now() - startedAt
       });
       console.log('extract-background: job ' + jobId + ' complete (RPA path)');
+      await deletePayloadSafe(payloadStore, jobId);
       return { statusCode: 200 };
     }
 
@@ -919,6 +960,7 @@ The RPA is always present in the package. If you have already located these two 
       duration_ms: Date.now() - startedAt
     });
     console.log('extract-background: job ' + jobId + ' complete (fallback path — main call returned no tool output)');
+    await deletePayloadSafe(payloadStore, jobId);
     return { statusCode: 200 };
 
   } catch (err) {
@@ -935,6 +977,7 @@ The RPA is always present in the package. If you have already located these two 
         console.error('extract-background: also failed to write failure status: ' + writeErr.message);
       }
     }
+    await deletePayloadSafe(payloadStore, jobId);
     return { statusCode: 500 };
   }
 };
