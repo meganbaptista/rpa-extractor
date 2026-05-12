@@ -110,7 +110,11 @@ async function locateRpaPagesViaVision(documents, apiKey) {
   };
 
   const body = {
-    model: 'claude-haiku-4-5',
+    // Switched from Haiku to Sonnet for vision page detection. Haiku was
+    // returning 0/0 (page-not-found) too often on print/rescan PDFs because
+    // OCR'ing tiny footer text is at the edge of its vision capability.
+    // Sonnet is more reliable here. Adds ~$0.10 per vision-path contract.
+    model: 'claude-sonnet-4-5',
     max_tokens: 200,
     tools: [locateTool],
     tool_choice: { type: 'tool', name: 'locate_pages' },
@@ -118,7 +122,7 @@ async function locateRpaPagesViaVision(documents, apiKey) {
       role: 'user',
       content: [
         { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: documents[docIdx].data } },
-        { type: 'text', text: 'Find the two pages in this document and return their 1-indexed page numbers via the locate_pages tool. Page 1 of the RPA has the label "Date Prepared:" at the top-left. The LAST page of the RPA has the heading "REAL ESTATE BROKERS SECTION".' }
+        { type: 'text', text: 'Find two specific pages in this multi-document package.\n\nPage A is page 1 of the RPA (California Residential Purchase Agreement). Identifiers:\n• Top-left has the literal label "Date Prepared:" followed by a date\n• Header "CALIFORNIA RESIDENTIAL PURCHASE AGREEMENT AND JOINT ESCROW INSTRUCTIONS" centered at top\n• Footer reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant\n• Paragraph 1 "OFFER" begins on this page\n\nPage B is the LAST page of the RPA (typically PAGE 17 OF 17). Identifiers:\n• Heading "REAL ESTATE BROKERS SECTION"\n• Two subsections labeled "A. Buyer\'s Brokerage Firm" and "B. Seller\'s Brokerage Firm"\n• Footer reads "RPA REVISED 12/25 (PAGE 17 OF 17)"\n\nBoth pages are present in this document. Return your best-guess 1-indexed page numbers via the locate_pages tool.' }
       ]
     }]
   };
@@ -679,7 +683,21 @@ EVERY buyer_agent_* field MUST come from subsection A only. Subsection B is the 
 
 The buyer_agent_address field is a STREET ADDRESS like "23046 Avenida De La Carlota, Ste 600, Laguna Hills, CA 92653" — never a phone number. If you are about to return digits like "949-707-4400" for an address, stop and re-read the Address line in subsection A.
 
-The RPA is always present in the package. If you have already located these two pages, the values are clearly visible — do not return empty strings unless a field is genuinely blank on the page itself.`;
+ANTI-HALLUCINATION RULES — read carefully:
+
+When you CAN clearly read the value on the page (text is sharp, label is visible, value is filled in), return it. The RPA is always present and these fields are usually filled in, so the common case is non-empty.
+
+But when you CANNOT clearly read a value — page is blurry, OCR text is garbled, label is visible but the line after it is blank or unreadable, or you genuinely cannot find the field — return an EMPTY STRING. An honest blank is always better than a guess.
+
+Specifically, NEVER do any of the following:
+
+• NEVER return "2025" or any year that comes from the form's copyright footer "© 2025 California Association of REALTORS®". The copyright year is NOT the Date Prepared.
+• NEVER return "<UNKNOWN>", "N/A", "TBD", "see addendum", or any placeholder string for a buyer agent field. If you can't find buyer agent info, return empty string for that field.
+• NEVER use a date from elsewhere in the package (counter offer date, signature date, DocuSign timestamp, property profile sale date, MLS list date) as a substitute for date_rpa_prepared.
+• NEVER infer buyer agent details from the MLS or property profile — those documents only contain seller agent info.
+• NEVER copy values from subsection B (Seller's Brokerage Firm) when subsection A is unreadable. If A is illegible, return empty — do not silently fall back to B.
+
+Empty strings are the correct answer when extraction is uncertain. The user can fill in missing data manually; they cannot easily detect a wrong-but-plausible-looking value that was hallucinated.`;
 
     const buildTargetedContent = (docs) => [...docs, { type: 'text', text: TARGETED_PROMPT }];
 
@@ -707,7 +725,7 @@ The RPA is always present in the package. If you have already located these two 
     //
     // Detection paths in order of preference:
     //   1. text_trim — PDF text layer contains markers, build 2-page trim
-    //   2. vision_trim_haiku — Haiku reads PDF and finds page numbers, trim
+    //   2. vision_trim_sonnet — Sonnet reads PDF and finds page numbers, trim
     //   3. image_fallback_sonnet — render pages server-side, send to Sonnet
     //   4. failed_all_paths — every method exhausted, targeted fields blank
     //
@@ -779,7 +797,7 @@ The RPA is always present in the package. If you have already located these two 
           title: 'RPA page 1 and brokers section (trimmed)'
         }];
         targetedCallPromise = callApi(buildTargetedContent(targetedDocs), targetedTool);
-        extractionStatus = detection.method === 'text' ? 'text_trim' : 'vision_trim_haiku';
+        extractionStatus = detection.method === 'text' ? 'text_trim' : 'vision_trim_sonnet';
         console.log(
           'targeted call: started in parallel with main, trimmed to 2 pages via ' + detection.method + ' ' +
           '(date_prepared=doc' + located.dpDoc + '/page' + (located.dpPage + 1) +
@@ -846,7 +864,7 @@ The RPA is always present in the package. If you have already located these two 
         console.error('Targeted call failed, using main call results only:', targetedErr.message);
         if (extractionStatus === 'image_fallback_sonnet' ||
             extractionStatus === 'text_trim' ||
-            extractionStatus === 'vision_trim_haiku') {
+            extractionStatus === 'vision_trim_sonnet') {
           extractionStatus = 'failed_all_paths';
         }
       }
