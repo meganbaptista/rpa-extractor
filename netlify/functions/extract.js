@@ -14,6 +14,17 @@ const { PDFParse } = require('pdf-parse');
 const DATE_PREPARED_MARKER = 'Date Prepared:';
 const BROKERS_SECTION_MARKER = 'REAL ESTATE BROKERS SECTION';
 
+// ── IMAGE FALLBACK CONFIG ──────────────────────────────────────────────────
+// Cap on how many pages we'll render server-side and send to Sonnet as images.
+// The RPA is always 17 pages and typically starts within the first 10 pages of
+// a package, so 30 covers >99% of legitimate real estate packages. Bounds:
+//   • Render time (~330ms/page) — 30 pages renders in ~10s, fits within the
+//     parallel-with-main-call window
+//   • Cost — ~$0.0005 per page in vision tokens, so 30 pages adds ~$0.015
+//   • Attention — keeps the model focused on the relevant page set
+// If a real package exceeds this cap, the call truncates and logs a warning.
+const MAX_FALLBACK_PAGES = 30;
+
 // ── HELPER: extract text from each page of a PDF buffer ─────────────────────
 // Returns an array of strings, one per page (page 1 at index 0).
 async function getPageTexts(buffer) {
@@ -217,17 +228,44 @@ async function buildTrimmedPdf(documents, located) {
   return Buffer.from(newBytes).toString('base64');
 }
 
-// ── HELPER: render all pages of a PDF as base64 PNG images ─────────────────
+// ── HELPER: render pages of a PDF as base64 PNG images ─────────────────────
 // Used as a final fallback when text-layer detection AND vision page detection
 // both fail. By rendering server-side we get clear images that the model can
 // read directly, sidestepping whatever Anthropic's internal PDF rendering does
 // that causes vision page detection to fail on print/rescan packages. At
 // scale 0.5 each page is ~120KB and tokenizes to ~160 tokens (~12x cheaper
 // than the equivalent PDF page in vision mode).
-async function renderAllPagesAsImages(buffer) {
+//
+// `maxPages` caps how many pages are actually rendered via pdf-parse's
+// `first: N` option. This skips rendering work entirely for pages beyond the
+// cap, not just truncating output. Important for packages with 50+ pages
+// where rendering all of them would blow the function timeout.
+async function renderAllPagesAsImages(buffer, maxPages) {
+  // Peek at total page count so we can log when we're truncating.
+  // getInfo is lightweight — doesn't render anything.
+  let totalPages = null;
+  try {
+    const peekParser = new PDFParse({ data: new Uint8Array(buffer) });
+    const info = await peekParser.getInfo();
+    // pdf-parse 2.x returns page count under `total`.
+    totalPages = info.total || null;
+    await peekParser.destroy();
+  } catch (peekErr) {
+    // Non-fatal — we just skip the truncation warning if peek fails.
+  }
+
+  if (totalPages && maxPages && totalPages > maxPages) {
+    console.warn(
+      'image fallback: package has ' + totalPages + ' pages, ' +
+      'rendering only first ' + maxPages + ' (cap)'
+    );
+  }
+
   const parser = new PDFParse({ data: new Uint8Array(buffer) });
   try {
-    const result = await parser.getScreenshot({ scale: 0.5 });
+    const options = { scale: 0.5 };
+    if (maxPages) options.first = maxPages;
+    const result = await parser.getScreenshot(options);
     return result.pages
       .filter((p) => p.data)
       .map((p) => ({
@@ -629,6 +667,7 @@ The RPA is always present in the package. If you have already located these two 
       const detection = await detectionPromise;
       const located = detection.located;
       if (located.dpDoc !== -1 && located.brokersDoc !== -1) {
+        // ── PATH A: trim-based targeted call ───────────────────────────────
         const trimmedBase64 = await buildTrimmedPdf(documents, located);
         const targetedDocs = [{
           type: 'document',
@@ -636,7 +675,6 @@ The RPA is always present in the package. If you have already located these two 
           title: 'RPA page 1 and brokers section (trimmed)'
         }];
         targetedCallPromise = callApi(buildTargetedContent(targetedDocs), targetedTool);
-        // text vs vision shows up in detection.method ("text" or "vision")
         extractionStatus = detection.method === 'text' ? 'text_trim' : 'vision_trim_haiku';
         console.log(
           'targeted call: started in parallel with main, trimmed to 2 pages via ' + detection.method + ' ' +
@@ -644,48 +682,39 @@ The RPA is always present in the package. If you have already located these two 
           ', brokers_section=doc' + located.brokersDoc + '/page' + (located.brokersPage + 1) + ')'
         );
       } else {
-        console.warn('targeted call: page detection failed (' + detection.method + '), will try image fallback after main call returns');
-      }
-    } catch (trimErr) {
-      console.warn('targeted call: detection/trim errored (' + trimErr.message + '), will try image fallback after main call returns');
-    }
-
-    // Wait for main call. If we already started the targeted call above, it's
-    // running in parallel and we'll await it next.
-    const mainData = await mainCallPromise;
-    const mainTool = findToolUse(mainData);
-    let mergedFields = mainTool && mainTool.input ? { ...mainTool.input } : {};
-
-    // FALLBACK PATH: page detection failed → no targeted call started.
-    // If the main call missed our target fields, render the full package as
-    // images server-side and send those to Sonnet with the targeted prompt.
-    // This sidesteps Anthropic's internal PDF rendering (which has been
-    // failing on print/rescan packages) by controlling rendering ourselves.
-    // Rendered images at scale 0.5 are clearly readable AND tokenize cheaply
-    // (~160 tokens per page vs ~2000 for a PDF page).
-    if (!targetedCallPromise) {
-      const mainCallMissedFields = TARGETED_FIELD_NAMES.some(fieldName => {
-        const value = mergedFields[fieldName];
-        return !value || value.trim() === '';
-      });
-      if (mainCallMissedFields) {
-        try {
-          console.log('image fallback: rendering all pages of first document for image-based targeted call');
+        // ── PATH B: image fallback — also in parallel with main ────────────
+        // Wrapped in an async IIFE so the render + API call combo is a single
+        // Promise we can await alongside the main call. Rendering happens
+        // server-side (CPU work) while the main call's network request is
+        // in flight; the API call then fires before the main call returns.
+        console.warn(
+          'targeted call: page detection failed (' + detection.method + '), ' +
+          'starting image fallback in parallel with main call'
+        );
+        targetedCallPromise = (async () => {
           const renderStart = Date.now();
           const firstDocBuffer = Buffer.from(documents[0].data, 'base64');
-          const renderedPages = await renderAllPagesAsImages(firstDocBuffer);
+          const renderedPages = await renderAllPagesAsImages(firstDocBuffer, MAX_FALLBACK_PAGES);
           console.log(
             'image fallback: rendered ' + renderedPages.length + ' pages in ' +
             (Date.now() - renderStart) + 'ms, firing targeted call on images'
           );
-          targetedCallPromise = callApi(buildImageFallbackContent(renderedPages), targetedTool);
-          extractionStatus = 'image_fallback_sonnet';
-        } catch (renderErr) {
-          console.error('image fallback: render failed (' + renderErr.message + '), targeted fields will be blank');
-          extractionStatus = 'failed_all_paths';
-        }
+          return callApi(buildImageFallbackContent(renderedPages), targetedTool);
+        })();
+        extractionStatus = 'image_fallback_sonnet';
       }
+    } catch (trimErr) {
+      // Unexpected error during detection or trim build. Don't fire image
+      // fallback here — the error is structural and we want logs to surface
+      // it rather than silently triggering more work.
+      console.warn('targeted call: detection/trim errored (' + trimErr.message + '), no targeted call this run');
     }
+
+    // Wait for main call. Both possible targeted-call paths (trim and image
+    // fallback) are already running in parallel and will be awaited next.
+    const mainData = await mainCallPromise;
+    const mainTool = findToolUse(mainData);
+    let mergedFields = mainTool && mainTool.input ? { ...mainTool.input } : {};
 
     if (targetedCallPromise) {
       try {
@@ -716,9 +745,16 @@ The RPA is always present in the package. If you have already located these two 
           }
         }
       } catch (targetedErr) {
-        // If the targeted call fails for any reason, we still have the main
-        // call's results. Better to return partial data than to fail entirely.
+        // If the targeted call (or image fallback render) fails for any reason,
+        // we still have the main call's results. Better to return partial data
+        // than to fail entirely. Downgrade status so it accurately reflects the
+        // outcome.
         console.error('Targeted call failed, using main call results only:', targetedErr.message);
+        if (extractionStatus === 'image_fallback_sonnet' ||
+            extractionStatus === 'text_trim' ||
+            extractionStatus === 'vision_trim_haiku') {
+          extractionStatus = 'failed_all_paths';
+        }
       }
     }
 
