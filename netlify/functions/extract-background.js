@@ -15,7 +15,7 @@
 // Side effect: writes a status record to the 'extraction-jobs' blob store
 // keyed by jobId. The frontend polls /result?jobId=... to read it.
 
-const { getStore } = require('@netlify/blobs');
+const { connectLambda, getStore } = require('@netlify/blobs');
 const extractModule = require('./extract.js');
 
 exports.handler = async function(event) {
@@ -24,6 +24,9 @@ exports.handler = async function(event) {
   let store;
 
   try {
+    // Blobs requires explicit Lambda context wiring in Lambda-compat mode.
+    connectLambda(event);
+
     const body = event.body ? JSON.parse(event.body) : {};
     jobId = body.jobId;
 
