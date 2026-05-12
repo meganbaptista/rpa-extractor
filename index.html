@@ -234,7 +234,12 @@
 </div>
 
 <script>
-const FUNCTION_URL = '/.netlify/functions/extract';
+// New background extraction endpoints. The old single /extract endpoint is
+// still deployed and functional — see Zapier/external callers. We switched
+// the frontend to submit → poll for the long-running extraction work.
+const SUBMIT_URL = '/.netlify/functions/submit';
+const RESULT_URL = '/.netlify/functions/result';
+
 const ZAPIER = {
   rpa: 'https://hooks.zapier.com/hooks/catch/4252316/uvbvfoa/',
   rla: 'https://hooks.zapier.com/hooks/catch/4252316/uv140hh/'
@@ -371,13 +376,79 @@ function showStatus(type, msg, cls) {
   el.textContent=msg; el.className='status-box status-'+cls; el.style.display='block';
 }
 
-async function callExtractAPI(payload) {
-  const resp = await fetch(FUNCTION_URL, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-  const text = await resp.text();
-  let result;
-  try { result = JSON.parse(text); } catch(e) { throw new Error('Server error — please try again. ('+text.substring(0,80)+')'); }
-  if (result.error) throw new Error(result.error.message||JSON.stringify(result.error));
-  return result;
+// ─── BACKGROUND EXTRACTION VIA SUBMIT + POLL ──────────────────────────────
+// Replaces the old single-fetch /extract call. Same return shape (full
+// Anthropic-style response with content[0].text holding the field JSON),
+// so the downstream parsing in runExtraction is unchanged.
+//
+// Flow:
+//   1. POST to /submit with the payload, get back a jobId in <1s
+//   2. Poll /result?jobId=... every 2s
+//   3. When status === 'complete', return the result; when 'failed', throw
+//   4. After 60 polls (= 2 minutes), give up
+async function callExtractAPI(payload, type) {
+  // Step 1: submit
+  const submitResp = await fetch(SUBMIT_URL, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
+  });
+  const submitText = await submitResp.text();
+  let submitData;
+  try {
+    submitData = JSON.parse(submitText);
+  } catch(e) {
+    throw new Error('Server error — please try again. (' + submitText.substring(0,80) + ')');
+  }
+  if (!submitResp.ok || submitData.error) {
+    const msg = (submitData.error && submitData.error.message) || submitData.error || ('Submit failed (' + submitResp.status + ')');
+    throw new Error(msg);
+  }
+  const jobId = submitData.jobId;
+  if (!jobId) throw new Error('No jobId returned from submit');
+
+  // Step 2: poll
+  const POLL_MS = 2000;
+  const MAX_ATTEMPTS = 60;  // 2 minutes total
+  const startedAt = Date.now();
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    await new Promise(r => setTimeout(r, POLL_MS));
+
+    // Progress bar climbs from 30% → 80% during polling; status shows elapsed time
+    const pollProgress = 30 + (50 * attempt / MAX_ATTEMPTS);
+    setProgress(type, Math.min(80, pollProgress));
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    showStatus(type, 'Processing... (' + elapsed + 's elapsed)', 'info');
+
+    let pollResp;
+    try {
+      pollResp = await fetch(RESULT_URL + '?jobId=' + encodeURIComponent(jobId));
+    } catch(netErr) {
+      // Transient network error — retry on next poll tick
+      continue;
+    }
+
+    if (pollResp.status === 404) throw new Error('Job not found (jobId=' + jobId + ')');
+    if (pollResp.status === 410) throw new Error('Job expired');
+    if (!pollResp.ok) continue;  // transient server error, retry
+
+    let pollData;
+    try {
+      pollData = await pollResp.json();
+    } catch(parseErr) {
+      continue;  // malformed response, retry
+    }
+
+    if (pollData.status === 'complete') {
+      return pollData.result;  // same shape the old /extract endpoint returned
+    }
+    if (pollData.status === 'failed') {
+      throw new Error(pollData.error || 'Extraction failed');
+    }
+    // status === 'pending' → keep polling
+  }
+  throw new Error('Extraction timed out after 2 minutes');
 }
 
 async function runExtraction(type) {
@@ -394,16 +465,18 @@ async function runExtraction(type) {
       if(FILES[type][i]) { const data=await toBase64(FILES[type][i]); documents.push({label:docLabels[i],data}); }
     }
     const payload = {documents, prompt_override: type==='rla' ? RLA_PROMPT : null};
-    showStatus(type,'Sending to Claude for analysis — this takes about 60 seconds...','info'); setProgress(type,40);
+    showStatus(type,'Submitting extraction job...','info'); setProgress(type,25);
     let result;
     try {
-      result = await callExtractAPI(payload);
+      result = await callExtractAPI(payload, type);
     } catch(err) {
+      // Retry once for transient submit failures. The polling loop has its own
+      // built-in resilience, so this only catches outright submit errors.
       showStatus(type,'First attempt failed, retrying in 5 seconds... ('+err.message+')','info');
       await new Promise(r => setTimeout(r, 5000));
-      result = await callExtractAPI(payload);
+      result = await callExtractAPI(payload, type);
     }
-    setProgress(type,80);
+    setProgress(type,90);
     const text=result.content.map(b=>b.text||'').join('');
     // Extract JSON from response which may contain reasoning text before it
     const cleanText = text.replace(/```json|```/g,'').trim();
