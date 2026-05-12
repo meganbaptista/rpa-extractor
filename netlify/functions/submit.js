@@ -16,7 +16,7 @@
 // The legacy /extract endpoint is left in place for backward compatibility
 // (Zapier integrations etc.). New callers should use this submit+poll flow.
 
-const { getStore } = require('@netlify/blobs');
+const { connectLambda, getStore } = require('@netlify/blobs');
 const crypto = require('crypto');
 
 const headers = {
@@ -37,6 +37,11 @@ exports.handler = async function(event) {
   }
 
   try {
+    // Blobs requires explicit Lambda context wiring in Lambda-compat mode.
+    // Must be called before any getStore() — the non-Lambda function format
+    // auto-injects this but exports.handler-style functions don't.
+    connectLambda(event);
+
     const body = event.body ? JSON.parse(event.body) : {};
     if (!body.documents || !Array.isArray(body.documents) || body.documents.length === 0) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'No documents provided' }) };
