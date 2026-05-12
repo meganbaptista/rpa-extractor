@@ -36,6 +36,26 @@ function getJobStore() {
   });
 }
 
+// Separate store for the PDF payload. Kept distinct from the job-status store
+// so that the polling endpoint (result.js) never accidentally returns the
+// PDF base64 to the frontend, and so we can delete the payload after
+// extraction completes without touching the status record.
+//
+// Why a separate store at all? Background functions have a 256 KB request
+// payload limit. We can't send the PDF in the fetch body to extract-background
+// (PDFs are routinely 5-8 MB after compression). Stashing the payload in
+// Blobs and passing only the jobId works around the limit.
+function getPayloadStore() {
+  if (!process.env.NETLIFY_BLOBS_TOKEN) {
+    throw new Error('NETLIFY_BLOBS_TOKEN env var is not set — generate a Netlify Personal Access Token and add it as a site environment variable.');
+  }
+  return getStore({
+    name: 'extraction-payloads',
+    siteID: process.env.SITE_ID,
+    token: process.env.NETLIFY_BLOBS_TOKEN
+  });
+}
+
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type',
@@ -63,11 +83,18 @@ exports.handler = async function(event) {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + JOB_TTL_HOURS * 60 * 60 * 1000);
 
-    // Persist pending record FIRST, before invoking the background function.
-    // Order matters: if the background function starts and finishes before we
-    // write the pending record, our setJSON here would clobber the completed
-    // record. By writing pending first, the background function's eventual
-    // write of 'complete' or 'failed' wins as expected.
+    // Stash the PDF payload in its own blob store. This is what makes the
+    // 256 KB background-function invocation limit a non-issue — the actual
+    // PDF bytes never travel through the fetch to extract-background.
+    const payloadStore = getPayloadStore();
+    await payloadStore.setJSON(jobId, {
+      documents: body.documents,
+      prompt_override: body.prompt_override || null
+    });
+
+    // Persist pending status record. Order matters: payload first, then
+    // pending record, then invoke background. That way the background
+    // function is guaranteed to find both blobs when it runs.
     const store = getJobStore();
     await store.setJSON(jobId, {
       status: 'pending',
@@ -87,7 +114,7 @@ exports.handler = async function(event) {
       const invocation = await fetch(backgroundUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: jobId, documents: body.documents, prompt_override: body.prompt_override })
+        body: JSON.stringify({ jobId: jobId })  // Only the jobId — payload is in Blobs
       });
       if (invocation.status !== 202 && !invocation.ok) {
         console.warn('background invocation returned status ' + invocation.status);
