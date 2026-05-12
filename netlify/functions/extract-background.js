@@ -15,8 +15,19 @@
 // Side effect: writes a status record to the 'extraction-jobs' blob store
 // keyed by jobId. The frontend polls /result?jobId=... to read it.
 
-const { connectLambda, getStore } = require('@netlify/blobs');
+const { getStore } = require('@netlify/blobs');
 const extractModule = require('./extract.js');
+
+function getJobStore() {
+  if (!process.env.NETLIFY_BLOBS_TOKEN) {
+    throw new Error('NETLIFY_BLOBS_TOKEN env var is not set — generate a Netlify Personal Access Token and add it as a site environment variable.');
+  }
+  return getStore({
+    name: 'extraction-jobs',
+    siteID: process.env.SITE_ID,
+    token: process.env.NETLIFY_BLOBS_TOKEN
+  });
+}
 
 exports.handler = async function(event) {
   let jobId = null;
@@ -24,9 +35,6 @@ exports.handler = async function(event) {
   let store;
 
   try {
-    // Blobs requires explicit Lambda context wiring in Lambda-compat mode.
-    connectLambda(event);
-
     const body = event.body ? JSON.parse(event.body) : {};
     jobId = body.jobId;
 
@@ -35,7 +43,7 @@ exports.handler = async function(event) {
       return { statusCode: 400 };
     }
 
-    store = getStore('extraction-jobs');
+    store = getJobStore();
 
     // Read the existing pending record so we preserve submitted_at and
     // expires_at when we overwrite with the completed/failed state.
