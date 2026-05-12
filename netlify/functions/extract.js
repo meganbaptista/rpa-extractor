@@ -217,6 +217,28 @@ async function buildTrimmedPdf(documents, located) {
   return Buffer.from(newBytes).toString('base64');
 }
 
+// ── HELPER: render all pages of a PDF as base64 PNG images ─────────────────
+// Used as a final fallback when text-layer detection AND vision page detection
+// both fail. By rendering server-side we get clear images that the model can
+// read directly, sidestepping whatever Anthropic's internal PDF rendering does
+// that causes vision page detection to fail on print/rescan packages. At
+// scale 0.5 each page is ~120KB and tokenizes to ~160 tokens (~12x cheaper
+// than the equivalent PDF page in vision mode).
+async function renderAllPagesAsImages(buffer) {
+  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  try {
+    const result = await parser.getScreenshot({ scale: 0.5 });
+    return result.pages
+      .filter((p) => p.data)
+      .map((p) => ({
+        pageNumber: p.pageNumber,
+        base64: Buffer.from(p.data).toString('base64')
+      }));
+  } finally {
+    await parser.destroy();
+  }
+}
+
 exports.handler = async function(event, context) {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -369,12 +391,14 @@ exports.handler = async function(event, context) {
       home_warranty_company: { type: "string", description: "Issuer/company name from paragraph 3Q(18) 'Issued by:' field. Empty if not specified." },
 
       // ─── BUYER ────────────────────────────────────────────────────────────
-      buyer_names: { type: "string", description: "Buyer name(s). The ONLY valid source is the 'THIS IS AN OFFER FROM ___' line on page 1 of the RPA (paragraph 1A). Do NOT use property profile (that's the seller), MLS, or anywhere else. PRESERVE the exact separator used in the source document — if buyers are listed with commas (e.g. 'John Smith, Jane Smith'), return them with commas. Do not change commas to ' and ' or vice versa. Mirror the source formatting exactly." },
+      buyer_names: { type: "string", description: "CRITICAL ANTI-SWAP RULE: The buyer is the party listed on the 'THIS IS AN OFFER FROM ___' line on RPA paragraph 1A (page 1) — the party making the offer to purchase. The buyer is NEVER the current property owner from the Property Profile. If the name you are about to return matches the Property Profile's 'Owner Name' or 'Owner Name 2' field, STOP — that name is the seller. Re-read RPA paragraph 1A and return the OFFER FROM party instead.\n\nSOURCE: The ONLY valid source is the 'THIS IS AN OFFER FROM ___' line on page 1 of the RPA (paragraph 1A). Do NOT use property profile (that's the seller), MLS, or anywhere else. PRESERVE the exact separator used in the source document — if buyers are listed with commas (e.g. 'John Smith, Jane Smith'), return them with commas. Do not change commas to ' and ' or vice versa. Mirror the source formatting exactly." },
 
       // ─── SELLER ───────────────────────────────────────────────────────────
       seller_names: {
         type: "string",
-        description: `Seller name(s) in natural First-Last order, NEVER blank. PRIORITY 1: when a Property Profile Report is provided, the 'Owner Name' and 'Owner Name 2' fields are the authoritative source — but they are in courthouse 'Last First' order and MUST be rebuilt to natural 'First Last' order. DO NOT use the 'Mail Owner Name' field even though it appears to be in the right order — it sometimes silently omits co-owners with different last names. Always rebuild from Owner Name and Owner Name 2.
+        description: `CRITICAL ANTI-SWAP RULE: The seller is the current property owner shown in the Property Profile's 'Owner Name' and 'Owner Name 2' fields. The seller is NEVER the party in 'THIS IS AN OFFER FROM ___' on RPA paragraph 1A — that's the buyer. If the name you are about to return matches the OFFER FROM line on the RPA, STOP — that's the buyer. Use the Property Profile owner instead.
+
+Seller name(s) in natural First-Last order, NEVER blank. PRIORITY 1: when a Property Profile Report is provided, the 'Owner Name' and 'Owner Name 2' fields are the authoritative source — but they are in courthouse 'Last First' order and MUST be rebuilt to natural 'First Last' order. DO NOT use the 'Mail Owner Name' field even though it appears to be in the right order — it sometimes silently omits co-owners with different last names. Always rebuild from Owner Name and Owner Name 2.
 
 REBUILD RULES:
 • Single name: 'Walters Shauna' → 'Shauna Walters'. The first word is the surname; everything after is the given name(s).
@@ -570,6 +594,17 @@ The RPA is always present in the package. If you have already located these two 
 
     const buildTargetedContent = (docs) => [...docs, { type: 'text', text: TARGETED_PROMPT }];
 
+    // Build content for image-fallback path: each rendered page becomes its
+    // own image block, followed by the targeted prompt.
+    const buildImageFallbackContent = (renderedPages) => {
+      const blocks = renderedPages.map((p) => ({
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: p.base64 }
+      }));
+      blocks.push({ type: 'text', text: TARGETED_PROMPT });
+      return blocks;
+    };
+
     // ─── PARALLEL EXECUTION ──────────────────────────────────────────────────
     // Fire the main call AND page detection at the same time (T=0). As soon as
     // detection finishes (~1s on the text path), fire the targeted call too —
@@ -577,11 +612,15 @@ The RPA is always present in the package. If you have already located these two 
     // executes during the main call's ~28s instead of after it, eliminating
     // ~6s of sequential wait time on every contract.
     //
-    // Speculative tradeoff: in the rare case where the main call succeeds
-    // without missing any TARGETED_FIELD_NAMES, we've still paid for the
-    // targeted call. For Megan's PDFs that case is essentially never — the
-    // targeted call fires every time anyway. Cost is unchanged in practice;
-    // latency drops by ~6 seconds.
+    // Detection paths in order of preference (fastest/cheapest first):
+    //   1. text_trim — PDF text layer contains markers, build 2-page trim
+    //   2. vision_trim_haiku — Haiku reads PDF and finds page numbers, trim
+    //   3. image_fallback_sonnet — render all pages server-side, send to Sonnet
+    //   4. failed_all_paths — every method exhausted, targeted fields blank
+    //
+    // The _extraction_status field is added to the final response so Megan can
+    // monitor in Process Street/Airtable which path each contract took.
+    let extractionStatus = 'not_attempted';
     const mainCallPromise = callApi(mainContent, extractionTool);
     const detectionPromise = locateRpaPagesWithFallback(documents, process.env.ANTHROPIC_API_KEY);
 
@@ -597,16 +636,18 @@ The RPA is always present in the package. If you have already located these two 
           title: 'RPA page 1 and brokers section (trimmed)'
         }];
         targetedCallPromise = callApi(buildTargetedContent(targetedDocs), targetedTool);
+        // text vs vision shows up in detection.method ("text" or "vision")
+        extractionStatus = detection.method === 'text' ? 'text_trim' : 'vision_trim_haiku';
         console.log(
           'targeted call: started in parallel with main, trimmed to 2 pages via ' + detection.method + ' ' +
           '(date_prepared=doc' + located.dpDoc + '/page' + (located.dpPage + 1) +
           ', brokers_section=doc' + located.brokersDoc + '/page' + (located.brokersPage + 1) + ')'
         );
       } else {
-        console.warn('targeted call: page detection failed (' + detection.method + '), will decide after main call returns');
+        console.warn('targeted call: page detection failed (' + detection.method + '), will try image fallback after main call returns');
       }
     } catch (trimErr) {
-      console.warn('targeted call: detection/trim errored (' + trimErr.message + '), will decide after main call returns');
+      console.warn('targeted call: detection/trim errored (' + trimErr.message + '), will try image fallback after main call returns');
     }
 
     // Wait for main call. If we already started the targeted call above, it's
@@ -615,18 +656,34 @@ The RPA is always present in the package. If you have already located these two 
     const mainTool = findToolUse(mainData);
     let mergedFields = mainTool && mainTool.input ? { ...mainTool.input } : {};
 
-    // FALLBACK PATH: detection failed → we didn't fire the targeted call
-    // speculatively. If the main call missed our target fields, fire the
-    // targeted call sequentially on the FULL package now. Matches old
-    // behavior for the detection-fails case so we don't regress edge cases.
+    // FALLBACK PATH: page detection failed → no targeted call started.
+    // If the main call missed our target fields, render the full package as
+    // images server-side and send those to Sonnet with the targeted prompt.
+    // This sidesteps Anthropic's internal PDF rendering (which has been
+    // failing on print/rescan packages) by controlling rendering ourselves.
+    // Rendered images at scale 0.5 are clearly readable AND tokenize cheaply
+    // (~160 tokens per page vs ~2000 for a PDF page).
     if (!targetedCallPromise) {
       const mainCallMissedFields = TARGETED_FIELD_NAMES.some(fieldName => {
         const value = mergedFields[fieldName];
         return !value || value.trim() === '';
       });
       if (mainCallMissedFields) {
-        console.log('targeted call: firing sequentially on full package (detection failed, main missed fields)');
-        targetedCallPromise = callApi(buildTargetedContent(content), targetedTool);
+        try {
+          console.log('image fallback: rendering all pages of first document for image-based targeted call');
+          const renderStart = Date.now();
+          const firstDocBuffer = Buffer.from(documents[0].data, 'base64');
+          const renderedPages = await renderAllPagesAsImages(firstDocBuffer);
+          console.log(
+            'image fallback: rendered ' + renderedPages.length + ' pages in ' +
+            (Date.now() - renderStart) + 'ms, firing targeted call on images'
+          );
+          targetedCallPromise = callApi(buildImageFallbackContent(renderedPages), targetedTool);
+          extractionStatus = 'image_fallback_sonnet';
+        } catch (renderErr) {
+          console.error('image fallback: render failed (' + renderErr.message + '), targeted fields will be blank');
+          extractionStatus = 'failed_all_paths';
+        }
       }
     }
 
@@ -649,9 +706,14 @@ The RPA is always present in the package. If you have already located these two 
             }
           }
           console.log(
-            'targeted call results: filled [' + filled.join(', ') + '], ' +
+            'targeted call results (' + extractionStatus + '): filled [' + filled.join(', ') + '], ' +
             'still empty [' + empty.join(', ') + ']'
           );
+          // If targeted call ran but returned 0 filled fields, mark as failed
+          // so the status field accurately reflects the outcome.
+          if (filled.length === 0) {
+            extractionStatus = 'failed_all_paths';
+          }
         }
       } catch (targetedErr) {
         // If the targeted call fails for any reason, we still have the main
@@ -661,6 +723,19 @@ The RPA is always present in the package. If you have already located these two 
     }
 
     if (Object.keys(mergedFields).length > 0) {
+      // If the main call alone filled all target fields and we never needed
+      // the targeted call, extractionStatus is still 'not_attempted'. Promote
+      // it to 'main_call_only' so the downstream signal is meaningful.
+      if (extractionStatus === 'not_attempted' && !targetedCallPromise) {
+        const mainHandledTargets = TARGETED_FIELD_NAMES.every(fieldName => {
+          const value = mergedFields[fieldName];
+          return value && value.trim() !== '';
+        });
+        if (mainHandledTargets) extractionStatus = 'main_call_only';
+      }
+      mergedFields._extraction_status = extractionStatus;
+      console.log('final extraction status: ' + extractionStatus);
+
       // Reshape to match the caller's existing parsing: data.content[0].text
       // is the JSON string of all fields, exactly as before.
       const reshaped = {
