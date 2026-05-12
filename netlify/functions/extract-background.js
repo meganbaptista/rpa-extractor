@@ -1,4 +1,7 @@
 // ── EXTRACT-BACKGROUND.JS ───────────────────────────────────────────────────
+// Diagnostic checkpoints (remove once we confirm module loads cleanly):
+console.log('[extract-background] module loading (line 1)');
+
 // Self-contained Netlify background function for long-running RPA/RLA
 // extraction. The filename suffix `-background.js` triggers Netlify's
 // background-function mode (15-minute timeout, no synchronous HTTP response
@@ -25,8 +28,11 @@
 // pdf-lib: copies selected pages into a fresh PDF for the targeted call.
 // @netlify/blobs: persistence layer for job status, read by result.js
 const { PDFDocument } = require('pdf-lib');
+console.log('[extract-background] pdf-lib loaded');
 const { PDFParse } = require('pdf-parse');
+console.log('[extract-background] pdf-parse loaded');
 const { getStore } = require('@netlify/blobs');
+console.log('[extract-background] @netlify/blobs loaded');
 
 // ── BLOB STORE ACCESS (explicit credentials) ────────────────────────────────
 // Auto-config (via connectLambda or implicit context) doesn't work reliably
@@ -42,6 +48,7 @@ function getJobStore() {
     token: process.env.NETLIFY_BLOBS_TOKEN
   });
 }
+console.log('[extract-background] module fully loaded, handler ready');
 
 // ── PAGE-DETECTION MARKERS ──────────────────────────────────────────────────
 // These two literal strings have been stable in CAR purchase agreement forms
@@ -368,6 +375,8 @@ async function renderAllPagesAsImages(buffer, maxPages) {
 }
 
 exports.handler = async function(event, context) {
+  console.log('[extract-background] handler invoked');
+
   // Background functions don't return useful HTTP responses to the caller —
   // submit.js's fetch gets 202 from Netlify's runtime, then we run async.
   // We respond { statusCode: 200 } at the end purely for log readability.
