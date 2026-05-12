@@ -228,7 +228,58 @@ async function buildTrimmedPdf(documents, located) {
   return Buffer.from(newBytes).toString('base64');
 }
 
-// ── HELPER: render pages of a PDF as base64 PNG images ─────────────────────
+// ── HELPER: build a trimmed RPA document for the MAIN call ─────────────────
+// Different goal than buildTrimmedPdf (which is for the targeted call's 2-page
+// extraction). The main call needs: page 1 of RPA (paragraph 1, paragraph 3
+// terms table), pages 2-4 (allocations, addenda, financing), pages 15-17
+// (paragraph 33 acceptance, brokers section), plus everything before and
+// after the RPA inside the same document (counter offers, addenda). Skips
+// RPA pages 5-14 — pure legal boilerplate the model doesn't extract from.
+//
+// Returns null if trimming is unsafe (RPA split across documents, RPA too
+// short to benefit, pdf-lib error). Caller falls back to the original
+// document data when null.
+async function buildTrimmedMainPdf(documents, located) {
+  // Safety: only trim when the RPA lives in a single document. If RPA p1 and
+  // last page are in different uploaded files, skip the main trim — too many
+  // edge cases to reason about (which doc gets the "before" pages, etc.)
+  if (located.dpDoc !== located.brokersDoc) {
+    return null;
+  }
+
+  const docIdx = located.dpDoc;
+  const rpaStartIdx = located.dpPage;
+  const rpaEndIdx = located.brokersPage;
+  const rpaLength = rpaEndIdx - rpaStartIdx + 1;
+
+  // Safety: if RPA is shorter than 8 pages, first-4 and last-3 overlap or
+  // touch — no boilerplate to remove. Skip the trim.
+  if (rpaLength < 8) {
+    return null;
+  }
+
+  const srcBuffer = Buffer.from(documents[docIdx].data, 'base64');
+  const srcPdf = await PDFDocument.load(srcBuffer);
+  const totalPages = srcPdf.getPageCount();
+
+  // Build the list of page indices to keep, in document order.
+  const indicesToKeep = [];
+  // (a) Everything BEFORE the RPA in this document (counter offers, etc).
+  for (let i = 0; i < rpaStartIdx; i++) indicesToKeep.push(i);
+  // (b) RPA pages 1-4 (offer terms, agency, paragraph 3 contract table).
+  for (let i = rpaStartIdx; i <= rpaStartIdx + 3; i++) indicesToKeep.push(i);
+  // (c) RPA pages 15-17 (paragraph 33 acceptance, brokers section, signatures).
+  for (let i = rpaEndIdx - 2; i <= rpaEndIdx; i++) indicesToKeep.push(i);
+  // (d) Everything AFTER the RPA in this document (addenda, advisories).
+  for (let i = rpaEndIdx + 1; i < totalPages; i++) indicesToKeep.push(i);
+
+  const newPdf = await PDFDocument.create();
+  const copiedPages = await newPdf.copyPages(srcPdf, indicesToKeep);
+  copiedPages.forEach((p) => newPdf.addPage(p));
+
+  const newBytes = await newPdf.save();
+  return Buffer.from(newBytes).toString('base64');
+}
 // Used as a final fallback when text-layer detection AND vision page detection
 // both fail. By rendering server-side we get clear images that the model can
 // read directly, sidestepping whatever Anthropic's internal PDF rendering does
@@ -643,35 +694,88 @@ The RPA is always present in the package. If you have already located these two 
       return blocks;
     };
 
-    // ─── PARALLEL EXECUTION ──────────────────────────────────────────────────
-    // Fire the main call AND page detection at the same time (T=0). As soon as
-    // detection finishes (~1s on the text path), fire the targeted call too —
-    // also in parallel with the still-running main call. The targeted call now
-    // executes during the main call's ~28s instead of after it, eliminating
-    // ~6s of sequential wait time on every contract.
+    // ─── ORCHESTRATION ───────────────────────────────────────────────────────
+    // Detection runs FIRST (was parallel with main). For text-path success
+    // this is <1s, which we trade for the ability to trim the main call's
+    // input down — dropping ~10 pages of RPA boilerplate (RPA pages 5-14)
+    // that the main call doesn't extract from.
     //
-    // Detection paths in order of preference (fastest/cheapest first):
+    // Once detection completes, both trims build in parallel, then both API
+    // calls fire in parallel. Main call now runs on a trimmed package
+    // (typically ~26 pages instead of ~36), reducing main call duration by
+    // roughly 20-30% — enough to land consistently under the proxy timeout.
+    //
+    // Detection paths in order of preference:
     //   1. text_trim — PDF text layer contains markers, build 2-page trim
     //   2. vision_trim_haiku — Haiku reads PDF and finds page numbers, trim
-    //   3. image_fallback_sonnet — render all pages server-side, send to Sonnet
+    //   3. image_fallback_sonnet — render pages server-side, send to Sonnet
     //   4. failed_all_paths — every method exhausted, targeted fields blank
     //
-    // The _extraction_status field is added to the final response so Megan can
-    // monitor in Process Street/Airtable which path each contract took.
+    // The _extraction_status field is added to the final response so Megan
+    // can monitor in Process Street/Airtable which path each contract took.
     let extractionStatus = 'not_attempted';
-    const mainCallPromise = callApi(mainContent, extractionTool);
-    const detectionPromise = locateRpaPagesWithFallback(documents, process.env.ANTHROPIC_API_KEY);
 
-    let targetedCallPromise = null;
+    let detection = null;
     try {
-      const detection = await detectionPromise;
-      const located = detection.located;
-      if (located.dpDoc !== -1 && located.brokersDoc !== -1) {
-        // ── PATH A: trim-based targeted call ───────────────────────────────
-        const trimmedBase64 = await buildTrimmedPdf(documents, located);
+      detection = await locateRpaPagesWithFallback(documents, process.env.ANTHROPIC_API_KEY);
+    } catch (detectErr) {
+      console.warn('detection errored (' + detectErr.message + '), falling through to image fallback');
+    }
+    const located = detection ? detection.located : null;
+    const haveDetection = located && located.dpDoc !== -1 && located.brokersDoc !== -1;
+
+    let mainCallPromise;
+    let targetedCallPromise = null;
+
+    if (haveDetection) {
+      // ── HAPPY PATH: build both trims in parallel, then fire both calls ────
+      // Targeted trim is required (the 2-page trim is the whole point of the
+      // targeted call). Main trim is optional — if it fails for any reason
+      // we fall back to the full original content for the main call.
+      let trimmedTargetedB64 = null;
+      let trimmedMainB64 = null;
+      try {
+        [trimmedMainB64, trimmedTargetedB64] = await Promise.all([
+          buildTrimmedMainPdf(documents, located).catch((err) => {
+            console.warn('main trim failed (' + err.message + '), main call will use full content');
+            return null;
+          }),
+          buildTrimmedPdf(documents, located)
+        ]);
+      } catch (trimErr) {
+        console.warn('targeted trim failed (' + trimErr.message + '), no targeted call this run');
+      }
+
+      // Build main content — swap in the trimmed RPA document if we got one.
+      let mainContentToSend = mainContent;
+      if (trimmedMainB64) {
+        const newContent = content.map((block, idx) => {
+          if (idx === located.dpDoc) {
+            return {
+              ...block,
+              source: { ...block.source, data: trimmedMainB64 },
+              title: (block.title || 'document') + ' (RPA boilerplate trimmed)'
+            };
+          }
+          return block;
+        });
+        mainContentToSend = [...newContent, { type: 'text', text: mainContent[mainContent.length - 1].text }];
+        console.log(
+          'main call: trimmed RPA document at doc' + located.dpDoc +
+          ' (kept everything before RPA + RPA pages 1-4 + RPA pages 15-17 + everything after)'
+        );
+      } else {
+        console.log('main call: using full content (trim unavailable or unsafe)');
+      }
+
+      // Fire main call.
+      mainCallPromise = callApi(mainContentToSend, extractionTool);
+
+      // Fire targeted call on the 2-page trim, in parallel with main.
+      if (trimmedTargetedB64) {
         const targetedDocs = [{
           type: 'document',
-          source: { type: 'base64', media_type: 'application/pdf', data: trimmedBase64 },
+          source: { type: 'base64', media_type: 'application/pdf', data: trimmedTargetedB64 },
           title: 'RPA page 1 and brokers section (trimmed)'
         }];
         targetedCallPromise = callApi(buildTargetedContent(targetedDocs), targetedTool);
@@ -681,37 +785,27 @@ The RPA is always present in the package. If you have already located these two 
           '(date_prepared=doc' + located.dpDoc + '/page' + (located.dpPage + 1) +
           ', brokers_section=doc' + located.brokersDoc + '/page' + (located.brokersPage + 1) + ')'
         );
-      } else {
-        // ── PATH B: image fallback — also in parallel with main ────────────
-        // Wrapped in an async IIFE so the render + API call combo is a single
-        // Promise we can await alongside the main call. Rendering happens
-        // server-side (CPU work) while the main call's network request is
-        // in flight; the API call then fires before the main call returns.
-        console.warn(
-          'targeted call: page detection failed (' + detection.method + '), ' +
-          'starting image fallback in parallel with main call'
-        );
-        targetedCallPromise = (async () => {
-          const renderStart = Date.now();
-          const firstDocBuffer = Buffer.from(documents[0].data, 'base64');
-          const renderedPages = await renderAllPagesAsImages(firstDocBuffer, MAX_FALLBACK_PAGES);
-          console.log(
-            'image fallback: rendered ' + renderedPages.length + ' pages in ' +
-            (Date.now() - renderStart) + 'ms, firing targeted call on images'
-          );
-          return callApi(buildImageFallbackContent(renderedPages), targetedTool);
-        })();
-        extractionStatus = 'image_fallback_sonnet';
       }
-    } catch (trimErr) {
-      // Unexpected error during detection or trim build. Don't fire image
-      // fallback here — the error is structural and we want logs to surface
-      // it rather than silently triggering more work.
-      console.warn('targeted call: detection/trim errored (' + trimErr.message + '), no targeted call this run');
+    } else {
+      // ── FALLBACK: detection failed entirely. Main call gets full content;
+      //    targeted call uses image fallback (render server-side, send images).
+      console.warn('detection failed, main call on full content, starting image fallback for targeted in parallel');
+      mainCallPromise = callApi(mainContent, extractionTool);
+      targetedCallPromise = (async () => {
+        const renderStart = Date.now();
+        const firstDocBuffer = Buffer.from(documents[0].data, 'base64');
+        const renderedPages = await renderAllPagesAsImages(firstDocBuffer, MAX_FALLBACK_PAGES);
+        console.log(
+          'image fallback: rendered ' + renderedPages.length + ' pages in ' +
+          (Date.now() - renderStart) + 'ms, firing targeted call on images'
+        );
+        return callApi(buildImageFallbackContent(renderedPages), targetedTool);
+      })();
+      extractionStatus = 'image_fallback_sonnet';
     }
 
-    // Wait for main call. Both possible targeted-call paths (trim and image
-    // fallback) are already running in parallel and will be awaited next.
+    // Wait for main call. The targeted call is running in parallel and will
+    // be awaited next.
     const mainData = await mainCallPromise;
     const mainTool = findToolUse(mainData);
     let mergedFields = mainTool && mainTool.input ? { ...mainTool.input } : {};
