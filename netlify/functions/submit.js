@@ -16,8 +16,25 @@
 // The legacy /extract endpoint is left in place for backward compatibility
 // (Zapier integrations etc.). New callers should use this submit+poll flow.
 
-const { connectLambda, getStore } = require('@netlify/blobs');
+const { getStore } = require('@netlify/blobs');
 const crypto = require('crypto');
+
+// Get the extraction-jobs blob store using explicit credentials. The
+// auto-config / connectLambda path doesn't work reliably across all function
+// invocation modes (specifically, background functions invoked via fetch()
+// from another function don't get the auto-injected context), so we use a
+// PAT instead. The token is set as NETLIFY_BLOBS_TOKEN; the siteID is
+// auto-set by Netlify as the SITE_ID env var on all production functions.
+function getJobStore() {
+  if (!process.env.NETLIFY_BLOBS_TOKEN) {
+    throw new Error('NETLIFY_BLOBS_TOKEN env var is not set — generate a Netlify Personal Access Token and add it as a site environment variable.');
+  }
+  return getStore({
+    name: 'extraction-jobs',
+    siteID: process.env.SITE_ID,
+    token: process.env.NETLIFY_BLOBS_TOKEN
+  });
+}
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -37,11 +54,6 @@ exports.handler = async function(event) {
   }
 
   try {
-    // Blobs requires explicit Lambda context wiring in Lambda-compat mode.
-    // Must be called before any getStore() — the non-Lambda function format
-    // auto-injects this but exports.handler-style functions don't.
-    connectLambda(event);
-
     const body = event.body ? JSON.parse(event.body) : {};
     if (!body.documents || !Array.isArray(body.documents) || body.documents.length === 0) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'No documents provided' }) };
@@ -56,7 +68,7 @@ exports.handler = async function(event) {
     // write the pending record, our setJSON here would clobber the completed
     // record. By writing pending first, the background function's eventual
     // write of 'complete' or 'failed' wins as expected.
-    const store = getStore('extraction-jobs');
+    const store = getJobStore();
     await store.setJSON(jobId, {
       status: 'pending',
       submitted_at: now.toISOString(),
@@ -84,7 +96,8 @@ exports.handler = async function(event) {
       // If invocation fails outright, mark the job failed so the frontend
       // doesn't poll forever.
       console.error('failed to invoke background function: ' + invokeErr.message);
-      await store.setJSON(jobId, {
+      const failStore = getJobStore();
+      await failStore.setJSON(jobId, {
         status: 'failed',
         error: 'Failed to start extraction: ' + invokeErr.message,
         submitted_at: now.toISOString(),
