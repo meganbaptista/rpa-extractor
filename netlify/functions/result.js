@@ -14,7 +14,18 @@
 //   404 — jobId unknown
 //   410 — job expired (older than 24h)
 
-const { connectLambda, getStore } = require('@netlify/blobs');
+const { getStore } = require('@netlify/blobs');
+
+function getJobStore() {
+  if (!process.env.NETLIFY_BLOBS_TOKEN) {
+    throw new Error('NETLIFY_BLOBS_TOKEN env var is not set — generate a Netlify Personal Access Token and add it as a site environment variable.');
+  }
+  return getStore({
+    name: 'extraction-jobs',
+    siteID: process.env.SITE_ID,
+    token: process.env.NETLIFY_BLOBS_TOKEN
+  });
+}
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -39,10 +50,7 @@ exports.handler = async function(event) {
   }
 
   try {
-    // Blobs requires explicit Lambda context wiring in Lambda-compat mode.
-    connectLambda(event);
-
-    const store = getStore('extraction-jobs');
+    const store = getJobStore();
     const data = await store.get(jobId, { type: 'json' });
 
     if (!data) {
