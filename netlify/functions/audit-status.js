@@ -33,7 +33,11 @@ exports.handler = async function (event) {
   }
 
   try {
-    const store = getStore('audit-results');
+    const store = getStore({
+  name: 'audit-results',
+  siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
+  token: process.env.NETLIFY_BLOBS_TOKEN,
+});
     const data = await store.get(jobId, { type: 'json' });
 
     if (!data) {
