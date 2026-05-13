@@ -39,7 +39,11 @@ exports.handler = async function (event) {
     const jobId = randomUUID();
 
     // Store the payload in the audit-payloads blob store
-    const payloadStore = getStore('audit-payloads');
+    const payloadStore = getStore({
+  name: 'audit-payloads',
+  siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
+  token: process.env.NETLIFY_BLOBS_TOKEN,
+});
     await payloadStore.setJSON(jobId, {
       pdfBase64,
       formId,
@@ -49,7 +53,11 @@ exports.handler = async function (event) {
     });
 
     // Pre-write a "pending" status to audit-results so polling immediately sees a record
-    const resultsStore = getStore('audit-results');
+    const resultsStore = getStore({
+  name: 'audit-results',
+  siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
+  token: process.env.NETLIFY_BLOBS_TOKEN,
+});
     await resultsStore.setJSON(jobId, {
       status: 'pending',
       queuedAt: Date.now(),
