@@ -1,10 +1,9 @@
 // netlify/functions/audit-background.js
 //
 // Background function — runs up to 15 minutes.
-// Receives ONLY {jobId} in the request body (stays well under the 256 KB
-// background-function request limit).
-// Reads the PDF payload from the audit-payloads blob store, runs the audit,
-// writes results to audit-results, and deletes the payload when done.
+// Receives ONLY {jobId} in the request body. Reads PDF payload from the
+// audit-payloads blob store, runs the audit, writes results to audit-results,
+// deletes the payload when done.
 
 const { PDFDocument } = require('pdf-lib');
 const pdfParse = require('pdf-parse');
@@ -17,6 +16,14 @@ const SCHEMAS = {
   'CAR-RPA-1225': require('./schemas/CAR-RPA-1225.json'),
   'AD-BUYER-1224': require('./schemas/AD-BUYER-1224.json'),
 };
+
+function blobsConfig(name) {
+  return {
+    name,
+    siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
+    token: process.env.NETLIFY_BLOBS_TOKEN,
+  };
+}
 
 // ===== Handler =====
 
@@ -35,18 +42,9 @@ exports.handler = async function (event) {
     return { statusCode: 400 };
   }
 
-  const payloadStore = getStore({
-  name: 'audit-payloads',
-  siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
-  token: process.env.NETLIFY_BLOBS_TOKEN,
-});
-  const resultsStore = getStore({
-  name: 'audit-results',
-  siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
-  token: process.env.NETLIFY_BLOBS_TOKEN,
-});
+  const payloadStore = getStore(blobsConfig('audit-payloads'));
+  const resultsStore = getStore(blobsConfig('audit-results'));
 
-  // Read the payload (PDF + audit params) from blobs
   let payload;
   try {
     payload = await payloadStore.get(jobId, { type: 'json' });
@@ -72,7 +70,6 @@ exports.handler = async function (event) {
 
   const { pdfBase64, formId, buyerCount = 1, sellerCount = 1 } = payload;
 
-  // Update status to indicate work has started
   await resultsStore.setJSON(jobId, {
     status: 'pending',
     startedAt: Date.now(),
@@ -87,50 +84,33 @@ exports.handler = async function (event) {
     const schema = SCHEMAS[formId];
     if (!schema) throw new Error(`Schema not found: ${formId}`);
 
-    // 1. Load PDF
     const pdfBytes = Buffer.from(pdfBase64, 'base64');
     const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
     const totalPages = pdfDoc.getPageCount();
     console.log(`[audit-background] jobId=${jobId} pdf loaded: ${totalPages} pages`);
 
-    // 2. Extract per-page text (with vision fallback for blank pages)
     const pageTexts = await extractAllPageTexts(pdfDoc);
+    const formPages = detectFormPages(schema, pageTexts);
 
-    // 3. Detect form pages
-    function detectFormPages(schema, pageTexts) {
-  const patterns = (schema.detection && schema.detection.footer_patterns) || [];
-  const normalizedPatterns = patterns.map(normalize);
-  const formPages = [];
-
-  pageTexts.forEach((text, i) => {
-    const norm = normalize(text);
-    if (normalizedPatterns.some((p) => norm.includes(p))) {
-      formPages.push(i + 1);
+    if (formPages.length === 0) {
+      await resultsStore.setJSON(jobId, {
+        status: 'error',
+        completedAt: Date.now(),
+        error: 'No pages matched this form\'s footer_patterns.',
+        totalPages,
+        formPages: [],
+      });
+      console.log(`[audit-background] jobId=${jobId} no form pages matched`);
+      await cleanupPayload(payloadStore, jobId);
+      return { statusCode: 200 };
     }
-  });
 
-  console.log(`[detectFormPages] strict match: ${formPages.length}/${pageTexts.length} pages`);
-
-  // Fallback: if user selected a form but detection found too few pages,
-  // trust the user's selection and treat all pages as form pages.
-  const MIN_PAGES_THRESHOLD = 3;
-  if (formPages.length < MIN_PAGES_THRESHOLD && pageTexts.length > MIN_PAGES_THRESHOLD) {
-    console.log(`[detectFormPages] FALLBACK: treating all ${pageTexts.length} pages as form pages (text extraction likely unreliable)`);
-    return pageTexts.map((_, i) => i + 1);
-  }
-
-  console.log(`[detectFormPages] matched pages: ${JSON.stringify(formPages)}`);
-  return formPages;
-}
-    // 4. Detect state + entity scenarios
     const detection = await detectStateAndScenarios(schema, pdfDoc, pageTexts, formPages);
     console.log(`[audit-background] jobId=${jobId} detection:`, detection);
 
-    // 5. Expand checks
     const checks = expandChecks(schema, pageTexts, formPages, detection, buyerCount, sellerCount);
     console.log(`[audit-background] jobId=${jobId} expanded to ${checks.length} checks`);
 
-    // 6. Run all checks in parallel
     const settled = await Promise.allSettled(checks.map((c) => runCheck(pdfDoc, c, detection)));
     const results = settled.map((r, i) => {
       if (r.status === 'fulfilled') return r.value;
@@ -160,6 +140,7 @@ exports.handler = async function (event) {
     return { statusCode: 200 };
   } catch (err) {
     console.error(`[audit-background] jobId=${jobId} ERROR:`, err.message);
+    console.error(err.stack);
     await resultsStore.setJSON(jobId, {
       status: 'error',
       completedAt: Date.now(),
@@ -177,6 +158,12 @@ async function cleanupPayload(payloadStore, jobId) {
   } catch (err) {
     console.error(`[audit-background] jobId=${jobId} failed to delete payload:`, err.message);
   }
+}
+
+// ===== Text utilities =====
+
+function normalize(text) {
+  return (text || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 // ===== Text extraction (with vision fallback) =====
@@ -221,20 +208,30 @@ async function extractPageText(pdfDoc, pageIndex) {
   return text;
 }
 
-function normalize(text) {
-  return (text || '').toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
 // ===== Form-page detection =====
 
 function detectFormPages(schema, pageTexts) {
   const patterns = (schema.detection && schema.detection.footer_patterns) || [];
+  const normalizedPatterns = patterns.map(normalize);
   const formPages = [];
+
   pageTexts.forEach((text, i) => {
-    if (patterns.some((p) => text.includes(p))) {
+    const norm = normalize(text);
+    if (normalizedPatterns.some((p) => norm.includes(p))) {
       formPages.push(i + 1);
     }
   });
+
+  console.log(`[detectFormPages] strict match: ${formPages.length}/${pageTexts.length} pages`);
+
+  const MIN_PAGES_THRESHOLD = 3;
+  if (formPages.length < MIN_PAGES_THRESHOLD && pageTexts.length > MIN_PAGES_THRESHOLD) {
+    console.log(`[detectFormPages] FALLBACK: treating all ${pageTexts.length} pages as form pages (text extraction likely unreliable)`);
+    const allPages = [];
+    for (let i = 0; i < pageTexts.length; i++) allPages.push(i + 1);
+    return allPages;
+  }
+
   console.log(`[detectFormPages] matched pages: ${JSON.stringify(formPages)}`);
   return formPages;
 }
@@ -268,6 +265,7 @@ function resolveAnchor(anchor, pageTexts, formPages) {
 
   return [];
 }
+
 // ===== State + entity scenario detection =====
 
 async function detectStateAndScenarios(schema, pdfDoc, pageTexts, formPages) {
