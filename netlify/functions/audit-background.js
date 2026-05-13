@@ -97,21 +97,31 @@ exports.handler = async function (event) {
     const pageTexts = await extractAllPageTexts(pdfDoc);
 
     // 3. Detect form pages
-    const formPages = detectFormPages(schema, pageTexts);
+    function detectFormPages(schema, pageTexts) {
+  const patterns = (schema.detection && schema.detection.footer_patterns) || [];
+  const normalizedPatterns = patterns.map(normalize);
+  const formPages = [];
 
-    if (formPages.length === 0) {
-      await resultsStore.setJSON(jobId, {
-        status: 'error',
-        completedAt: Date.now(),
-        error: 'No pages matched this form\'s footer_patterns.',
-        totalPages,
-        formPages: [],
-      });
-      console.log(`[audit-background] jobId=${jobId} no form pages matched`);
-      await cleanupPayload(payloadStore, jobId);
-      return { statusCode: 200 };
+  pageTexts.forEach((text, i) => {
+    const norm = normalize(text);
+    if (normalizedPatterns.some((p) => norm.includes(p))) {
+      formPages.push(i + 1);
     }
+  });
 
+  console.log(`[detectFormPages] strict match: ${formPages.length}/${pageTexts.length} pages`);
+
+  // Fallback: if user selected a form but detection found too few pages,
+  // trust the user's selection and treat all pages as form pages.
+  const MIN_PAGES_THRESHOLD = 3;
+  if (formPages.length < MIN_PAGES_THRESHOLD && pageTexts.length > MIN_PAGES_THRESHOLD) {
+    console.log(`[detectFormPages] FALLBACK: treating all ${pageTexts.length} pages as form pages (text extraction likely unreliable)`);
+    return pageTexts.map((_, i) => i + 1);
+  }
+
+  console.log(`[detectFormPages] matched pages: ${JSON.stringify(formPages)}`);
+  return formPages;
+}
     // 4. Detect state + entity scenarios
     const detection = await detectStateAndScenarios(schema, pdfDoc, pageTexts, formPages);
     console.log(`[audit-background] jobId=${jobId} detection:`, detection);
@@ -211,6 +221,10 @@ async function extractPageText(pdfDoc, pageIndex) {
   return text;
 }
 
+function normalize(text) {
+  return (text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 // ===== Form-page detection =====
 
 function detectFormPages(schema, pageTexts) {
@@ -240,10 +254,12 @@ function resolveAnchor(anchor, pageTexts, formPages) {
   }
 
   if (anchor.any_of && Array.isArray(anchor.any_of)) {
+    const normalizedPatterns = anchor.any_of.map(normalize);
     const matches = [];
     pageTexts.forEach((text, i) => {
       const page = i + 1;
-      if (formPages.includes(page) && anchor.any_of.some((pattern) => text.includes(pattern))) {
+      const norm = normalize(text);
+      if (formPages.includes(page) && normalizedPatterns.some((p) => norm.includes(p))) {
         matches.push(page);
       }
     });
@@ -252,7 +268,6 @@ function resolveAnchor(anchor, pageTexts, formPages) {
 
   return [];
 }
-
 // ===== State + entity scenario detection =====
 
 async function detectStateAndScenarios(schema, pdfDoc, pageTexts, formPages) {
