@@ -107,7 +107,15 @@ exports.handler = async function (event) {
 // ----- Schema loading -----
 
 function loadSchema(formId) {
-  const schemaPath = path.join(__dirname, 'schemas', `${formId}.json`);
+  const schemaPath = path.join(
+  process.cwd(),
+  'netlify',
+  'functions',
+  'schemas',
+  `${formId}.json`
+);
+
+console.log('Loading schema from:', schemaPath);
   if (!fs.existsSync(schemaPath)) return null;
   return JSON.parse(fs.readFileSync(schemaPath, 'utf-8'));
 }
