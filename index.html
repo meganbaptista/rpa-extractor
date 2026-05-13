@@ -6,6 +6,13 @@
 <title>Keeva — Document Extractor</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  // PDF.js requires a worker URL for off-main-thread parsing.
+  if (typeof pdfjsLib !== 'undefined') {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -44,6 +51,8 @@
   .upload-slot.ready { border-style: solid; border-color: var(--green); background: var(--green-light); }
   .upload-slot.dragover { border-color: var(--green); background: var(--green-light); transform: scale(1.01); }
   .upload-slot.compressing { border-color: var(--warning); background: var(--warning-light); border-style: solid; }
+  .upload-slot.image-only { border-color: var(--warning); background: var(--warning-light); border-style: solid; }
+  .upload-slot.checking { border-color: var(--border-strong); background: var(--bg); border-style: solid; }
   .slot-icon { font-size: 18px; width: 22px; text-align: center; flex-shrink: 0; }
   .slot-info { flex: 1; min-width: 0; }
   .slot-label { font-size: 13px; font-weight: 500; }
@@ -51,13 +60,28 @@
   .slot-size { font-size: 11px; margin-top: 3px; }
   .slot-size.ok { color: var(--green-text); }
   .slot-size.compressing { color: var(--warning); }
+  .slot-size.image-only { color: var(--warning); font-weight: 500; }
   .slot-size.warn { color: var(--danger); }
   .slot-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; flex-shrink: 0; font-weight: 500; }
   .badge-required { background: #fde8e8; color: #a32d2d; }
   .badge-optional { background: #efefec; color: var(--muted); }
   .badge-ready { background: var(--green-light); color: var(--green-text); }
   .badge-compressing { background: var(--warning-light); color: var(--warning); }
+  .badge-image-only { background: var(--warning-light); color: var(--warning); border: 1px solid #f0d98a; }
   .drag-hint { font-size: 11px; color: var(--hint); text-align: center; margin-top: 8px; }
+  .image-only-notice {
+    display: none;
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: var(--warning-light);
+    border: 1px solid #f0d98a;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--warning);
+    line-height: 1.5;
+  }
+  .image-only-notice.visible { display: block; }
+  .image-only-notice strong { font-weight: 600; }
   input[type="file"] { display: none; }
   .btn { display: block; width: 100%; padding: 12px; font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); transition: all 0.15s; text-align: center; }
   .btn:hover:not(:disabled) { background: var(--bg); }
@@ -143,6 +167,7 @@
         </label>
       </div>
       <p class="drag-hint">💡 Drag PDFs directly onto each slot, or click to browse. Large files are automatically compressed.</p>
+      <div class="image-only-notice" id="rpa-image-only-notice"><strong>⚠ Image-only PDF detected.</strong> One or more uploaded files have no searchable text layer. This happens when PDFs are run through online tools like iLovePDF or Smallpdf, or when documents are scanned/photographed. Extraction will still attempt to read the file via image recognition, but accuracy may be lower than usual. For best results, upload the <strong>original</strong> PDF (from DocuSign, your TMS, or the original email) and use PDF Expert if you need to combine or compress files.</div>
     </div>
     <div class="card">
       <div class="card-label">Step 2 — Extract</div>
@@ -207,6 +232,7 @@
         </label>
       </div>
       <p class="drag-hint">💡 Drag PDFs directly onto each slot, or click to browse. Large files are automatically compressed.</p>
+      <div class="image-only-notice" id="rla-image-only-notice"><strong>⚠ Image-only PDF detected.</strong> One or more uploaded files have no searchable text layer. This happens when PDFs are run through online tools like iLovePDF or Smallpdf, or when documents are scanned/photographed. Extraction will still attempt to read the file via image recognition, but accuracy may be lower than usual. For best results, upload the <strong>original</strong> PDF (from DocuSign, your TMS, or the original email) and use PDF Expert if you need to combine or compress files.</div>
     </div>
     <div class="card">
       <div class="card-label">Step 2 — Extract</div>
@@ -349,6 +375,126 @@ async function processFile(type, idx, file) {
     badge.className = 'slot-badge badge-ready';
   }
   document.getElementById(type+'-extract-btn').disabled = !FILES[type][0];
+
+  // ── Layer 1: text-layer detection ─────────────────────────────────────────
+  // Run AFTER the ready-state is set so the user gets immediate visual
+  // feedback from the upload, then a moment later the warning state if
+  // applicable. Non-blocking — extraction still works on image-only PDFs
+  // via vision fallback, just less reliably.
+  try {
+    const textCheck = await checkTextLayer(FILES[type][idx], idx);
+    if (textCheck.isImageOnly) {
+      slot.className = 'upload-slot image-only';
+      sz.textContent = origMB + 'MB · ⚠ Image-only PDF — no searchable text';
+      sz.className = 'slot-size image-only';
+      badge.textContent = 'Image-only';
+      badge.className = 'slot-badge badge-image-only';
+    }
+  } catch (e) {
+    // Check failed (corrupted PDF, PDF.js error, etc.) — don't block upload,
+    // just skip the warning. The user can still try to extract.
+    console.warn('text-layer check failed:', e && e.message);
+  }
+  updateImageOnlyNotice(type);
+}
+
+// Detect whether a PDF has a meaningful text layer that our backend will be
+// able to extract from. We sample the first ~5 pages with PDF.js's
+// text-content API.
+//
+// Two failure modes to catch:
+//   (a) Pure image-only PDF — zero or near-zero extractable characters.
+//       Common with scans, screenshots-as-PDF, faxed offers.
+//   (b) Mangled text layer — many characters extracted but they're binary
+//       garbage (control codes, mis-mapped private-use Unicode), not real
+//       text. Common with PDFs processed through iLovePDF, macOS Preview,
+//       Smallpdf, or other tools that re-encode the text layer without
+//       preserving the Unicode-to-glyph mapping. Extracted "text" looks
+//       like "\u0004\u0005\u0006" instead of "Date Prepared:".
+//
+// For the RPA slot (slotIdx=0), the most reliable check is looking for
+// specific RPA markers — if the text layer can't surface "Date Prepared:"
+// or "PURCHASE AGREEMENT" or similar, the backend's text-path detection
+// will fail. This is a much stronger signal than generic character counts
+// because it tells us exactly what the backend cares about.
+//
+// For Property Profile / MLS slots, false positives are low-cost (those are
+// optional slots) so we use a simpler char-count heuristic.
+async function checkTextLayer(file, slotIdx) {
+  if (typeof pdfjsLib === 'undefined') {
+    // PDF.js failed to load from CDN — skip the check rather than block.
+    return { isImageOnly: false, skipped: true };
+  }
+  const buf = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: buf });
+  const pdf = await loadingTask.promise;
+  // For RPA, scan up to 10 pages because the actual RPA may not start
+  // until page 4+ of a package (after counter offers). For others, 5 is plenty.
+  const pagesToCheck = Math.min(slotIdx === 0 ? 10 : 5, pdf.numPages);
+  let totalChars = 0;
+  let allText = '';
+  for (let i = 1; i <= pagesToCheck; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items.map((it) => it.str || '').join(' ');
+    totalChars += pageText.length;
+    allText += ' ' + pageText;
+  }
+  const charsPerPage = totalChars / pagesToCheck;
+  const lower = allText.toLowerCase();
+
+  // (a) Pure image-only — applies to any slot
+  if (charsPerPage < 50) {
+    return { isImageOnly: true, reason: 'no_text_layer', charsPerPage: Math.round(charsPerPage), totalPages: pdf.numPages };
+  }
+
+  // (b) Slot-specific text-layer integrity check
+  if (slotIdx === 0) {
+    // RPA slot — look for any of these distinctive RPA markers. A clean RPA
+    // will hit several; a mangled one will hit zero.
+    const rpaMarkers = [
+      'date prepared',
+      'purchase agreement',
+      'california residential',
+      'c.a.r. form',
+      'joint escrow',
+      'brokerage firm',
+      'buyer\'s agent',
+      'seller\'s agent'
+    ];
+    const hits = rpaMarkers.filter((m) => lower.indexOf(m) !== -1).length;
+    if (hits === 0) {
+      return { isImageOnly: true, reason: 'no_rpa_markers', charsPerPage: Math.round(charsPerPage), totalPages: pdf.numPages };
+    }
+  } else {
+    // Optional slots — generic English-text sanity check
+    const commonWords = ['the ', ' and ', ' of ', ' to ', ' in ', ' for ', ' is ', ' on '];
+    let hits = 0;
+    for (const w of commonWords) {
+      if (lower.indexOf(w) !== -1) hits++;
+    }
+    if (hits < 3) {
+      return { isImageOnly: true, reason: 'garbled_text_layer', charsPerPage: Math.round(charsPerPage), totalPages: pdf.numPages };
+    }
+  }
+
+  return { isImageOnly: false, charsPerPage: Math.round(charsPerPage), totalPages: pdf.numPages };
+}
+
+// Show or hide the per-tab image-only notice based on whether any of that
+// tab's slots are currently in image-only state.
+function updateImageOnlyNotice(type) {
+  const notice = document.getElementById(type + '-image-only-notice');
+  if (!notice) return;
+  let anyImageOnly = false;
+  for (let i = 0; i < 3; i++) {
+    const s = document.getElementById(type + '-slot' + i);
+    if (s && s.classList.contains('image-only')) {
+      anyImageOnly = true;
+      break;
+    }
+  }
+  notice.classList.toggle('visible', anyImageOnly);
 }
 
 async function compressPDF(file) {
