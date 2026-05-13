@@ -51,7 +51,14 @@
       margin-top: 0.6rem;
     }
     button:disabled { opacity: 0.55; cursor: wait; }
-    #results { margin-top: 2rem; }
+    #status, #results { margin-top: 1.5rem; }
+    .progress {
+      background: #ebf8ff;
+      border-left: 4px solid #3182ce;
+      padding: 0.8rem 1.1rem;
+      border-radius: 0 4px 4px 0;
+      line-height: 1.6;
+    }
     .summary {
       background: #fff;
       padding: 1rem 1.25rem;
@@ -78,7 +85,14 @@
       margin: 0.4rem 0;
       border-radius: 0 4px 4px 0;
     }
-    .missing-item small, .unclear-item small {
+    .flagged-item {
+      background: #fffaf0;
+      padding: 0.6rem 1rem;
+      border-left: 3px solid #dd6b20;
+      margin: 0.4rem 0;
+      border-radius: 0 4px 4px 0;
+    }
+    .missing-item small, .unclear-item small, .flagged-item small {
       color: #4a5568;
       font-style: italic;
     }
@@ -98,9 +112,8 @@
 <body>
   <h1>Signature Audit — Test</h1>
   <p class="intro">
-    Upload a contract PDF, pick the matching schema, and the audit will run against the
-    expected signature/initial locations defined in that schema. This is a test page for
-    validation — not the production workflow.
+    Upload a contract PDF, pick the matching schema, and the audit runs in the background.
+    The page will poll for results — typical run is 45–90 seconds for a full RPA.
   </p>
 
   <form id="auditForm">
@@ -126,17 +139,23 @@
     <button type="submit">Run audit</button>
   </form>
 
+  <div id="status"></div>
   <div id="results"></div>
 
   <script>
+    const POLL_INTERVAL_MS = 3000;
+    const POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
     document.getElementById('auditForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const btn = e.target.querySelector('button');
-      const results = document.getElementById('results');
+      const statusEl = document.getElementById('status');
+      const resultsEl = document.getElementById('results');
 
       btn.disabled = true;
-      btn.textContent = 'Running… (20–40 seconds typical)';
-      results.innerHTML = '';
+      btn.textContent = 'Running…';
+      statusEl.innerHTML = '';
+      resultsEl.innerHTML = '';
 
       try {
         const fd = new FormData(e.target);
@@ -146,22 +165,44 @@
         const sellerCount = parseInt(fd.get('sellerCount'), 10);
 
         const pdfBase64 = await fileToBase64(file);
+        const jobId = generateJobId();
 
-        const response = await fetch('/.netlify/functions/audit', {
+        // Submit to background function — get 202 immediately
+        const submitResp = await fetch('/.netlify/functions/audit-background', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pdfBase64, formId, buyerCount, sellerCount }),
+          body: JSON.stringify({ pdfBase64, formId, buyerCount, sellerCount, jobId }),
         });
 
-        const data = await response.json();
-        renderResults(data);
+        if (submitResp.status !== 202 && submitResp.status !== 200) {
+          throw new Error(`Submit failed with status ${submitResp.status}`);
+        }
+
+        renderProgress(statusEl, jobId, 0);
+
+        // Poll status
+        const final = await pollUntilDone(jobId, statusEl);
+        statusEl.innerHTML = '';
+
+        if (final.status === 'error') {
+          resultsEl.innerHTML = `<div class="missing-item"><strong>Audit failed:</strong> ${escapeHtml(final.error || 'unknown error')}</div>`;
+          return;
+        }
+
+        renderResults(final.result);
       } catch (err) {
-        results.innerHTML = `<div class="missing-item">Error: ${escapeHtml(err.message)}</div>`;
+        statusEl.innerHTML = '';
+        resultsEl.innerHTML = `<div class="missing-item">Error: ${escapeHtml(err.message)}</div>`;
       } finally {
         btn.disabled = false;
         btn.textContent = 'Run audit';
       }
     });
+
+    function generateJobId() {
+      if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+      return 'job-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+    }
 
     function fileToBase64(file) {
       return new Promise((resolve, reject) => {
@@ -172,37 +213,71 @@
       });
     }
 
-    function renderResults(data) {
-      const results = document.getElementById('results');
+    async function pollUntilDone(jobId, statusEl) {
+      const startTime = Date.now();
+      while (true) {
+        if (Date.now() - startTime > POLL_TIMEOUT_MS) {
+          throw new Error('Audit timed out after 10 minutes');
+        }
 
-      if (data.error) {
-        results.innerHTML = `<div class="missing-item"><strong>Server error:</strong> ${escapeHtml(
-          data.error
-        )}</div>`;
+        await sleep(POLL_INTERVAL_MS);
+
+        const resp = await fetch(`/.netlify/functions/audit-status?jobId=${encodeURIComponent(jobId)}`);
+        const data = await resp.json();
+
+        const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+        renderProgress(statusEl, jobId, elapsedSec);
+
+        if (data.status === 'complete' || data.status === 'error') {
+          return data;
+        }
+        // status === 'pending' or 'unknown' (still spinning up) — keep polling
+      }
+    }
+
+    function sleep(ms) {
+      return new Promise((r) => setTimeout(r, ms));
+    }
+
+    function renderProgress(el, jobId, elapsedSec) {
+      el.innerHTML = `<div class="progress">
+        <strong>Audit running…</strong> Elapsed: ${elapsedSec}s. Polling every ${POLL_INTERVAL_MS / 1000}s.<br>
+        <small>Job ID: ${escapeHtml(jobId)}</small>
+      </div>`;
+    }
+
+    function renderResults(data) {
+      const resultsEl = document.getElementById('results');
+
+      if (!data) {
+        resultsEl.innerHTML = `<div class="missing-item">No result data returned.</div>`;
         return;
       }
 
       const s = data.summary || {};
       const missing = (s.missingItems || []).filter((i) => i.status === 'absent');
       const unclear = (s.missingItems || []).filter((i) => i.status === 'unclear');
+      const flagged = s.flaggedItems || [];
 
-      const isClean = missing.length === 0 && unclear.length === 0;
+      const isClean = missing.length === 0 && unclear.length === 0 && flagged.length === 0;
 
       let html = `<div class="summary${isClean ? ' clean' : ''}">
         <strong>Form:</strong> ${escapeHtml(data.formName)} (${escapeHtml(data.formId)})<br>
-        <strong>Contract state:</strong> ${escapeHtml(data.contractState)}<br>
+        <strong>Contract state:</strong> ${escapeHtml(data.detection ? data.detection.state : 'n/a')}<br>
         <strong>Parties:</strong> ${data.partyCount.buyers} buyer(s), ${data.partyCount.sellers} seller(s)<br>
-        <strong>Pages:</strong> ${data.totalPages}<br>
+        <strong>Entity scenarios:</strong> buyer=${data.detection && data.detection.buyer_is_entity}, seller=${data.detection && data.detection.seller_is_entity}<br>
+        <strong>Form pages:</strong> ${JSON.stringify(data.formPages)} of ${data.totalPages}<br>
         <strong>Checks run:</strong> ${data.checksRun}<br>
         <strong>Present:</strong> ${s.present || 0} &nbsp;|&nbsp;
         <strong>Absent:</strong> ${s.absent || 0} &nbsp;|&nbsp;
         <strong>Unclear:</strong> ${s.unclear || 0} &nbsp;|&nbsp;
         <strong>N/A:</strong> ${s.not_applicable || 0} &nbsp;|&nbsp;
-        <strong>Errors:</strong> ${s.error || 0}
+        <strong>Errors:</strong> ${s.error || 0}<br>
+        <strong>Identity matches:</strong> signer=${s.matches_signer || 0}, entity=${s.matches_entity || 0}, other=${s.matches_other || 0}
       </div>`;
 
       if (isClean) {
-        html += `<div class="summary clean"><strong>No missing signatures or initials detected.</strong></div>`;
+        html += `<div class="summary clean"><strong>No missing signatures, initials, or entity mismatches detected.</strong></div>`;
       } else {
         if (missing.length > 0) {
           html += `<h2>Missing (${missing.length})</h2>`;
@@ -215,7 +290,7 @@
           }
         }
         if (unclear.length > 0) {
-          html += `<h2>Needs human review (${unclear.length})</h2>`;
+          html += `<h2>Needs human review — unclear (${unclear.length})</h2>`;
           for (const item of unclear) {
             html += `<div class="unclear-item">
               <strong>${escapeHtml(item.party)} — ${escapeHtml(item.markType)}</strong>
@@ -224,17 +299,24 @@
             </div>`;
           }
         }
+        if (flagged.length > 0) {
+          html += `<h2>Entity signature issues (${flagged.length})</h2>`;
+          for (const item of flagged) {
+            html += `<div class="flagged-item">
+              <strong>${escapeHtml(item.party)} — ${escapeHtml(item.status)}</strong>
+              on page ${item.page} &nbsp;·&nbsp; <code>${escapeHtml(item.locationId)}</code><br>
+              <small>${escapeHtml(item.reasoning || '')}</small>
+            </div>`;
+          }
+        }
       }
 
-      html += `<details><summary>Raw JSON output</summary><pre>${escapeHtml(
-        JSON.stringify(data, null, 2)
-      )}</pre></details>`;
-
-      results.innerHTML = html;
+      html += `<details><summary>Raw JSON output</summary><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></details>`;
+      resultsEl.innerHTML = html;
     }
 
     function escapeHtml(str) {
-      return String(str || '')
+      return String(str == null ? '' : str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
