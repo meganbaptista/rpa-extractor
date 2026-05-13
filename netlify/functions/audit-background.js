@@ -1,14 +1,10 @@
 // netlify/functions/audit-background.js
 //
-// Background function — runs up to 15 minutes (vs 26s for sync).
-// Writes results to Netlify Blobs keyed by jobId; frontend polls audit-status
-// to retrieve results.
-//
-// Flow:
-//   1. Client POSTs PDF + formId + jobId; gets 202 immediately
-//   2. This function runs audit work asynchronously
-//   3. On completion (or error), writes result to Blobs under jobId
-//   4. Client polls /audit-status?jobId=X until it sees status=complete or error
+// Background function — runs up to 15 minutes.
+// Receives ONLY {jobId} in the request body (stays well under the 256 KB
+// background-function request limit).
+// Reads the PDF payload from the audit-payloads blob store, runs the audit,
+// writes results to audit-results, and deletes the payload when done.
 
 const { PDFDocument } = require('pdf-lib');
 const pdfParse = require('pdf-parse');
@@ -25,38 +21,60 @@ const SCHEMAS = {
 // ===== Handler =====
 
 exports.handler = async function (event) {
-  // Background functions are POST-only; no CORS preflight handling needed
-  // since the client gets 202 immediately, but we'll still parse safely.
   let body;
   try {
     body = JSON.parse(event.body || '{}');
   } catch (err) {
-    console.error('Invalid JSON body');
+    console.error('[audit-background] invalid JSON body');
     return { statusCode: 400 };
   }
 
-  const { pdfBase64, formId, buyerCount = 1, sellerCount = 1, jobId } = body;
-
+  const { jobId } = body;
   if (!jobId) {
-    console.error('Missing jobId');
+    console.error('[audit-background] missing jobId');
     return { statusCode: 400 };
   }
 
-  const store = getStore('audit-results');
+  const payloadStore = getStore('audit-payloads');
+  const resultsStore = getStore('audit-results');
 
-  // Mark pending
-  await store.setJSON(jobId, {
+  // Read the payload (PDF + audit params) from blobs
+  let payload;
+  try {
+    payload = await payloadStore.get(jobId, { type: 'json' });
+  } catch (err) {
+    console.error(`[audit-background] jobId=${jobId} failed to read payload:`, err.message);
+    await resultsStore.setJSON(jobId, {
+      status: 'error',
+      completedAt: Date.now(),
+      error: `Failed to read payload: ${err.message}`,
+    });
+    return { statusCode: 500 };
+  }
+
+  if (!payload) {
+    console.error(`[audit-background] jobId=${jobId} payload not found in blob store`);
+    await resultsStore.setJSON(jobId, {
+      status: 'error',
+      completedAt: Date.now(),
+      error: 'Payload not found in blob storage',
+    });
+    return { statusCode: 404 };
+  }
+
+  const { pdfBase64, formId, buyerCount = 1, sellerCount = 1 } = payload;
+
+  // Update status to indicate work has started
+  await resultsStore.setJSON(jobId, {
     status: 'pending',
     startedAt: Date.now(),
     formId,
   });
 
-  console.log(`[audit-background] jobId=${jobId} started`);
+  console.log(`[audit-background] jobId=${jobId} started for formId=${formId}`);
 
   try {
-    if (!pdfBase64 || !formId) {
-      throw new Error('pdfBase64 and formId are required');
-    }
+    if (!pdfBase64 || !formId) throw new Error('Payload missing pdfBase64 or formId');
 
     const schema = SCHEMAS[formId];
     if (!schema) throw new Error(`Schema not found: ${formId}`);
@@ -74,7 +92,7 @@ exports.handler = async function (event) {
     const formPages = detectFormPages(schema, pageTexts);
 
     if (formPages.length === 0) {
-      await store.setJSON(jobId, {
+      await resultsStore.setJSON(jobId, {
         status: 'error',
         completedAt: Date.now(),
         error: 'No pages matched this form\'s footer_patterns.',
@@ -82,6 +100,7 @@ exports.handler = async function (event) {
         formPages: [],
       });
       console.log(`[audit-background] jobId=${jobId} no form pages matched`);
+      await cleanupPayload(payloadStore, jobId);
       return { statusCode: 200 };
     }
 
@@ -112,25 +131,35 @@ exports.handler = async function (event) {
       summary: summarize(results),
     };
 
-    await store.setJSON(jobId, {
+    await resultsStore.setJSON(jobId, {
       status: 'complete',
       completedAt: Date.now(),
       result: output,
     });
 
-    console.log(`[audit-background] jobId=${jobId} complete`);
+    await cleanupPayload(payloadStore, jobId);
+    console.log(`[audit-background] jobId=${jobId} complete, payload deleted`);
     return { statusCode: 200 };
   } catch (err) {
     console.error(`[audit-background] jobId=${jobId} ERROR:`, err.message);
-    await store.setJSON(jobId, {
+    await resultsStore.setJSON(jobId, {
       status: 'error',
       completedAt: Date.now(),
       error: err.message,
       stack: err.stack,
     });
+    await cleanupPayload(payloadStore, jobId);
     return { statusCode: 500 };
   }
 };
+
+async function cleanupPayload(payloadStore, jobId) {
+  try {
+    await payloadStore.delete(jobId);
+  } catch (err) {
+    console.error(`[audit-background] jobId=${jobId} failed to delete payload:`, err.message);
+  }
+}
 
 // ===== Text extraction (with vision fallback) =====
 
