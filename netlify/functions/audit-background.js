@@ -418,11 +418,23 @@ async function runCheck(pdfDoc, check, detection) {
   try {
     const response = await callClaude(prompt, pageBase64);
     const parsed = parseJsonResponse(response);
+    let status = parsed.status;
+    let reasoning = parsed.reasoning;
+
+    // Safety net: footer initials should not auto-fail as "absent" — vision
+    // detection is unreliable on DocuSign-flattened PDFs where initials are
+    // tiny, faint, or grayed out. Downgrade absent → unclear so a human
+    // confirms rather than treating it as a real missing-sig flag.
+    if (check.locationId.startsWith('footer_initials_') && status === 'absent') {
+      status = 'unclear';
+      reasoning = `[downgraded from absent — footer initial detection is unreliable on flattened PDFs] ${reasoning || ''}`;
+    }
+
     return {
       ...check,
-      status: parsed.status,
+      status,
       confidence: parsed.confidence,
-      reasoning: parsed.reasoning,
+      reasoning,
     };
   } catch (err) {
     return { ...check, status: 'error', error: err.message };
@@ -455,14 +467,28 @@ GUIDANCE:
 - Bias toward flagging. If unsure, return "unclear" — never default to "present" when uncertain.`;
       break;
 
-    case 'initial':
-      body = `Determine whether ${check.party}'s initials are present at the location described above.
+    case 'initial': {
+  const isFooterInitial = check.locationId.startsWith('footer_initials_');
+  if (isFooterInitial) {
+    body = `Determine whether ${check.party}'s initials are present in the FOOTER INITIAL BOX at the bottom of this page.
+
+GUIDANCE FOR FOOTER INITIALS SPECIFICALLY:
+- Footer initial boxes are small rectangular boxes at the bottom-left (buyer) or bottom-right (seller) of the page, typically near where the form revision date appears.
+- DocuSigned footer initials are often very small, lightly rendered, faint, or appear in light gray rather than dark ink.
+- If you see ANY mark, glyph, stamp, signature image, or graphical content in the initial box — even if faint, lightly rendered, or hard to read — treat that as "present".
+- Only return "absent" if the initial box is CLEARLY visibly empty with no marks at all.
+- If you cannot clearly determine whether the box has content (faint rendering, page quality, ambiguous), return "unclear" — do NOT default to "absent" when uncertain.
+- If you cannot find a footer initial box on this page, return "not_applicable".`;
+  } else {
+    body = `Determine whether ${check.party}'s initials are present at the location described above.
 
 GUIDANCE:
 - Look for handwritten initials OR a DocuSign initial stamp in the specified box.
 - If the expected box is NOT VISIBLE on this page, return "not_applicable".
 - Bias toward flagging. If unsure, return "unclear".`;
-      break;
+  }
+  break;
+}
 
     case 'date':
       body = `Determine whether a date value is present at the date field for ${check.party}'s signature/initial.
