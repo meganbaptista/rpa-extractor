@@ -159,9 +159,11 @@ async function extractPageText(pdfDoc, pageIndex) {
     singleDoc.addPage(copied);
     const bytes = await singleDoc.save();
     const result = await pdfParse(Buffer.from(bytes));
-    return result.text || '';
+    const text = result.text || '';
+    console.log(`[extractPageText] page ${pageIndex + 1}: ${text.length} chars extracted`);
+    return text;
   } catch (err) {
-    console.error(`Text extraction failed for page ${pageIndex + 1}:`, err.message);
+    console.error(`[extractPageText] page ${pageIndex + 1} FAILED:`, err.message);
     return '';
   }
 }
@@ -171,11 +173,29 @@ async function extractPageText(pdfDoc, pageIndex) {
 function detectFormPages(schema, pageTexts) {
   const patterns = (schema.detection && schema.detection.footer_patterns) || [];
   const formPages = [];
+
+  console.log(`\n[detectFormPages] === START ===`);
+  console.log(`[detectFormPages] schema patterns: ${JSON.stringify(patterns)}`);
+  console.log(`[detectFormPages] total pages: ${pageTexts.length}`);
+
   pageTexts.forEach((text, i) => {
-    if (patterns.some((p) => text.includes(p))) {
-      formPages.push(i + 1); // 1-based
-    }
+    const pageNum = i + 1;
+    const preview = (text || '').substring(0, 400).replace(/\s+/g, ' ').trim();
+    const matchedPattern = patterns.find((p) => text.includes(p));
+
+    console.log(`[detectFormPages] page ${pageNum}: len=${text.length}, ` +
+      `has "RPA"=${text.includes('RPA')}, ` +
+      `has "Residential Purchase"=${text.includes('Residential Purchase')}, ` +
+      `has "California Residential"=${text.includes('California Residential')}, ` +
+      `matched="${matchedPattern || 'NONE'}"`);
+    console.log(`[detectFormPages] page ${pageNum} preview: "${preview}"`);
+
+    if (matchedPattern) formPages.push(pageNum);
   });
+
+  console.log(`[detectFormPages] result: ${JSON.stringify(formPages)}`);
+  console.log(`[detectFormPages] === END ===\n`);
+
   return formPages;
 }
 
