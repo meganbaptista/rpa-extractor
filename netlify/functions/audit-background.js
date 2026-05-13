@@ -25,6 +25,32 @@ function blobsConfig(name) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function runWithConcurrencyLimit(items, fn, limit) {
+  const results = new Array(items.length);
+  const executing = new Set();
+
+  for (let i = 0; i < items.length; i++) {
+    const idx = i;
+    const promise = fn(items[idx])
+      .then((value) => ({ status: 'fulfilled', value }))
+      .catch((reason) => ({ status: 'rejected', reason }))
+      .finally(() => executing.delete(promise));
+
+    executing.add(promise);
+    results[idx] = promise;
+
+    if (executing.size >= limit) {
+      await Promise.race(executing);
+    }
+  }
+
+  return Promise.all(results);
+}
+
 // ===== Handler =====
 
 exports.handler = async function (event) {
@@ -111,7 +137,11 @@ exports.handler = async function (event) {
     const checks = expandChecks(schema, pageTexts, formPages, detection, buyerCount, sellerCount);
     console.log(`[audit-background] jobId=${jobId} expanded to ${checks.length} checks`);
 
-    const settled = await Promise.allSettled(checks.map((c) => runCheck(pdfDoc, c, detection)));
+    const settled = await runWithConcurrencyLimit(
+  checks,
+  (c) => runCheck(pdfDoc, c, detection),
+  5 // max 5 Claude calls in-flight at once — tune up/down based on rate-limit headroom
+);
     const results = settled.map((r, i) => {
       if (r.status === 'fulfilled') return r.value;
       return { ...checks[i], status: 'error', error: r.reason?.message || String(r.reason) };
@@ -569,7 +599,8 @@ async function singlePagePdfBase64(sourceDoc, pageIndex) {
 
 // ===== Claude API =====
 
-async function callClaude(prompt, pdfBase64) {
+async function callClaude(prompt, pdfBase64, attempt = 0) {
+  const MAX_RETRIES = 4;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
 
@@ -598,6 +629,17 @@ async function callClaude(prompt, pdfBase64) {
     }),
   });
 
+  // Retryable: 429 (rate limited) and 529 (overloaded)
+  if ((response.status === 429 || response.status === 529) && attempt < MAX_RETRIES) {
+    const retryAfter = response.headers.get('retry-after');
+    const delay = retryAfter
+      ? Math.min(parseFloat(retryAfter) * 1000, 30000)
+      : Math.min(1000 * Math.pow(2, attempt), 30000); // 1s → 2s → 4s → 8s, capped at 30s
+    console.log(`[callClaude] ${response.status} received, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+    await sleep(delay);
+    return callClaude(prompt, pdfBase64, attempt + 1);
+  }
+
   if (!response.ok) {
     const errText = await response.text();
     throw new Error(`Claude API error ${response.status}: ${errText}`);
@@ -606,7 +648,6 @@ async function callClaude(prompt, pdfBase64) {
   const data = await response.json();
   return data.content?.[0]?.text || '';
 }
-
 function parseJsonResponse(text) {
   const cleaned = text.replace(/```json|```/g, '').trim();
   return JSON.parse(cleaned);
