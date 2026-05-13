@@ -500,15 +500,23 @@ GUIDANCE:
     case 'initial': {
   const isFooterInitial = check.locationId.startsWith('footer_initials_');
   if (isFooterInitial) {
-    body = `Determine whether ${check.party}'s initials are present in the FOOTER INITIAL BOX at the bottom of this page.
+    body = `Examine this page for ${check.party}'s footer initial content.
 
-GUIDANCE FOR FOOTER INITIALS SPECIFICALLY:
-- Footer initial boxes are small rectangular boxes at the bottom-left (buyer) or bottom-right (seller) of the page, typically near where the form revision date appears.
-- DocuSigned footer initials are often very small, lightly rendered, faint, or appear in light gray rather than dark ink.
-- If you see ANY mark, glyph, stamp, signature image, or graphical content in the initial box — even if faint, lightly rendered, or hard to read — treat that as "present".
-- Only return "absent" if the initial box is CLEARLY visibly empty with no marks at all.
-- If you cannot clearly determine whether the box has content (faint rendering, page quality, ambiguous), return "unclear" — do NOT default to "absent" when uncertain.
-- If you cannot find a footer initial box on this page, return "not_applicable".`;
+ABOUT THE FOOTER INITIAL AREA:
+- Located at the bottom of the page, near the form revision date.
+- "Buyer's Initials" typically shows two side-by-side slots: ___ / ___. First slot is Buyer 1, second slot is Buyer 2.
+- "Seller's Initials" follows the same layout: first slot Seller 1, second slot Seller 2.
+- DocuSigned initials may appear small, faint, lightly rendered, or in light gray — but they are visible inside the slot as actual letters or a stamp image.
+
+YOUR TASK: Determine whether the SPECIFIC SLOT FOR ${check.party} contains initial content. Evaluate only ${check.party}'s slot — do NOT base your answer on the other party's slot.
+
+STATUS DEFINITIONS:
+- "present" — ${check.party}'s slot clearly contains initial content (handwritten letters, typed initials, or a DocuSign-style stamp). Faint or lightly rendered content still counts as present.
+- "absent" — ${check.party}'s slot is empty. The slot outline and any underline are visible, but no initial content has been placed inside. An empty slot is absent regardless of whether OTHER parties have initialed.
+- "unclear" — you can locate ${check.party}'s slot but cannot determine whether content is present versus rendering artifacts.
+- "not_applicable" — no footer initial area is visible on this page.
+
+Be precise about which slot you are evaluating. The position matters. An initial in Buyer 1's slot does not mean Buyer 2's slot is also initialed.`;
   } else {
     body = `Determine whether ${check.party}'s initials are present at the location described above.
 
