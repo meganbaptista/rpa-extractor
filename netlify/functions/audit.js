@@ -12,8 +12,10 @@
 // - Schemas are read from ./schemas/{formId}.json (inside this functions
 //   folder, so they get bundled with the deploy).
 
-const fs = require('fs');
-const path = require('path');
+const SCHEMAS = {
+  'CAR-RPA-1225': require('./schemas/CAR-RPA-1225.json'),
+  'AD-BUYER-1224': require('./schemas/AD-BUYER-1224.json'),
+};
 const { PDFDocument } = require('pdf-lib');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
@@ -107,19 +109,8 @@ exports.handler = async function (event) {
 // ----- Schema loading -----
 
 function loadSchema(formId) {
-  const schemaPath = path.join(
-  process.cwd(),
-  'netlify',
-  'functions',
-  'schemas',
-  `${formId}.json`
-);
-
-console.log('Loading schema from:', schemaPath);
-  if (!fs.existsSync(schemaPath)) return null;
-  return JSON.parse(fs.readFileSync(schemaPath, 'utf-8'));
+  return SCHEMAS[formId] || null;
 }
-
 // ----- Page scope resolution -----
 
 function resolvePages(pageScope, totalPages) {
