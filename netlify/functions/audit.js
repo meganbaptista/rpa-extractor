@@ -1,25 +1,39 @@
 // netlify/functions/audit.js
 //
-// Signature audit function for Keeva.
-// Accepts a PDF + form_id + party counts, runs phase-aware signature audit
+// Signature audit function for Keeva — anchor-driven version.
+//
+// Accepts a PDF + form_id + party counts, runs anchor-based signature audit
 // against the matching schema, returns structured audit results.
 //
+// FLOW:
+//   1. Load PDF + schema
+//   2. Extract per-page text via pdf-parse (in parallel)
+//   3. Detect which pages belong to this form (footer_patterns match)
+//   4. One combined Claude call: detect contract state + entity scenarios
+//      + extract entity/signer names
+//   5. Expand schema signature_locations → flat list of check tuples,
+//      applying phase + scenario + party filters
+//   6. Run all checks in parallel (one Claude vision call per check)
+//   7. Compile results + summary
+//
 // V1 NOTES:
-// - Synchronous function. If we hit Netlify's 26s limit on real contracts,
-//   convert to a background function with a polling/webhook pattern.
-// - Form detection is skipped — caller specifies formId. Form detection
-//   will be added when this is integrated into the main extractor flow.
-// - Schemas are read from ./schemas/{formId}.json (inside this functions
-//   folder, so they get bundled with the deploy).
+// - Synchronous function. If we hit Netlify's 26s limit on large fully-
+//   executed contracts, convert to a background function with webhook return.
+// - Form detection within a packet is implicit (footer_patterns); for multi-
+//   form packets we'd run audit per form.
+
+const { PDFDocument } = require('pdf-lib');
+const pdfParse = require('pdf-parse');
+
+const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+const MODEL = 'claude-sonnet-4-20250514';
 
 const SCHEMAS = {
   'CAR-RPA-1225': require('./schemas/CAR-RPA-1225.json'),
   'AD-BUYER-1224': require('./schemas/AD-BUYER-1224.json'),
 };
-const { PDFDocument } = require('pdf-lib');
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-sonnet-4-20250514';
+// ===== Handler =====
 
 exports.handler = async function (event) {
   const corsHeaders = {
@@ -46,7 +60,6 @@ exports.handler = async function (event) {
       };
     }
 
-    // 1. Load schema
     const schema = loadSchema(formId);
     if (!schema) {
       return {
@@ -56,36 +69,52 @@ exports.handler = async function (event) {
       };
     }
 
-    // 2. Load PDF
+    // 1. Load PDF
     const pdfBytes = Buffer.from(pdfBase64, 'base64');
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const totalPages = pdfDoc.getPageCount();
 
-    // 3. Detect contract state (only if schema has phase-based locations)
-    const state = await detectContractState(schema, pdfDoc, totalPages);
+    // 2. Extract text from every page (parallel)
+    const pageTexts = await extractAllPageTexts(pdfDoc);
 
-    // 4. Expand schema into concrete check tuples
-    const checks = expandChecks(schema, totalPages, state, buyerCount, sellerCount);
+    // 3. Detect which pages belong to this form
+    const formPages = detectFormPages(schema, pageTexts);
 
-    // 5. Run all checks in parallel
-    const settled = await Promise.allSettled(checks.map((c) => runCheck(pdfDoc, c)));
+    if (formPages.length === 0) {
+      return {
+        statusCode: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          formId: schema.form_id,
+          formName: schema.form_name,
+          error: 'No pages in the uploaded PDF matched this form\'s footer_patterns. Check that the correct form schema was selected and that the PDF contains the expected form.',
+          totalPages,
+          formPages,
+        }, null, 2),
+      };
+    }
 
-    // 6. Compile output
+    // 4. Combined upfront detection: state + entity scenarios + names
+    const detection = await detectStateAndScenarios(schema, pdfDoc, pageTexts, formPages);
+
+    // 5. Expand checks
+    const checks = expandChecks(schema, pageTexts, formPages, detection, buyerCount, sellerCount);
+
+    // 6. Run all checks in parallel
+    const settled = await Promise.allSettled(checks.map((c) => runCheck(pdfDoc, c, detection)));
     const results = settled.map((r, i) => {
       if (r.status === 'fulfilled') return r.value;
-      return {
-        ...checks[i],
-        status: 'error',
-        error: r.reason?.message || String(r.reason),
-      };
+      return { ...checks[i], status: 'error', error: r.reason?.message || String(r.reason) };
     });
 
+    // 7. Compile output
     const output = {
       formId: schema.form_id,
       formName: schema.form_name,
-      contractState: state,
-      partyCount: { buyers: buyerCount, sellers: sellerCount },
       totalPages,
+      formPages,
+      partyCount: { buyers: buyerCount, sellers: sellerCount },
+      detection,
       checksRun: checks.length,
       results,
       summary: summarize(results),
@@ -106,110 +135,200 @@ exports.handler = async function (event) {
   }
 };
 
-// ----- Schema loading -----
+// ===== Schema =====
 
 function loadSchema(formId) {
   return SCHEMAS[formId] || null;
 }
-// ----- Page scope resolution -----
 
-function resolvePages(pageScope, totalPages) {
-  let pages = [];
-  switch (pageScope.type) {
-    case 'every_page':
-      pages = Array.from({ length: totalPages }, (_, i) => i + 1);
-      break;
-    case 'page_range': {
-      const from = pageScope.from || 1;
-      const to = pageScope.to || totalPages;
-      pages = Array.from({ length: to - from + 1 }, (_, i) => i + from);
-      break;
-    }
-    case 'specific':
-      pages = [pageScope.page];
-      break;
-    case 'first':
-      pages = [1];
-      break;
-    case 'last':
-      pages = [totalPages];
-      break;
-    case 'relative_to_last': {
-      const target = totalPages + pageScope.offset;
-      pages = target >= 1 && target <= totalPages ? [target] : [];
-      break;
-    }
-    default:
-      throw new Error(`Unknown page_scope type: ${pageScope.type}`);
+// ===== Text extraction =====
+
+async function extractAllPageTexts(pdfDoc) {
+  const totalPages = pdfDoc.getPageCount();
+  const promises = [];
+  for (let i = 0; i < totalPages; i++) {
+    promises.push(extractPageText(pdfDoc, i));
   }
-
-  // Apply exclusions
-  if (pageScope.exclude && Array.isArray(pageScope.exclude)) {
-    for (const exScope of pageScope.exclude) {
-      const exPages = resolvePages(exScope, totalPages);
-      pages = pages.filter((p) => !exPages.includes(p));
-    }
-  }
-
-  return pages;
+  return Promise.all(promises);
 }
 
-// ----- Contract state detection -----
+async function extractPageText(pdfDoc, pageIndex) {
+  try {
+    const singleDoc = await PDFDocument.create();
+    const [copied] = await singleDoc.copyPages(pdfDoc, [pageIndex]);
+    singleDoc.addPage(copied);
+    const bytes = await singleDoc.save();
+    const result = await pdfParse(Buffer.from(bytes));
+    return result.text || '';
+  } catch (err) {
+    console.error(`Text extraction failed for page ${pageIndex + 1}:`, err.message);
+    return '';
+  }
+}
 
-async function detectContractState(schema, pdfDoc, totalPages) {
-  // If schema has no seller_acceptance phase items, no state detection needed
-  const hasSellerPhase = schema.signature_locations.some(
-    (loc) => loc.phase === 'seller_acceptance'
+// ===== Form-page detection =====
+
+function detectFormPages(schema, pageTexts) {
+  const patterns = (schema.detection && schema.detection.footer_patterns) || [];
+  const formPages = [];
+  pageTexts.forEach((text, i) => {
+    if (patterns.some((p) => text.includes(p))) {
+      formPages.push(i + 1); // 1-based
+    }
+  });
+  return formPages;
+}
+
+// ===== Anchor resolution =====
+
+function resolveAnchor(anchor, pageTexts, formPages) {
+  if (!anchor) return [];
+
+  // Type 1: scope-based (all form pages, with optional exclusions)
+  if (anchor.scope === 'all_form_pages') {
+    let pages = [...formPages];
+    if (anchor.exclude_anchor) {
+      const excluded = resolveAnchor(anchor.exclude_anchor, pageTexts, formPages);
+      pages = pages.filter((p) => !excluded.includes(p));
+    }
+    return pages;
+  }
+
+  // Type 2: text-based (any_of)
+  if (anchor.any_of && Array.isArray(anchor.any_of)) {
+    const matches = [];
+    pageTexts.forEach((text, i) => {
+      const page = i + 1;
+      if (formPages.includes(page) && anchor.any_of.some((pattern) => text.includes(pattern))) {
+        matches.push(page);
+      }
+    });
+    return matches;
+  }
+
+  return [];
+}
+
+// ===== State + entity scenario detection =====
+
+async function detectStateAndScenarios(schema, pdfDoc, pageTexts, formPages) {
+  const hasSellerPhase = schema.signature_locations.some((loc) => loc.phase === 'seller_acceptance');
+  const hasEntityScenarios = schema.signature_locations.some(
+    (loc) => loc.scenario === 'buyer_is_entity' || loc.scenario === 'seller_is_entity'
   );
-  if (!hasSellerPhase) return 'all';
 
-  // For RPA-like schemas: check page N-1 (signature page)
-  // Page index is 0-based; "second to last" page = totalPages - 2
-  const sigPageIndex = totalPages - 2;
-  if (sigPageIndex < 0) return 'offer_only';
+  // If schema has no phase/scenario complexity (e.g., AD form), short-circuit
+  if (!hasSellerPhase && !hasEntityScenarios) {
+    return {
+      state: 'all',
+      buyer_is_entity: false,
+      seller_is_entity: false,
+      buyer_entity_name: null,
+      buyer_signer_names: null,
+      seller_entity_name: null,
+      seller_signer_names: null,
+    };
+  }
 
+  // Find the seller signature page via its anchor
+  const sellerSigPages = resolveAnchor({ any_of: ['Printed name of SELLER:'] }, pageTexts, formPages);
+
+  if (sellerSigPages.length === 0) {
+    // Anchor didn't match — conservative default
+    return {
+      state: 'offer_only',
+      buyer_is_entity: false,
+      seller_is_entity: false,
+      buyer_entity_name: null,
+      buyer_signer_names: null,
+      seller_entity_name: null,
+      seller_signer_names: null,
+    };
+  }
+
+  const sigPageIndex = sellerSigPages[0] - 1;
   const pageBase64 = await singlePagePdfBase64(pdfDoc, sigPageIndex);
 
-  const prompt = `You are examining the signature page of a California Residential Purchase Agreement (RPA).
+  const prompt = `You are examining the signature page of a California Residential Purchase Agreement.
 
-Look at this page and determine the current state of the contract by examining two things:
-1. The Seller signature block (Section 33). Are the seller signature lines filled with actual signatures, OR are they blank?
-2. The "Seller Counter Offer (C.A.R. Form SCO or SMCO)" checkbox in Section 33A. Is it checked?
+Determine ALL of the following from this single page and return as one JSON object:
 
-Return ONLY a JSON object with this exact structure (no other text, no markdown code fences):
+1. CONTRACT STATE — examine the Seller signature block in Section 33:
+   - seller_signed: Are seller signature lines filled with actual signatures (handwritten or DocuSign image stamps)? Boolean.
+   - counter_offer_checked: Is the "Seller Counter Offer (C.A.R. Form SCO or SMCO)" checkbox in Section 33A checked? Boolean.
+
+2. ENTITY DETECTION:
+   - buyer_is_entity: Is the "ENTITY BUYERS:" checkbox in Section 32B checked? Boolean.
+   - seller_is_entity: Is the "ENTITY SELLERS:" checkbox in Section 33B checked? Boolean.
+
+3. ENTITY NAMES — only if respective entity flag is true; otherwise null:
+   - buyer_entity_name: Text from Section 32B(2) "Full entity name:" field.
+   - buyer_signer_names: Array of names from Section 32B(4)(B) "name(s) of the Legally Authorized Signer(s)".
+   - seller_entity_name: Text from Section 33B(2) "Full entity name:" field.
+   - seller_signer_names: Array of names from Section 33B(4)(B) "name(s) of the Legally Authorized Signer(s)".
+
+Return ONLY this JSON object (no markdown fences, no other text):
 {
-  "seller_signed": true | false,
-  "counter_offer_checked": true | false,
-  "state": "offer_only" | "counter_pending" | "fully_executed",
-  "confidence": "high" | "medium" | "low"
-}
-
-State logic:
-- seller_signed is true → "fully_executed"
-- seller_signed is false AND counter_offer_checked is true → "counter_pending"
-- Otherwise → "offer_only"`;
+  "seller_signed": true|false,
+  "counter_offer_checked": true|false,
+  "buyer_is_entity": true|false,
+  "seller_is_entity": true|false,
+  "buyer_entity_name": "..." or null,
+  "buyer_signer_names": ["...", "..."] or null,
+  "seller_entity_name": "..." or null,
+  "seller_signer_names": ["...", "..."] or null
+}`;
 
   try {
     const response = await callClaude(prompt, pageBase64);
     const parsed = parseJsonResponse(response);
-    return parsed.state || 'offer_only';
+
+    let state;
+    if (parsed.seller_signed) state = 'fully_executed';
+    else if (parsed.counter_offer_checked) state = 'counter_pending';
+    else state = 'offer_only';
+
+    return {
+      state,
+      buyer_is_entity: !!parsed.buyer_is_entity,
+      seller_is_entity: !!parsed.seller_is_entity,
+      buyer_entity_name: parsed.buyer_entity_name || null,
+      buyer_signer_names: parsed.buyer_signer_names || null,
+      seller_entity_name: parsed.seller_entity_name || null,
+      seller_signer_names: parsed.seller_signer_names || null,
+    };
   } catch (err) {
-    console.error('State detection error:', err);
-    return 'offer_only'; // safe default
+    console.error('Detection error:', err.message);
+    return {
+      state: 'offer_only',
+      buyer_is_entity: false,
+      seller_is_entity: false,
+      buyer_entity_name: null,
+      buyer_signer_names: null,
+      seller_entity_name: null,
+      seller_signer_names: null,
+    };
   }
 }
 
-// ----- Check expansion -----
+// ===== Check expansion =====
 
-function expandChecks(schema, totalPages, state, buyerCount, sellerCount) {
+function expandChecks(schema, pageTexts, formPages, detection, buyerCount, sellerCount) {
   const checks = [];
 
   for (const loc of schema.signature_locations) {
     // Phase filtering
-    if (state === 'offer_only' && loc.phase === 'seller_acceptance') continue;
-    // (counter_pending and fully_executed both include seller_acceptance items)
+    if (detection.state === 'offer_only' && loc.phase === 'seller_acceptance') continue;
 
-    const pages = resolvePages(loc.page_scope, totalPages);
+    // Scenario filtering
+    if (loc.scenario === 'buyer_is_entity' && !detection.buyer_is_entity) continue;
+    if (loc.scenario === 'seller_is_entity' && !detection.seller_is_entity) continue;
+
+    // Resolve target pages via anchor
+    const pages = resolveAnchor(loc.page_anchor, pageTexts, formPages);
+    if (pages.length === 0) continue;
+
+    // Party filtering
     const presentParties = filterParties(loc.parties, buyerCount, sellerCount);
 
     for (const page of pages) {
@@ -222,6 +341,7 @@ function expandChecks(schema, totalPages, state, buyerCount, sellerCount) {
           markType: loc.mark_type,
           requirement: loc.requirement,
           phase: loc.phase,
+          scenario: loc.scenario,
           condition: loc.condition,
         });
       }
@@ -237,37 +357,15 @@ function filterParties(parties, buyerCount, sellerCount) {
     if (bm) return parseInt(bm[1], 10) <= buyerCount;
     const sm = p.match(/^Seller (\d+)$/);
     if (sm) return parseInt(sm[1], 10) <= sellerCount;
-    // Agents and other roles: keep for now (could refine later)
     return true;
   });
 }
 
-// ----- Per-check execution -----
+// ===== Per-check execution =====
 
-async function runCheck(pdfDoc, check) {
+async function runCheck(pdfDoc, check, detection) {
   const pageBase64 = await singlePagePdfBase64(pdfDoc, check.page - 1);
-
-  const prompt = `You are auditing a single page of a California real estate contract for the presence of a specific mark.
-
-LOCATION TO CHECK: ${check.locationDescription}
-PARTY: ${check.party}
-MARK TYPE: ${check.markType}
-
-Determine whether ${check.party}'s ${check.markType} is present at that location on this page.
-
-CRITICAL GUIDANCE:
-- "signature": Look for an actual handwritten signature OR a DocuSign-style image stamp. A typed/printed name in the signature line area without an actual signature glyph is NOT a signature — that is "absent".
-- "initial": Look for handwritten initials OR a DocuSign initial stamp in the specified box.
-- "date": Look for a written date next to the signature/initial location.
-- If the expected line/box is NOT VISIBLE on this page (form variant, trimmed page), return "not_applicable".
-- Bias toward flagging. If unsure, return "unclear" — never default to "present" when uncertain.
-
-Return ONLY a JSON object with this exact structure (no other text, no markdown code fences):
-{
-  "status": "present" | "absent" | "unclear" | "not_applicable",
-  "confidence": "high" | "medium" | "low",
-  "reasoning": "one-sentence explanation of what you observed"
-}`;
+  const prompt = buildPrompt(check, detection);
 
   try {
     const response = await callClaude(prompt, pageBase64);
@@ -283,7 +381,110 @@ Return ONLY a JSON object with this exact structure (no other text, no markdown 
   }
 }
 
-// ----- PDF helper -----
+function buildPrompt(check, detection) {
+  const header = `You are auditing a single page of a California real estate contract.
+
+LOCATION TO CHECK: ${check.locationDescription}
+PARTY: ${check.party}
+MARK TYPE: ${check.markType}
+`;
+
+  let body = '';
+  let returnSchema = `{
+  "status": "present" | "absent" | "unclear" | "not_applicable",
+  "confidence": "high" | "medium" | "low",
+  "reasoning": "one-sentence explanation of what you observed"
+}`;
+
+  switch (check.markType) {
+    case 'signature':
+      body = `Determine whether ${check.party}'s signature is present at the location described above.
+
+GUIDANCE:
+- Look for an actual handwritten signature OR a DocuSign-style image stamp.
+- A typed/printed name in the signature line area WITHOUT an actual signature glyph is NOT a signature — that is "absent".
+- If the expected line is NOT VISIBLE on this page, return "not_applicable".
+- Bias toward flagging. If unsure, return "unclear" — never default to "present" when uncertain.`;
+      break;
+
+    case 'initial':
+      body = `Determine whether ${check.party}'s initials are present at the location described above.
+
+GUIDANCE:
+- Look for handwritten initials OR a DocuSign initial stamp in the specified box.
+- If the expected box is NOT VISIBLE on this page, return "not_applicable".
+- Bias toward flagging. If unsure, return "unclear".`;
+      break;
+
+    case 'date':
+      body = `Determine whether a date value is present at the date field for ${check.party}'s signature/initial.
+
+GUIDANCE:
+- Look for any date format (MM/DD/YYYY, M/D/YY, written date, etc.).
+- The date should be next to or associated with ${check.party}'s signature or initial.
+- If the date field is NOT VISIBLE on this page, return "not_applicable".`;
+      break;
+
+    case 'checkbox':
+      body = `Determine whether the specific checkbox described above is marked.
+
+GUIDANCE:
+- A marked checkbox has an X, checkmark, filled box, or similar marking.
+- An empty/blank checkbox is "absent".
+- If the checkbox is NOT VISIBLE on this page, return "not_applicable".`;
+      break;
+
+    case 'filled_text':
+      body = `Determine whether the specific text field described above contains any content.
+
+GUIDANCE:
+- Any non-blank content in the field counts as "present" — we are not validating the correctness of the content.
+- An empty/blank field is "absent".
+- If the field is NOT VISIBLE on this page, return "not_applicable".
+- Include the extracted content in your reasoning if present.`;
+      break;
+
+    case 'identity_match': {
+      const isBuyerScenario = check.scenario === 'buyer_is_entity';
+      const entityName = isBuyerScenario ? detection.buyer_entity_name : detection.seller_entity_name;
+      const signerNames = isBuyerScenario ? detection.buyer_signer_names : detection.seller_signer_names;
+      const signerList =
+        signerNames && signerNames.length ? signerNames.map((n) => `"${n}"`).join(', ') : 'unknown';
+
+      body = `The signing party is an ENTITY. The signature glyph must show a HUMAN signer's name, NOT the entity name itself. Common error: agents sign the entity name as the signature glyph instead of the authorized signer's name.
+
+CONTEXT FROM THIS CONTRACT:
+- Entity name: "${entityName || 'unknown'}"
+- Authorized signer name(s): ${signerList}
+
+Examine the visible signature for ${check.party} at the described location. Compare what the signature glyph appears to depict against the entity name and the authorized signer names listed above.
+
+POSSIBLE STATUS VALUES (use these exact strings):
+- "matches_signer" — signature glyph shows one of the authorized signer names (CORRECT)
+- "matches_entity" — signature glyph shows the entity name itself (INCORRECT — must be flagged)
+- "matches_other" — signature shows a name not in the authorized signer list
+- "unclear" — signature is unreadable, ambiguous, or absent
+- "not_applicable" — no signature visible at this location`;
+      returnSchema = `{
+  "status": "matches_signer" | "matches_entity" | "matches_other" | "unclear" | "not_applicable",
+  "confidence": "high" | "medium" | "low",
+  "reasoning": "one-sentence explanation, including what name the signature appears to depict"
+}`;
+      break;
+    }
+
+    default:
+      body = `Determine whether ${check.party}'s mark is present at the location described above. If uncertain, return "unclear".`;
+  }
+
+  return `${header}
+${body}
+
+Return ONLY a JSON object with this exact structure (no markdown code fences, no other text):
+${returnSchema}`;
+}
+
+// ===== PDF helper =====
 
 async function singlePagePdfBase64(sourceDoc, pageIndex) {
   const newDoc = await PDFDocument.create();
@@ -293,7 +494,7 @@ async function singlePagePdfBase64(sourceDoc, pageIndex) {
   return Buffer.from(bytes).toString('base64');
 }
 
-// ----- Claude API -----
+// ===== Claude API =====
 
 async function callClaude(prompt, pdfBase64) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -338,7 +539,7 @@ function parseJsonResponse(text) {
   return JSON.parse(cleaned);
 }
 
-// ----- Summary -----
+// ===== Summary =====
 
 function summarize(results) {
   const summary = {
@@ -347,13 +548,30 @@ function summarize(results) {
     unclear: 0,
     not_applicable: 0,
     error: 0,
+    matches_signer: 0,
+    matches_entity: 0,
+    matches_other: 0,
     missingItems: [],
+    flaggedItems: [],
   };
 
   for (const r of results) {
     summary[r.status] = (summary[r.status] || 0) + 1;
+
     if (r.status === 'absent' || r.status === 'unclear') {
       summary.missingItems.push({
+        page: r.page,
+        party: r.party,
+        markType: r.markType,
+        locationId: r.locationId,
+        status: r.status,
+        confidence: r.confidence,
+        reasoning: r.reasoning,
+      });
+    }
+
+    if (r.status === 'matches_entity' || r.status === 'matches_other') {
+      summary.flaggedItems.push({
         page: r.page,
         party: r.party,
         markType: r.markType,
