@@ -165,18 +165,21 @@
         const sellerCount = parseInt(fd.get('sellerCount'), 10);
 
         const pdfBase64 = await fileToBase64(file);
-        const jobId = generateJobId();
 
-        // Submit to background function — get 202 immediately
-        const submitResp = await fetch('/.netlify/functions/audit-background', {
+        // Submit to audit-submit (sync), which stores payload and triggers background
+        const submitResp = await fetch('/.netlify/functions/audit-submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pdfBase64, formId, buyerCount, sellerCount, jobId }),
+          body: JSON.stringify({ pdfBase64, formId, buyerCount, sellerCount }),
         });
 
-        if (submitResp.status !== 202 && submitResp.status !== 200) {
-          throw new Error(`Submit failed with status ${submitResp.status}`);
+        if (!submitResp.ok) {
+          const errText = await submitResp.text();
+          throw new Error(`Submit failed (${submitResp.status}): ${errText}`);
         }
+
+        const { jobId } = await submitResp.json();
+        if (!jobId) throw new Error('Submit response did not include jobId');
 
         renderProgress(statusEl, jobId, 0);
 
@@ -198,11 +201,6 @@
         btn.textContent = 'Run audit';
       }
     });
-
-    function generateJobId() {
-      if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
-      return 'job-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
-    }
 
     function fileToBase64(file) {
       return new Promise((resolve, reject) => {
@@ -231,7 +229,6 @@
         if (data.status === 'complete' || data.status === 'error') {
           return data;
         }
-        // status === 'pending' or 'unknown' (still spinning up) — keep polling
       }
     }
 
