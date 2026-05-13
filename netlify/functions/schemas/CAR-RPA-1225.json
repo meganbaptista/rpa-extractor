@@ -1,0 +1,348 @@
+{
+  "form_id": "CAR-RPA-1225",
+  "form_name": "California Residential Purchase Agreement",
+  "car_revision": "12/25",
+  "active": true,
+  "detection": {
+    "footer_patterns": ["RPA REVISED 12/25"]
+  },
+  "typical_page_count": 17,
+  "notes": "Page count varies by paragraphs and addenda included. All signature locations identified by text anchor, not page number, so the schema is resilient to CAR revisions, page reordering, brokerage page injection, and counter-offer appendages.",
+  "audit_conventions": {
+    "page_resolution": "Each signature_location specifies a page_anchor — text patterns that identify the target page(s). The runtime extracts text from each PDF page and matches anchors against extracted text. Anchors of type {any_of: [...]} match a page if any pattern appears on that page. Anchors of type {scope: 'all_form_pages', exclude_anchor: {...}} resolve to every page belonging to this form (via footer_patterns) minus pages matching the exclude_anchor.",
+    "filter_by_present_parties": "Runtime only checks signatures for parties whose names exist in the extracted offer data. If only one buyer was extracted, all Buyer 2 lines are skipped (not flagged as missing). Same for Seller 2, Listing Agent on buyer-side-only files, etc.",
+    "graceful_missing_line": "If the runtime cannot find the expected signature/initial/field line on a page (e.g., form variant), it returns 'not_applicable' rather than 'missing'.",
+    "phase_filtering": "Runtime detects contract state by examining the seller signature block on the page anchored by 'Printed name of SELLER:': empty = 'offer_only' (audit only phase=buyer_offer); filled = 'fully_executed' (audit all phases); 'Seller Counter Offer' checkbox checked = 'counter_pending' (audit buyer side and check the attached SCO form for seller signatures).",
+    "scenario_filtering": "Runtime detects entity scenarios during the same upfront detection call: (a) seller_is_entity if the Section 33B 'ENTITY SELLERS:' checkbox is checked OR the extracted seller name contains entity markers (LLC, Inc, Corp, Trust, etc.); (b) buyer_is_entity, same logic for Section 32B and buyer name. When entity scenario is active, signer names and entity name are extracted for downstream identity_match checks. Locations with scenario=null run regardless. Locations with scenario=seller_is_entity only run if seller is an entity.",
+    "mark_types": {
+      "signature": "Handwritten signature glyph or DocuSign-style image stamp. A typed/printed name in the line area without an actual signature mark counts as absent.",
+      "initial": "Handwritten initials or DocuSign initial stamp in the specified box.",
+      "date": "Date value present in the date field.",
+      "checkbox": "Checkbox marked with X, checkmark, or filled.",
+      "filled_text": "Text field labeled per description contains any content (not blank). Content is not validated for correctness.",
+      "identity_match": "For entity signatures: compare the visible signature mark against the extracted entity name and signer names. Returns matches_signer (correct), matches_entity (incorrect — flag), matches_other, or unclear."
+    }
+  },
+  "signature_locations": [
+    {
+      "id": "footer_initials_buyer_side",
+      "description": "Buyer footer initial boxes (bottom-left of page footer) on every body page of the form",
+      "page_anchor": {
+        "scope": "all_form_pages",
+        "exclude_anchor": { "any_of": ["Printed name of BUYER:"] }
+      },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "initial",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": "Excludes the signature page (which has no footer initial line). Most common missing-sig source."
+    },
+    {
+      "id": "footer_initials_seller_side",
+      "description": "Seller footer initial boxes (bottom-right of page footer) on every body page of the form",
+      "page_anchor": {
+        "scope": "all_form_pages",
+        "exclude_anchor": { "any_of": ["Printed name of BUYER:"] }
+      },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "initial",
+      "requirement": "always",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": null,
+      "notes": "Only audited once seller has signed OR Seller Counter Offer box is checked."
+    },
+    {
+      "id": "buyer_signature_block",
+      "description": "Buyer signature block in Section 32, labeled '(Signature) By,'",
+      "page_anchor": { "any_of": ["Printed name of BUYER:"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "buyer_signature_date",
+      "description": "Date field next to each buyer signature in Section 32",
+      "page_anchor": { "any_of": ["Printed name of BUYER:"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "date",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "seller_signature_block",
+      "description": "Seller signature block in Section 33, labeled '(Signature) By,'",
+      "page_anchor": { "any_of": ["Printed name of SELLER:"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": null,
+      "notes": "If Seller Counter Offer box is checked on this page, seller may sign via the attached SCO form instead — runtime checks the SCO if present."
+    },
+    {
+      "id": "seller_signature_date",
+      "description": "Date field next to each seller signature in Section 33",
+      "page_anchor": { "any_of": ["Printed name of SELLER:"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "date",
+      "requirement": "always",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "buyer_agent_signature_brokers_section",
+      "description": "Buyer's Agent signature line in the 'Real Estate Brokers Section'",
+      "page_anchor": { "any_of": ["REAL ESTATE BROKERS SECTION"] },
+      "parties": ["Buyer Agent"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": "Often missed because the brokers section is separate from buyer/seller signature blocks."
+    },
+    {
+      "id": "listing_agent_signature_brokers_section",
+      "description": "Listing Agent signature line in the 'Real Estate Brokers Section'",
+      "page_anchor": { "any_of": ["REAL ESTATE BROKERS SECTION"] },
+      "parties": ["Listing Agent"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": null,
+      "notes": "On buyer-side-only files (no listing agent name extracted), this is skipped via filter_by_present_parties."
+    },
+    {
+      "id": "final_page_initials_buyer_side",
+      "description": "Buyer initials between the Real Estate Brokers Section and the Escrow Acknowledgment",
+      "page_anchor": { "any_of": ["REAL ESTATE BROKERS SECTION", "ESCROW HOLDER ACKNOWLEDGMENT"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "initial",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": "Sandwiched between sections rather than at the page footer — easy to miss."
+    },
+    {
+      "id": "final_page_initials_seller_side",
+      "description": "Seller initials between the Real Estate Brokers Section and the Escrow Acknowledgment",
+      "page_anchor": { "any_of": ["REAL ESTATE BROKERS SECTION", "ESCROW HOLDER ACKNOWLEDGMENT"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "initial",
+      "requirement": "always",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "liquidated_damages_initials_buyer",
+      "description": "Buyer initials in Section 29 (Liquidated Damages)",
+      "page_anchor": { "any_of": ["LIQUIDATED DAMAGES (By initialing"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "initial",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": "If buyer initials this clause, the parties have elected liquidated damages and seller initials become required.",
+      "notes": "Commonly missed — initials are near the section header, not at the page footer."
+    },
+    {
+      "id": "liquidated_damages_initials_seller",
+      "description": "Seller initials in Section 29 (Liquidated Damages)",
+      "page_anchor": { "any_of": ["LIQUIDATED DAMAGES (By initialing"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "initial",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": "Required if buyer initialed liquidated_damages_initials_buyer.",
+      "notes": ""
+    },
+    {
+      "id": "arbitration_of_disputes_initials_buyer",
+      "description": "Buyer initials in Section 31 (Arbitration of Disputes)",
+      "page_anchor": { "any_of": ["ARBITRATION OF DISPUTES: A. The Parties"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "initial",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": "If buyer initials this clause, seller initials become required.",
+      "notes": ""
+    },
+    {
+      "id": "arbitration_of_disputes_initials_seller",
+      "description": "Seller initials in Section 31 (Arbitration of Disputes)",
+      "page_anchor": { "any_of": ["ARBITRATION OF DISPUTES: A. The Parties"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "initial",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": "Required if buyer initialed arbitration_of_disputes_initials_buyer.",
+      "notes": ""
+    },
+
+    {
+      "id": "entity_buyer_checkbox",
+      "description": "Section 32B 'ENTITY BUYERS:' checkbox",
+      "page_anchor": { "any_of": ["ENTITY BUYERS:"] },
+      "parties": ["Buyer 1"],
+      "mark_type": "checkbox",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is a non-individual entity (trust, corporation, LLC, partnership, etc.).",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_full_name",
+      "description": "Section 32B(2) 'Full entity name:' text field — must contain the entity's full legal name",
+      "page_anchor": { "any_of": ["ENTITY BUYERS:"] },
+      "parties": ["Buyer 1"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_signer_names",
+      "description": "Section 32B(4)(B) 'The name(s) of the Legally Authorized Signer(s) is/are' text field(s)",
+      "page_anchor": { "any_of": ["ENTITY BUYERS:"] },
+      "parties": ["Buyer 1"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_legally_authorized_checkbox",
+      "description": "Section 32D 'Printed Name of Legally Authorized Signer:' checkbox next to each buyer signature",
+      "page_anchor": { "any_of": ["Printed name of BUYER:"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "checkbox",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is an entity — signals that the printed name is the legally authorized signer.",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_title",
+      "description": "Section 32D 'Title, if applicable' text field next to each buyer signature (e.g., 'Trustee', 'Managing Member', 'President')",
+      "page_anchor": { "any_of": ["Printed name of BUYER:"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_signature_identity",
+      "description": "Verify the buyer signature glyph shows the human signer's name (e.g., 'Maria Fong'), not the entity name (e.g., 'Newkirk Family Trust')",
+      "page_anchor": { "any_of": ["Printed name of BUYER:"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "identity_match",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is an entity — signature glyph must depict an authorized signer, not the entity itself.",
+      "notes": "Runtime supplies entity_name and signer_names from scenario detection for comparison."
+    },
+
+    {
+      "id": "entity_seller_checkbox",
+      "description": "Section 33B 'ENTITY SELLERS:' checkbox",
+      "page_anchor": { "any_of": ["ENTITY SELLERS:"] },
+      "parties": ["Seller 1"],
+      "mark_type": "checkbox",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is a non-individual entity (trust, corporation, LLC, partnership, etc.).",
+      "notes": ""
+    },
+    {
+      "id": "entity_seller_full_name",
+      "description": "Section 33B(2) 'Full entity name:' text field — must contain the entity's full legal name",
+      "page_anchor": { "any_of": ["ENTITY SELLERS:"] },
+      "parties": ["Seller 1"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_seller_signer_names",
+      "description": "Section 33B(4)(B) 'The name(s) of the Legally Authorized Signer(s) is/are' text field(s)",
+      "page_anchor": { "any_of": ["ENTITY SELLERS:"] },
+      "parties": ["Seller 1"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_seller_legally_authorized_checkbox",
+      "description": "Section 33D 'Printed Name of Legally Authorized Signer:' checkbox next to each seller signature",
+      "page_anchor": { "any_of": ["Printed name of SELLER:"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "checkbox",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is an entity — signals that the printed name is the legally authorized signer.",
+      "notes": ""
+    },
+    {
+      "id": "entity_seller_title",
+      "description": "Section 33D 'Title, if applicable' text field next to each seller signature (e.g., 'Trustee', 'Managing Member', 'President')",
+      "page_anchor": { "any_of": ["Printed name of SELLER:"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_seller_signature_identity",
+      "description": "Verify the seller signature glyph shows the human signer's name (e.g., 'Maria Fong'), not the entity name (e.g., 'Newkirk Family Trust')",
+      "page_anchor": { "any_of": ["Printed name of SELLER:"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "identity_match",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is an entity — signature glyph must depict an authorized signer, not the entity itself.",
+      "notes": "Runtime supplies entity_name and signer_names from scenario detection for comparison."
+    }
+  ]
+}

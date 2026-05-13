@@ -1,0 +1,68 @@
+{
+  "form_id": "AD-BUYER-1224",
+  "form_name": "Disclosure Regarding Real Estate Agency Relationship (Buyer Side)",
+  "car_revision": "12/24",
+  "active": true,
+  "detection": {
+    "footer_patterns": ["AD REVISED 12/24"]
+  },
+  "typical_page_count": 2,
+  "notes": "Buyer-side schema. Seller-side AD is handled by a separate schema (AD-SELLER-1224 — not yet built). All signatures are on the first page; page 2 contains only Civil Code text and the form has no entity-related fields.",
+  "audit_conventions": {
+    "page_resolution": "Each signature_location specifies a page_anchor — text patterns that identify the target page(s). The runtime extracts text from each PDF page and matches anchors against extracted text.",
+    "filter_by_present_parties": "Runtime only checks signatures for parties whose names exist in the extracted offer data.",
+    "graceful_missing_line": "If the runtime cannot find the expected line/field on a page, it returns 'not_applicable' rather than 'missing'.",
+    "phase_filtering": "Not state-dependent on this form. Buyer and agent both sign at the same moment when the agent presents the form to the buyer, so all locations use phase=buyer_offer.",
+    "scenario_filtering": "The AD form has no entity-specific fields, so no scenario filtering applies."
+  },
+  "signature_locations": [
+    {
+      "id": "buyer_signature_block",
+      "description": "Buyer signature block on the acknowledgment page, in the section with the 'Buyer/Tenant' checkbox",
+      "page_anchor": { "any_of": ["I/WE ACKNOWLEDGE RECEIPT OF A COPY OF THIS DISCLOSURE"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "buyer_signature_date",
+      "description": "Date field next to each buyer signature on the acknowledgment page",
+      "page_anchor": { "any_of": ["I/WE ACKNOWLEDGE RECEIPT OF A COPY OF THIS DISCLOSURE"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "date",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "agent_signature_block",
+      "description": "Agent signature on the acknowledgment page, above the line labeled 'Salesperson or Broker-Associate, if any'",
+      "page_anchor": { "any_of": ["Salesperson or Broker-Associate, if any"] },
+      "parties": ["Buyer Agent"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": "Watch for typed name vs actual signature glyph — a printed name in the line area without a signature mark should be flagged for review, not auto-cleared."
+    },
+    {
+      "id": "agent_signature_date",
+      "description": "Date field next to the buyer agent signature on the acknowledgment page",
+      "page_anchor": { "any_of": ["Salesperson or Broker-Associate, if any"] },
+      "parties": ["Buyer Agent"],
+      "mark_type": "date",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    }
+  ]
+}
