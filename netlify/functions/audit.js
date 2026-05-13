@@ -71,7 +71,7 @@ exports.handler = async function (event) {
 
     // 1. Load PDF
     const pdfBytes = Buffer.from(pdfBase64, 'base64');
-    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
     const totalPages = pdfDoc.getPageCount();
 
     // 2. Extract text from every page (parallel)
