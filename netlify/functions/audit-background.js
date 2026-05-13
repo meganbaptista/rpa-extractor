@@ -35,8 +35,16 @@ exports.handler = async function (event) {
     return { statusCode: 400 };
   }
 
-  const payloadStore = getStore('audit-payloads');
-  const resultsStore = getStore('audit-results');
+  const payloadStore = getStore({
+  name: 'audit-payloads',
+  siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
+  token: process.env.NETLIFY_BLOBS_TOKEN,
+});
+  const resultsStore = getStore({
+  name: 'audit-results',
+  siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
+  token: process.env.NETLIFY_BLOBS_TOKEN,
+});
 
   // Read the payload (PDF + audit params) from blobs
   let payload;
