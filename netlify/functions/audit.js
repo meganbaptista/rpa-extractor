@@ -153,21 +153,38 @@ async function extractAllPageTexts(pdfDoc) {
 }
 
 async function extractPageText(pdfDoc, pageIndex) {
+  // First try pdf-parse (fast, free)
+  let text = '';
   try {
     const singleDoc = await PDFDocument.create();
     const [copied] = await singleDoc.copyPages(pdfDoc, [pageIndex]);
     singleDoc.addPage(copied);
     const bytes = await singleDoc.save();
     const result = await pdfParse(Buffer.from(bytes));
-    const text = result.text || '';
-    console.log(`[extractPageText] page ${pageIndex + 1}: ${text.length} chars extracted`);
-    return text;
+    text = result.text || '';
   } catch (err) {
-    console.error(`[extractPageText] page ${pageIndex + 1} FAILED:`, err.message);
-    return '';
+    console.error(`[extractPageText] page ${pageIndex + 1} pdf-parse FAILED:`, err.message);
   }
-}
 
+  console.log(`[extractPageText] page ${pageIndex + 1}: pdf-parse returned ${text.length} chars`);
+
+  // If pdf-parse returned blank/near-blank, fall back to Claude vision
+  if (text.trim().length < 50) {
+    console.log(`[extractPageText] page ${pageIndex + 1}: falling back to vision`);
+    try {
+      const pageBase64 = await singlePagePdfBase64(pdfDoc, pageIndex);
+      const prompt = `Extract all visible text from this page of a real estate document. Return only the raw extracted text — preserve section headings, labels, field names, footer text, and any visible text content. Do not summarize, interpret, or add commentary. Do not describe images or signatures, just transcribe text.`;
+      const visionText = await callClaude(prompt, pageBase64);
+      console.log(`[extractPageText] page ${pageIndex + 1}: vision returned ${visionText.length} chars`);
+      return visionText;
+    } catch (err) {
+      console.error(`[extractPageText] page ${pageIndex + 1} vision FAILED:`, err.message);
+      return text; // return whatever pdf-parse gave us, even if blank
+    }
+  }
+
+  return text;
+}
 // ===== Form-page detection =====
 
 function detectFormPages(schema, pageTexts) {
