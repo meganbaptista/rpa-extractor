@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Signature Audit — Test</title>
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -113,7 +114,7 @@
   <h1>Signature Audit — Test</h1>
   <p class="intro">
     Upload a contract PDF, pick the matching schema, and the audit runs in the background.
-    The page will poll for results — typical run is 45–90 seconds for a full RPA.
+    Large packets are compressed client-side before upload (temporary — direct blob upload coming).
   </p>
 
   <form id="auditForm">
@@ -144,7 +145,13 @@
 
   <script>
     const POLL_INTERVAL_MS = 3000;
-    const POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+    const POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
+    // Netlify sync function body limit is 6 MB. Base64 encoding inflates ~33%.
+    // So binary PDF must be under ~4.5 MB to fit after encoding.
+    const FUNCTION_BODY_LIMIT = 6 * 1024 * 1024;
+    const BASE64_INFLATION = 1.34;
+    const MAX_BINARY_SIZE = Math.floor(FUNCTION_BODY_LIMIT / BASE64_INFLATION);
 
     document.getElementById('auditForm').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -164,9 +171,26 @@
         const buyerCount = parseInt(fd.get('buyerCount'), 10);
         const sellerCount = parseInt(fd.get('sellerCount'), 10);
 
-        const pdfBase64 = await fileToBase64(file);
+        // 1. Compress PDF client-side
+        renderStatus(statusEl, `Compressing PDF (original: ${formatSize(file.size)})…`);
+        const compressionResult = await safeCompress(file);
+        const workingFile = compressionResult.file;
+        const compressionMsg = compressionResult.message;
+        renderStatus(statusEl, compressionMsg);
 
-        // Submit to audit-submit (sync), which stores payload and triggers background
+        // 2. Hard cap check
+        if (workingFile.size > MAX_BINARY_SIZE) {
+          throw new Error(
+            `PDF is too large to upload: ${formatSize(workingFile.size)} after compression. ` +
+            `Current test page supports up to ${formatSize(MAX_BINARY_SIZE)}. ` +
+            `This limit will be removed when we move to direct blob upload.`
+          );
+        }
+
+        // 3. Encode and submit
+        renderStatus(statusEl, `${compressionMsg} · Uploading…`);
+        const pdfBase64 = await fileToBase64(workingFile);
+
         const submitResp = await fetch('/.netlify/functions/audit-submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -183,7 +207,7 @@
 
         renderProgress(statusEl, jobId, 0);
 
-        // Poll status
+        // 4. Poll for results
         const final = await pollUntilDone(jobId, statusEl);
         statusEl.innerHTML = '';
 
@@ -202,12 +226,50 @@
       }
     });
 
-    function fileToBase64(file) {
+    // ===== PDF compression =====
+
+    async function safeCompress(file) {
+      try {
+        const compressed = await compressPdf(file);
+        const ratio = ((1 - compressed.size / file.size) * 100).toFixed(0);
+        const message = compressed.size < file.size
+          ? `Compressed: ${formatSize(file.size)} → ${formatSize(compressed.size)} (${ratio}% reduction)`
+          : `Compression complete (no size reduction). Using ${formatSize(compressed.size)}.`;
+        return { file: compressed, message };
+      } catch (err) {
+        console.warn('Compression failed, falling back to original:', err);
+        return {
+          file,
+          message: `Compression unavailable (${err.message}). Using original: ${formatSize(file.size)}.`,
+        };
+      }
+    }
+
+    async function compressPdf(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+      const compressedBytes = await pdfDoc.save({
+        useObjectStreams: true,
+        addDefaultPage: false,
+        objectsPerTick: 50,
+      });
+      return new Blob([compressedBytes], { type: 'application/pdf' });
+    }
+
+    // ===== Utilities =====
+
+    function formatSize(bytes) {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    }
+
+    function fileToBase64(blob) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result.split(',')[1]);
         reader.onerror = () => reject(new Error('Failed to read file'));
-        reader.readAsDataURL(file);
+        reader.readAsDataURL(blob);
       });
     }
 
@@ -234,6 +296,10 @@
 
     function sleep(ms) {
       return new Promise((r) => setTimeout(r, ms));
+    }
+
+    function renderStatus(el, message) {
+      el.innerHTML = `<div class="progress">${escapeHtml(message)}</div>`;
     }
 
     function renderProgress(el, jobId, elapsedSec) {
