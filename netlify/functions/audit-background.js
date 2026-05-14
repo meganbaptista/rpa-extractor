@@ -400,6 +400,9 @@ function expandChecks(schema, pageTexts, formPages, detection, buyerCount, selle
   const checks = [];
 
   for (const loc of schema.signature_locations) {
+    for (const loc of schema.signature_locations) {
+  if (loc.active === false) continue;
+  // ... rest of the loop unchanged
     // Phase filtering removed — audits run post-acceptance, so all phases apply
     if (loc.scenario === 'buyer_is_entity' && !detection.buyer_is_entity) continue;
     if (loc.scenario === 'seller_is_entity' && !detection.seller_is_entity) continue;
