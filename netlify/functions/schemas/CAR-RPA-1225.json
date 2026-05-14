@@ -46,7 +46,7 @@
       "phase": "buyer_offer",
       "scenario": null,
       "condition": null,
-      "crop_box": { "x_pct_start": 0.18, "x_pct_end": 0.55, "y_pct_start": 0.93, "y_pct_end": 0.99 },
+      "crop_box": { "x_pct_start": 0.32, "x_pct_end": 0.63, "y_pct_start": 0.92, "y_pct_end": 0.96 },
       "notes": "Excludes the signature page (which has no footer initial line). Most common missing-sig source. Cropped region targets just the buyer footer initial slots to give vision a high-signal target instead of the full page."
     },
     {
@@ -63,7 +63,7 @@
       "phase": "seller_acceptance",
       "scenario": null,
       "condition": null,
-      "crop_box": { "x_pct_start": 0.52, "x_pct_end": 0.88, "y_pct_start": 0.93, "y_pct_end": 0.99 },
+      "crop_box": { "x_pct_start": 0.62, "x_pct_end": 0.85, "y_pct_start": 0.92, "y_pct_end": 0.96 },
       "notes": "Only audited once seller has signed OR Seller Counter Offer box is checked. Cropped region targets just the seller footer initial slots."
     },
     {
