@@ -5,13 +5,13 @@
   "active": true,
   "detection": {
     "footer_patterns": [
-  "RPA REVISED 12/25",
-  "RPA Revised 12/25",
-  "32. OFFER",
-  "PROPERTY ADDENDA AND ADVISORIES",
-  "EXPIRATION OF OFFER",
-  "Property Address:"
-]
+      "RPA REVISED 12/25",
+      "RPA Revised 12/25",
+      "32. OFFER",
+      "PROPERTY ADDENDA AND ADVISORIES",
+      "EXPIRATION OF OFFER",
+      "Property Address:"
+    ]
   },
   "typical_page_count": 17,
   "notes": "Page count varies by paragraphs and addenda included. All signature locations identified by text anchor, not page number, so the schema is resilient to CAR revisions, page reordering, brokerage page injection, and counter-offer appendages.",
@@ -21,6 +21,7 @@
     "graceful_missing_line": "If the runtime cannot find the expected signature/initial/field line on a page (e.g., form variant), it returns 'not_applicable' rather than 'missing'.",
     "phase_filtering": "Runtime detects contract state by examining the seller signature block on the page anchored by 'Printed name of SELLER:': empty = 'offer_only' (audit only phase=buyer_offer); filled = 'fully_executed' (audit all phases); 'Seller Counter Offer' checkbox checked = 'counter_pending' (audit buyer side and check the attached SCO form for seller signatures).",
     "scenario_filtering": "Runtime detects entity scenarios during the same upfront detection call: (a) seller_is_entity if the Section 33B 'ENTITY SELLERS:' checkbox is checked OR the extracted seller name contains entity markers (LLC, Inc, Corp, Trust, etc.); (b) buyer_is_entity, same logic for Section 32B and buyer name. When entity scenario is active, signer names and entity name are extracted for downstream identity_match checks. Locations with scenario=null run regardless. Locations with scenario=seller_is_entity only run if seller is an entity.",
+    "crop_box": "Optional per-location field. When present, the runtime renders only the specified sub-region of the page before sending to Claude vision, instead of the full page. Coordinates are normalized 0-1 against the page media box, with y measured from the TOP (y_pct_start=0 means top edge, y_pct_end=1 means bottom edge). Used to narrow vision attention to small targets like footer initial slots where full-page rendering loses the signal.",
     "mark_types": {
       "signature": "Handwritten signature glyph or DocuSign-style image stamp. A typed/printed name in the line area without an actual signature mark counts as absent.",
       "initial": "Handwritten initials or DocuSign initial stamp in the specified box.",
@@ -32,8 +33,8 @@
   },
   "signature_locations": [
     {
-  "id": "footer_initials_buyer_side",
-  "active": false,
+      "id": "footer_initials_buyer_side",
+      "active": false,
       "description": "Buyer footer initial boxes (bottom-left of page footer) on every body page of the form",
       "page_anchor": {
         "scope": "all_form_pages",
@@ -45,7 +46,8 @@
       "phase": "buyer_offer",
       "scenario": null,
       "condition": null,
-      "notes": "Excludes the signature page (which has no footer initial line). Most common missing-sig source."
+      "crop_box": { "x_pct_start": 0.18, "x_pct_end": 0.55, "y_pct_start": 0.93, "y_pct_end": 0.99 },
+      "notes": "Excludes the signature page (which has no footer initial line). Most common missing-sig source. Cropped region targets just the buyer footer initial slots to give vision a high-signal target instead of the full page."
     },
     {
       "id": "footer_initials_seller_side",
@@ -61,7 +63,8 @@
       "phase": "seller_acceptance",
       "scenario": null,
       "condition": null,
-      "notes": "Only audited once seller has signed OR Seller Counter Offer box is checked."
+      "crop_box": { "x_pct_start": 0.52, "x_pct_end": 0.88, "y_pct_start": 0.93, "y_pct_end": 0.99 },
+      "notes": "Only audited once seller has signed OR Seller Counter Offer box is checked. Cropped region targets just the seller footer initial slots."
     },
     {
       "id": "buyer_signature_block",
@@ -207,7 +210,6 @@
       "condition": "Required if buyer initialed arbitration_of_disputes_initials_buyer.",
       "notes": ""
     },
-
     {
       "id": "entity_buyer_checkbox",
       "description": "Section 32B 'ENTITY BUYERS:' checkbox",
@@ -280,7 +282,6 @@
       "condition": "Required when buyer is an entity — signature glyph must depict an authorized signer, not the entity itself.",
       "notes": "Runtime supplies entity_name and signer_names from scenario detection for comparison."
     },
-
     {
       "id": "entity_seller_checkbox",
       "description": "Section 33B 'ENTITY SELLERS:' checkbox",
