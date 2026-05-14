@@ -34,7 +34,7 @@
   "signature_locations": [
     {
       "id": "footer_initials_buyer_side",
-      "active": false,
+      "active": true,
       "description": "Buyer footer initial boxes (bottom-left of page footer) on every body page of the form",
       "page_anchor": {
         "scope": "all_form_pages",
@@ -51,7 +51,7 @@
     },
     {
       "id": "footer_initials_seller_side",
-      "active": false,
+      "active": true,
       "description": "Seller footer initial boxes (bottom-right of page footer) on every body page of the form",
       "page_anchor": {
         "scope": "all_form_pages",
