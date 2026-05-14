@@ -422,6 +422,7 @@ function expandChecks(schema, pageTexts, formPages, detection, buyerCount, selle
           phase: loc.phase,
           scenario: loc.scenario,
           condition: loc.condition,
+          cropBox: loc.crop_box || null,
         });
       }
     }
@@ -443,7 +444,12 @@ function filterParties(parties, buyerCount, sellerCount) {
 // ===== Per-check execution =====
 
 async function runCheck(pdfDoc, check, detection) {
-  const pageBase64 = await singlePagePdfBase64(pdfDoc, check.page - 1);
+  const pageBase64 = check.cropBox
+    ? await croppedPagePdfBase64(pdfDoc, check.page - 1, check.cropBox)
+    : await singlePagePdfBase64(pdfDoc, check.page - 1);
+  if (check.cropBox) {
+    console.log(`[runCheck] ${check.locationId} page ${check.page} ${check.party}: using cropped region`);
+  }
   const prompt = buildPrompt(check, detection);
 
   try {
@@ -596,12 +602,41 @@ Return ONLY a JSON object with this exact structure (no markdown code fences, no
 ${returnSchema}`;
 }
 
-// ===== PDF helper =====
+// ===== PDF helpers =====
 
 async function singlePagePdfBase64(sourceDoc, pageIndex) {
   const newDoc = await PDFDocument.create();
   const [copied] = await newDoc.copyPages(sourceDoc, [pageIndex]);
   newDoc.addPage(copied);
+  const bytes = await newDoc.save();
+  return Buffer.from(bytes).toString('base64');
+}
+
+// Produces a single-page PDF cropped to a sub-region of the source page.
+// cropBox uses normalized 0-1 coordinates with y measured from the TOP of the
+// page (y_pct_start=0 = top edge, y_pct_end=1 = bottom edge). pdf-lib's
+// internal coordinate system has its origin at the bottom-left, so we flip
+// the y axis when computing the box.
+//
+// We set BOTH the media box and the crop box to the target region. Setting
+// the media box physically shrinks the page so content outside the region
+// has nowhere to render; setting the crop box explicitly directs renderers
+// to display only this region. Either alone would likely suffice for
+// Claude's vision rasterization, but using both removes the guesswork.
+async function croppedPagePdfBase64(sourceDoc, pageIndex, cropBox) {
+  const newDoc = await PDFDocument.create();
+  const [copied] = await newDoc.copyPages(sourceDoc, [pageIndex]);
+  newDoc.addPage(copied);
+
+  const { width, height } = copied.getSize();
+  const cropX = cropBox.x_pct_start * width;
+  const cropY = (1 - cropBox.y_pct_end) * height;
+  const cropWidth = (cropBox.x_pct_end - cropBox.x_pct_start) * width;
+  const cropHeight = (cropBox.y_pct_end - cropBox.y_pct_start) * height;
+
+  copied.setMediaBox(cropX, cropY, cropWidth, cropHeight);
+  copied.setCropBox(cropX, cropY, cropWidth, cropHeight);
+
   const bytes = await newDoc.save();
   return Buffer.from(bytes).toString('base64');
 }
