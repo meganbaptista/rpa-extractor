@@ -448,10 +448,12 @@ async function runCheck(pdfDoc, check, detection) {
     ? await croppedPagePdfBase64(pdfDoc, check.page - 1, check.cropBox)
     : await singlePagePdfBase64(pdfDoc, check.page - 1);
   if (check.cropBox) {
-    console.log(`[runCheck] ${check.locationId} page ${check.page} ${check.party}: using cropped region`);
-  }
-  const prompt = buildPrompt(check, detection);
+      console.log(`[runCheck] ${check.locationId} page ${check.page} ${check.party}: using cropped region`);
+    }
+    const prompt = buildPrompt(check, detection);
 
+    // TEMPORARY DEBUG — remove once footer cropping is validated
+    const __debugLogClaude = check.locationId.startsWith('footer_initials_');
   try {
     const response = await callClaude(prompt, pageBase64);
     const parsed = parseJsonResponse(response);
@@ -465,6 +467,10 @@ async function runCheck(pdfDoc, check, detection) {
     if (check.locationId.startsWith('footer_initials_') && status === 'absent') {
       status = 'unclear';
       reasoning = `[downgraded from absent — footer initial detection is unreliable on flattened PDFs] ${reasoning || ''}`;
+    }
+
+    if (__debugLogClaude) {
+      console.log(`[FOOTER DEBUG] ${check.locationId} page ${check.page} ${check.party}: status=${status} confidence=${parsed.confidence} reasoning=${(reasoning || '').substring(0, 200)}`);
     }
 
     return {
