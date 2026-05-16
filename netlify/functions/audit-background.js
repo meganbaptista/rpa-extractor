@@ -7,6 +7,7 @@
 
 const { PDFDocument } = require('pdf-lib');
 const pdfParse = require('pdf-parse');
+const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
 const { getStore } = require('@netlify/blobs');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
@@ -139,7 +140,7 @@ exports.handler = async function (event) {
 
     const settled = await runWithConcurrencyLimit(
   checks,
-  (c) => runCheck(pdfDoc, c, detection),
+  (c) => runCheck(pdfDoc, pdfBytes, c, detection),
   5 // max 5 Claude calls in-flight at once — tune up/down based on rate-limit headroom
 );
     const results = settled.map((r, i) => {
@@ -423,6 +424,7 @@ function expandChecks(schema, pageTexts, formPages, detection, buyerCount, selle
           scenario: loc.scenario,
           condition: loc.condition,
           cropBox: loc.crop_box || null,
+          cropAnchor: loc.crop_anchor || null,
         });
       }
     }
@@ -443,14 +445,29 @@ function filterParties(parties, buyerCount, sellerCount) {
 
 // ===== Per-check execution =====
 
-async function runCheck(pdfDoc, check, detection) {
-  const pageBase64 = check.cropBox
-    ? await croppedPagePdfBase64(pdfDoc, check.page - 1, check.cropBox)
-    : await singlePagePdfBase64(pdfDoc, check.page - 1);
-  if (check.cropBox) {
-      console.log(`[runCheck] ${check.locationId} page ${check.page} ${check.party}: using cropped region`);
+async function runCheck(pdfDoc, pdfBytes, check, detection) {
+  let pageBase64;
+
+  if (check.cropAnchor) {
+    pageBase64 = await croppedPagePdfBase64ByAnchor(pdfDoc, pdfBytes, check.page - 1, check.cropAnchor);
+    if (!pageBase64) {
+      console.log(`[runCheck] ${check.locationId} page ${check.page} ${check.party}: anchor "${check.cropAnchor.text}" not found, returning not_applicable`);
+      return {
+        ...check,
+        status: 'not_applicable',
+        confidence: 'high',
+        reasoning: `crop anchor text '${check.cropAnchor.text}' not found on page ${check.page}`,
+      };
     }
-    const prompt = buildPrompt(check, detection);
+    console.log(`[runCheck] ${check.locationId} page ${check.page} ${check.party}: using anchor crop "${check.cropAnchor.text}"`);
+  } else if (check.cropBox) {
+    pageBase64 = await croppedPagePdfBase64(pdfDoc, check.page - 1, check.cropBox);
+    console.log(`[runCheck] ${check.locationId} page ${check.page} ${check.party}: using cropped region`);
+  } else {
+    pageBase64 = await singlePagePdfBase64(pdfDoc, check.page - 1);
+  }
+
+  const prompt = buildPrompt(check, detection);
 
     // TEMPORARY DEBUG — remove once footer cropping is validated
     const __debugLogClaude = check.locationId.startsWith('footer_initials_');
@@ -614,6 +631,163 @@ async function singlePagePdfBase64(sourceDoc, pageIndex) {
   const newDoc = await PDFDocument.create();
   const [copied] = await newDoc.copyPages(sourceDoc, [pageIndex]);
   newDoc.addPage(copied);
+  const bytes = await newDoc.save();
+  return Buffer.from(bytes).toString('base64');
+}
+
+// Find the position of a text anchor on a specific page using pdfjs-dist.
+// Returns { x, y, width, height, pageWidth, pageHeight } in PDF points
+// (origin bottom-left, y increases upward), or null if anchor not found.
+// Handles cases where anchor text is split across multiple PDF text items
+// on the same line; respects line breaks (won't combine across lines).
+async function findAnchorPosition(pdfBytes, pageIndex, anchorText, matchIndex = 0) {
+  const normalize = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const target = normalize(anchorText);
+  if (!target) return null;
+
+  let pdfDoc;
+  try {
+    const loadingTask = pdfjsLib.getDocument({
+      data: new Uint8Array(pdfBytes),
+      disableWorker: true,
+      isEvalSupported: false,
+      verbosity: 0,
+    });
+    pdfDoc = await loadingTask.promise;
+  } catch (err) {
+    console.error(`[findAnchorPosition] page ${pageIndex + 1} pdfjs load failed:`, err.message);
+    return null;
+  }
+
+  try {
+    const page = await pdfDoc.getPage(pageIndex + 1);
+    const textContent = await page.getTextContent();
+    const viewport = page.getViewport({ scale: 1.0 });
+    const items = textContent.items || [];
+
+    const matches = [];
+
+    for (let start = 0; start < items.length; start++) {
+      const startItem = items[start];
+      if (!startItem || !startItem.str) continue;
+
+      let combined = startItem.str;
+      let lastItem = startItem;
+
+      if (normalize(combined).includes(target)) {
+        matches.push(buildBox(startItem, lastItem));
+      } else {
+        for (let end = start + 1; end < items.length; end++) {
+          if (items[end - 1].hasEOL) break;
+          combined += ' ' + (items[end].str || '');
+          lastItem = items[end];
+          const norm = normalize(combined);
+          if (norm.includes(target)) {
+            matches.push(buildBox(startItem, lastItem));
+            break;
+          }
+          if (norm.length > target.length + 20) break;
+        }
+      }
+    }
+
+    function buildBox(firstItem, lastItem) {
+      const x = firstItem.transform[4];
+      const y = firstItem.transform[5];
+      const height = firstItem.height || Math.abs(firstItem.transform[3]) || 10;
+      const endX = lastItem.transform[4] + (lastItem.width || 0);
+      const width = Math.max(endX - x, firstItem.width || 0);
+      return { x, y, width, height };
+    }
+
+    const match = matches[matchIndex];
+    if (!match) {
+      console.log(`[findAnchorPosition] page ${pageIndex + 1} "${anchorText}" NOT FOUND (${matches.length} match candidates)`);
+      return null;
+    }
+
+    console.log(`[findAnchorPosition] page ${pageIndex + 1} "${anchorText}" found at x=${match.x.toFixed(1)} y=${match.y.toFixed(1)} w=${match.width.toFixed(1)} h=${match.height.toFixed(1)}`);
+    return {
+      ...match,
+      pageWidth: viewport.width,
+      pageHeight: viewport.height,
+    };
+  } catch (err) {
+    console.error(`[findAnchorPosition] page ${pageIndex + 1} extraction failed:`, err.message);
+    return null;
+  } finally {
+    try { await pdfDoc.cleanup(); } catch (_) {}
+    try { await pdfDoc.destroy(); } catch (_) {}
+  }
+}
+
+// Produces a single-page PDF cropped to a region defined RELATIVE to a text
+// anchor's position. Offsets are in inches, measured from the anchor's
+// TOP-LEFT corner (negative values extend above/left of the anchor).
+// Returns base64-encoded PDF bytes, or null if the anchor wasn't found
+// (caller decides fallback behavior).
+async function croppedPagePdfBase64ByAnchor(sourceDoc, sourcePdfBytes, pageIndex, cropAnchor) {
+  const anchorPos = await findAnchorPosition(
+    sourcePdfBytes,
+    pageIndex,
+    cropAnchor.text,
+    cropAnchor.match_index || 0
+  );
+  if (!anchorPos) return null;
+
+  // Anchor in screen coords (origin top-left, y increases down)
+  const anchorScreenLeft = anchorPos.x;
+  const anchorScreenTop = anchorPos.pageHeight - anchorPos.y - anchorPos.height;
+
+  const inchesToPts = (inches) => inches * 72;
+  const off = cropAnchor.offset_in || {};
+
+  const cropScreenLeft = anchorScreenLeft + inchesToPts(off.x_start || 0);
+  const cropScreenRight = anchorScreenLeft + inchesToPts(off.x_end || 0);
+  const cropScreenTop = anchorScreenTop + inchesToPts(off.y_start || 0);
+  const cropScreenBottom = anchorScreenTop + inchesToPts(off.y_end || 0);
+
+  // Convert back to PDF coords (origin bottom-left)
+  const cropPdfX = cropScreenLeft;
+  const cropPdfY = anchorPos.pageHeight - cropScreenBottom;
+  const cropPdfWidth = cropScreenRight - cropScreenLeft;
+  const cropPdfHeight = cropScreenBottom - cropScreenTop;
+
+  if (cropPdfWidth <= 0 || cropPdfHeight <= 0) {
+    console.error(`[croppedByAnchor] invalid crop dimensions for "${cropAnchor.text}": w=${cropPdfWidth} h=${cropPdfHeight}`);
+    return null;
+  }
+
+  const newDoc = await PDFDocument.create();
+  const [copied] = await newDoc.copyPages(sourceDoc, [pageIndex]);
+  newDoc.addPage(copied);
+
+  copied.setMediaBox(cropPdfX, cropPdfY, cropPdfWidth, cropPdfHeight);
+  copied.setCropBox(cropPdfX, cropPdfY, cropPdfWidth, cropPdfHeight);
+
+  const bytes = await newDoc.save();
+  return Buffer.from(bytes).toString('base64');
+}
+
+// Produces a single-page PDF cropped to a sub-region of the source page.
+// cropBox uses normalized 0-1 coordinates with y measured from the TOP of the
+// page (y_pct_start=0 = top edge, y_pct_end=1 = bottom edge). pdf-lib's
+// internal coordinate system has its origin at the bottom-left, so we flip
+// the y axis when computing the box.
+async function croppedPagePdfBase64(sourceDoc, pageIndex, cropBox) {
+  const newDoc = await PDFDocument.create();
+  const [copied] = await newDoc.copyPages(sourceDoc, [pageIndex]);
+  newDoc.addPage(copied);
+
+  const { width, height } = copied.getSize();
+  const cropX = cropBox.x_pct_start * width;
+  const cropY = (1 - cropBox.y_pct_end) * height;
+  const cropWidth = (cropBox.x_pct_end - cropBox.x_pct_start) * width;
+  const cropHeight = (cropBox.y_pct_end - cropBox.y_pct_start) * height;
+
+  copied.setMediaBox(cropX, cropY, cropWidth, cropHeight);
+  copied.setCropBox(cropX, cropY, cropWidth, cropHeight);
+
   const bytes = await newDoc.save();
   return Buffer.from(bytes).toString('base64');
 }
