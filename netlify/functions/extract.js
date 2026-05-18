@@ -2,6 +2,11 @@
 // pdf-parse 2.x: PDFParse class with getText() returning per-page text.
 // pdf-lib: copies selected pages into a fresh PDF for the targeted call.
 const { PDFDocument } = require('pdf-lib');
+// pdf-parse 2.x depends on pdfjs-dist which needs DOMMatrix/Path2D/ImageData
+// polyfills. pdf-parse provides its own CanvasFactory under /worker for
+// environments like Netlify Functions where @napi-rs/canvas can't be
+// installed. Import it and pass into every PDFParse constructor.
+const { CanvasFactory } = require('pdf-parse/worker');
 const { PDFParse } = require('pdf-parse');
 
 // ── PAGE-DETECTION MARKERS ──────────────────────────────────────────────────
@@ -28,7 +33,7 @@ const MAX_FALLBACK_PAGES = 30;
 // ── HELPER: extract text from each page of a PDF buffer ─────────────────────
 // Returns an array of strings, one per page (page 1 at index 0).
 async function getPageTexts(buffer) {
-  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
   try {
     const result = await parser.getText();
     // result.pages is [{num, text}, ...] sorted by page number.
@@ -300,7 +305,7 @@ async function renderAllPagesAsImages(buffer, maxPages) {
   // getInfo is lightweight — doesn't render anything.
   let totalPages = null;
   try {
-    const peekParser = new PDFParse({ data: new Uint8Array(buffer) });
+    const peekParser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
     const info = await peekParser.getInfo();
     // pdf-parse 2.x returns page count under `total`.
     totalPages = info.total || null;
@@ -316,7 +321,7 @@ async function renderAllPagesAsImages(buffer, maxPages) {
     );
   }
 
-  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
   try {
     const options = { scale: 0.5 };
     if (maxPages) options.first = maxPages;
