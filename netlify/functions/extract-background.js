@@ -29,6 +29,16 @@ console.log('[extract-background] module loading (line 1)');
 // @netlify/blobs: persistence layer for job status, read by result.js
 const { PDFDocument } = require('pdf-lib');
 console.log('[extract-background] pdf-lib loaded');
+// pdf-parse 2.x depends on pdfjs-dist which needs DOMMatrix/Path2D/ImageData
+// polyfills that Node.js doesn't provide. The library can load @napi-rs/canvas
+// for these, but that package doesn't bundle into Lambda environments without
+// a special layer. pdf-parse ships its own CanvasFactory under the /worker
+// export specifically for environments like Netlify Functions where the
+// canvas package isn't available. Importing it before pdf-parse is loaded
+// and passing it into every PDFParse() constructor avoids the DOMMatrix
+// crash entirely.
+const { CanvasFactory } = require('pdf-parse/worker');
+console.log('[extract-background] pdf-parse worker (CanvasFactory) loaded');
 const { PDFParse } = require('pdf-parse');
 console.log('[extract-background] pdf-parse loaded');
 const { getStore } = require('@netlify/blobs');
@@ -101,7 +111,7 @@ const MAX_FALLBACK_PAGES = 30;
 // ── HELPER: extract text from each page of a PDF buffer ─────────────────────
 // Returns an array of strings, one per page (page 1 at index 0).
 async function getPageTexts(buffer) {
-  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
   try {
     const result = await parser.getText();
     // result.pages is [{num, text}, ...] sorted by page number.
@@ -373,7 +383,7 @@ async function renderAllPagesAsImages(buffer, maxPages) {
   // getInfo is lightweight — doesn't render anything.
   let totalPages = null;
   try {
-    const peekParser = new PDFParse({ data: new Uint8Array(buffer) });
+    const peekParser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
     const info = await peekParser.getInfo();
     // pdf-parse 2.x returns page count under `total`.
     totalPages = info.total || null;
@@ -389,7 +399,7 @@ async function renderAllPagesAsImages(buffer, maxPages) {
     );
   }
 
-  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
   try {
     const options = { scale: 0.5 };
     if (maxPages) options.first = maxPages;
