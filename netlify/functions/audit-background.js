@@ -541,8 +541,33 @@ exports.handler = async function (event) {
     return { statusCode: 400 };
   }
 
-  const payloadStore = getStore(blobsConfig('audit-payloads'));
+  // ===== PERMANENT BOUNDARY — shared payload store =====
+  // The audit reads the PDF from `extraction-payloads`, the SAME blob store
+  // the extractor's submit.js writes to, keyed by the SAME jobId. This is the
+  // Keeva end-state pattern: one upload stores the PDF once; every analysis
+  // stage (extraction, audit, compliance) reads it back by jobId. Do not
+  // change this to a private store — the shared store IS the integration.
+  //
+  // Results are written to `audit-results` — a per-stage result store. Each
+  // analysis stage keeps its own result record under the jobId; Keeva reads
+  // each stage's results separately and composes the unified report.
+  const payloadStore = getStore(blobsConfig('extraction-payloads'));
   const resultsStore = getStore(blobsConfig('audit-results'));
+
+  // ===== PERMANENT BOUNDARY — audit input contract =====
+  // Invocation body carries the audit PARAMETERS (small): the handoff mapper
+  // computed these from the extraction result. The PDF itself is NOT in the
+  // body — it's read from the shared extraction-payloads store by jobId.
+  //   body: { jobId, formId, buyerCount, sellerCount, sellerEntity?, buyerEntity? }
+  // This is the contract Keeva will call: store PDF once, then invoke the
+  // audit with the jobId + the mapper's parameters.
+  const {
+    formId: bodyFormId,
+    buyerCount: bodyBuyerCount,
+    sellerCount: bodySellerCount,
+    sellerEntity: bodySellerEntity,
+    buyerEntity: bodyBuyerEntity,
+  } = body;
 
   let payload;
   try {
@@ -558,16 +583,22 @@ exports.handler = async function (event) {
   }
 
   if (!payload) {
-    console.error(`[audit-background] jobId=${jobId} payload not found in blob store`);
+    console.error(`[audit-background] jobId=${jobId} payload not found in extraction-payloads store`);
     await resultsStore.setJSON(jobId, {
       status: 'error',
       completedAt: Date.now(),
-      error: 'Payload not found in blob storage',
+      error: 'Payload not found in extraction-payloads store. Was the PDF uploaded via submit?',
     });
     return { statusCode: 404 };
   }
 
-  const { pdfBase64, formId, buyerCount = 1, sellerCount = 1 } = payload;
+  // The shared payload stores the PDF as documents[] (extraction's submit.js
+  // shape: { documents: [{ data, label }], prompt_override }). The audited
+  // contract is the first document — same convention extraction uses.
+  const pdfBase64 = payload.documents && payload.documents[0] && payload.documents[0].data;
+  const formId = bodyFormId;
+  const buyerCount = bodyBuyerCount || 1;
+  const sellerCount = bodySellerCount || 1;
 
   await resultsStore.setJSON(jobId, {
     status: 'pending',
@@ -575,7 +606,7 @@ exports.handler = async function (event) {
     formId,
   });
 
-  console.log(`[audit-background] jobId=${jobId} started for formId=${formId}`);
+  console.log(`[audit-background] jobId=${jobId} started for formId=${formId} buyers=${buyerCount} sellers=${sellerCount}`);
 
   try {
     if (!pdfBase64 || !formId) throw new Error('Payload missing pdfBase64 or formId');
@@ -655,12 +686,16 @@ exports.handler = async function (event) {
   }
 };
 
+// ===== PERMANENT BOUNDARY — payload lifecycle =====
+// No-op by design. The PDF payload lives in the SHARED extraction-payloads
+// store, which extraction owns. Extraction's own submit/background flow plus
+// the store's TTL handle deletion. The audit is a READER of that shared
+// payload — it must never delete a blob it doesn't own, or it could destroy
+// the PDF before another stage (compliance, or a re-run) needs it.
+// Kept as a function (not removed) so existing call sites need no changes.
 async function cleanupPayload(payloadStore, jobId) {
-  try {
-    await payloadStore.delete(jobId);
-  } catch (err) {
-    console.error(`[audit-background] jobId=${jobId} failed to delete payload:`, err.message);
-  }
+  // intentionally does nothing — see comment above
+  return;
 }
 
 // ===== Text utilities =====
