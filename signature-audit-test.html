@@ -109,6 +109,23 @@
   .chk-flag-fine { background: #e2e0da; color: var(--muted); }
   .chk-reason { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .tier-empty { font-size: 12px; color: var(--hint); padding: 6px 0; }
+  /* Holistic audit result */
+  .status-banner { padding: 12px 14px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 500; }
+  .status-complete { background: var(--green-light); color: var(--green-text); border: 1px solid #bfe0d0; }
+  .status-issues_found { background: var(--danger-light); color: var(--danger); border: 1px solid #e8c4be; }
+  .status-needs_review { background: var(--warning-light); color: var(--warning); border: 1px solid #f0d98a; }
+  .finding-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; border-radius: var(--radius-sm); margin-bottom: 4px; font-size: 13px; }
+  .finding-missing { background: var(--danger-light); border: 1px solid #e8c4be; }
+  .finding-qc_flag { background: var(--warning-light); border: 1px solid #f0d98a; }
+  .finding-review { background: var(--bg); border: 1px solid var(--border); }
+  .finding-sev { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 2px 8px; border-radius: 10px; flex-shrink: 0; }
+  .sev-missing { background: var(--danger); color: #fff; }
+  .sev-qc_flag { background: var(--warning); color: #fff; }
+  .sev-review { background: #e2e0da; color: var(--muted); }
+  .finding-body { flex: 1; }
+  .finding-loc { font-weight: 600; }
+  .finding-detail { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .prose-block { font-size: 13px; line-height: 1.62; color: var(--text); white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; }
   .audit-loc { flex: 1; }
   .audit-reason { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .summary-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -159,15 +176,8 @@
     <!-- SCAFFOLDING: manual override -->
     <div class="override-panel" id="override-panel">
       <div class="override-title">⚙ Manual override (validation scaffolding)</div>
-      <div class="override-note">Pre-filled with the mapper's output. Correct any value the mapper got wrong, then re-run the audit. Overrides are logged so we can measure how reliable the handoff is.</div>
+      <div class="override-note">Pre-filled with the mapper's buyer/seller counts. Correct either if the mapper got it wrong, then re-run — the counts are baked into the audit prompt. Overrides are logged so we can measure handoff reliability.</div>
       <div class="override-row">
-        <div class="field">
-          <label>Form</label>
-          <select id="ov-form">
-            <option value="CAR-RPA-1225">CAR-RPA-1225</option>
-            <option value="AD-BUYER-1224">AD-BUYER-1224</option>
-          </select>
-        </div>
         <div class="field">
           <label>Buyers</label>
           <input type="number" id="ov-buyers" min="1" max="4" value="1">
@@ -181,19 +191,20 @@
     </div>
   </div>
 
-  <!-- STEP 4: AUDIT RESULT — two tiers -->
+  <!-- STEP 4: AUDIT RESULT — holistic -->
   <div class="card stage" id="stage-audit">
     <div class="card-label">Step 4 — Signature audit result</div>
 
-    <!-- TIER 1 — verified verdicts -->
-    <div class="tier-header">Tier 1 — Verified <span class="tier-sub">signatures the audit checked and stands behind</span></div>
-    <div class="summary-bar" id="tier1-summary"></div>
-    <div id="tier1-attention"></div>
+    <!-- overall status banner -->
+    <div id="audit-status-banner"></div>
 
-    <!-- TIER 2 — guided review checklist -->
-    <div class="tier-header" style="margin-top:20px;">Tier 2 — Confirmation checklist <span class="tier-sub">initials — a human confirms each; the audit triages your attention</span></div>
-    <div class="summary-bar" id="tier2-summary"></div>
-    <div id="tier2-checklist"></div>
+    <!-- structured findings -->
+    <div class="tier-header" style="margin-top:16px;">Findings <span class="tier-sub">missing signatures, QC flags, and spots to review</span></div>
+    <div id="audit-findings"></div>
+
+    <!-- full prose audit -->
+    <div class="tier-header" style="margin-top:20px;">Full audit <span class="tier-sub">the complete reasoning, document by document</span></div>
+    <div id="audit-prose"></div>
   </div>
 
   <footer>Keeva signature audit — validation harness</footer>
@@ -272,7 +283,6 @@ $('rerun-btn').addEventListener('click', async () => {
     await submitChain({
       documents: lastDocuments,
       overrides: {
-        formId: $('ov-form').value,
         buyerCount: parseInt($('ov-buyers').value, 10),
         sellerCount: parseInt($('ov-sellers').value, 10),
       },
@@ -367,7 +377,6 @@ function renderMapper(mapped) {
   });
 
   // Pre-fill the override controls with the mapper's values.
-  if (mapped.formId) $('ov-form').value = mapped.formId;
   $('ov-buyers').value = mapped.buyerCount || 1;
   $('ov-sellers').value = mapped.sellerCount || 1;
 
@@ -409,13 +418,6 @@ async function pollChain(jobId) {
       showStatus('Chain error' + (data.stage ? ' at ' + data.stage : '') + ': ' + (data.error || ''), 'error');
       return;
     }
-    if (data.status === 'needs_override') {
-      // Mapper couldn't classify the form — show what we have and prompt.
-      if (data.extraction && !extractionShown) { renderExtraction(data.extraction); extractionShown = true; }
-      if (data.mapped && !mapperShown) { renderMapper(data.mapped); mapperShown = true; }
-      showStatus(data.message || 'Form could not be classified — set it via override below and re-run.', 'error');
-      return;
-    }
 
     // Pending — show which stage we're in.
     const stage = data.stage || 'queued';
@@ -431,136 +433,69 @@ async function pollChain(jobId) {
   showStatus('Chain timed out after 8 minutes.', 'error');
 }
 
-// ---- Render: audit result — two tiers --------------------------------------
+// ---- Render: holistic audit result -----------------------------------------
 function renderAudit(result) {
   if (!result) { showStatus('Audit returned no result object.', 'error'); return; }
-  const sum = result.summary || {};
-  const t1 = sum.tier1 || { total: 0, passed: 0, attention: [] };
-  const t2 = sum.tier2 || { total: 0, lookHere: 0, likelyFine: 0, items: [] };
 
-  // ===== TIER 1 — verified verdicts =====
-  const t1bar = $('tier1-summary');
-  t1bar.innerHTML = '';
-  const t1chips = [
-    [t1.passed + ' verified', 'ok'],
-    [(t1.attention.length) + ' need attention', t1.attention.length ? 'warn' : 'ok'],
-  ];
-  t1chips.forEach(([txt, kind]) => {
-    const chip = document.createElement('span');
-    chip.className = 'summary-chip';
-    chip.textContent = txt;
-    t1bar.appendChild(chip);
-  });
+  // The envelope: { phase, audit:{prose,structured}, extracted, reconciled }
+  const audit = result.audit || {};
+  const prose = audit.prose || '';
+  const structured = audit.structured || null;
 
-  const t1box = $('tier1-attention');
-  t1box.innerHTML = '';
-  if (!t1.attention.length) {
-    t1box.innerHTML = '<div class="tier-empty">All Tier 1 signature checks passed — nothing flagged.</div>';
+  // ===== overall status banner =====
+  const banner = $('audit-status-banner');
+  banner.innerHTML = '';
+  const status = (structured && structured.overall_status) || 'needs_review';
+  const div = document.createElement('div');
+  div.className = 'status-banner status-' + status;
+  const label = {
+    complete: '\u2713 Complete — every required signature and initial is present',
+    issues_found: '\u26a0 Issues found — a required signature or initial is missing',
+    needs_review: '\u26a0 Needs review — some items could not be auto-determined',
+  }[status] || status;
+  const summaryLine = structured && structured.summary ? '  ·  ' + structured.summary : '';
+  div.textContent = label + summaryLine;
+  banner.appendChild(div);
+
+  // ===== structured findings =====
+  const fbox = $('audit-findings');
+  fbox.innerHTML = '';
+  const findings = (structured && Array.isArray(structured.findings)) ? structured.findings : [];
+  if (!structured) {
+    fbox.innerHTML = '<div class="tier-empty">The audit returned prose only — structured findings unavailable for this run. See the full audit below.</div>';
+  } else if (!findings.length) {
+    fbox.innerHTML = '<div class="tier-empty">No missing signatures, QC flags, or review items. Packet looks clean.</div>';
   } else {
-    t1.attention.forEach((r) => {
-      const row = document.createElement('div');
-      row.className = 'audit-row';
-      const pill = document.createElement('span');
-      const st = r.status || 'error';
-      pill.className = 'pill pill-' + (st === 'not_applicable' ? 'na' : st);
-      pill.textContent = st === 'not_applicable' ? 'n/a' : (st === 'needs_review' ? 'review' : st);
-      const loc = document.createElement('div');
-      loc.className = 'audit-loc';
-      loc.innerHTML = '<div>' + escapeHtml(r.locationId || '?') + ' — ' + escapeHtml(r.party || '') +
-        ' <span style="color:var(--hint)">(p' + (r.page || '?') + ')</span></div>' +
-        (r.reasoning ? '<div class="audit-reason">' + escapeHtml(r.reasoning) + '</div>' : '');
-      row.appendChild(pill);
-      row.appendChild(loc);
-      t1box.appendChild(row);
-    });
+    // Order: missing first, then qc_flag, then review.
+    const order = { missing: 0, qc_flag: 1, review: 2 };
+    findings.slice().sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9))
+      .forEach((f) => {
+        const row = document.createElement('div');
+        const sev = f.severity || 'review';
+        row.className = 'finding-row finding-' + sev;
+        const sevTag = document.createElement('span');
+        sevTag.className = 'finding-sev sev-' + sev;
+        sevTag.textContent = sev === 'qc_flag' ? 'QC' : sev;
+        const body = document.createElement('div');
+        body.className = 'finding-body';
+        body.innerHTML =
+          '<div class="finding-loc">' + escapeHtml(f.location || '?') + ' — ' + escapeHtml(f.issue || '') + '</div>' +
+          (f.detail ? '<div class="finding-detail">' + escapeHtml(f.detail) + '</div>' : '');
+        row.appendChild(sevTag);
+        row.appendChild(body);
+        fbox.appendChild(row);
+      });
   }
 
-  // ===== TIER 2 — guided review checklist =====
-  const t2bar = $('tier2-summary');
-  t2bar.innerHTML = '';
-  // Headline = ONLY genuinely-triaged suspicious items (look_here). Footer
-  // skim items are not counted here — they are a routine skim, not an alarm.
-  const headline = document.createElement('span');
-  headline.className = 'summary-chip';
-  headline.style.cssText = 'background:var(--warning-light);border-color:#f0d98a;color:var(--warning);font-weight:600;';
-  headline.textContent = t2.lookHere + ' need a careful look';
-  t2bar.appendChild(headline);
-  const fineChip = document.createElement('span');
-  fineChip.className = 'summary-chip';
-  fineChip.textContent = t2.likelyFine + ' clause initials look clean';
-  t2bar.appendChild(fineChip);
-  const routineChip = document.createElement('span');
-  routineChip.className = 'summary-chip';
-  routineChip.textContent = t2.routine + ' footer initials to skim';
-  t2bar.appendChild(routineChip);
-
-  const t2box = $('tier2-checklist');
-  t2box.innerHTML = '';
-
-  function renderChkRow(r) {
-    const row = document.createElement('div');
-    row.className = 'chk-row chk-' + (r.reviewPriority || 'look_here');
-    const pg = document.createElement('div');
-    pg.className = 'chk-page';
-    pg.textContent = 'p' + (r.page || '?');
-    const body = document.createElement('div');
-    body.className = 'chk-body';
-    const typeLabel = initialsTypeLabel(r.locationId);
-    const sideLabel = r.party ? (' — ' + r.party) : '';
-    let line = '<div><strong>' + escapeHtml(typeLabel) + '</strong>' + escapeHtml(sideLabel) + '</div>';
-    if (r.reasoning) {
-      line += '<div class="chk-reason">' + escapeHtml(r.reasoning) + '</div>';
-    } else if (typeof r.foundCount === 'number' && typeof r.expectedCount === 'number') {
-      line += '<div class="chk-reason">counted ' + r.foundCount + ', expected ' + r.expectedCount + '</div>';
-    }
-    body.innerHTML = line;
-    const flag = document.createElement('span');
-    if (r.reviewPriority === 'look_here') {
-      flag.className = 'chk-flag chk-flag-look'; flag.textContent = 'look here';
-    } else if (r.reviewPriority === 'routine') {
-      flag.className = 'chk-flag chk-flag-routine'; flag.textContent = 'skim';
-    } else {
-      flag.className = 'chk-flag chk-flag-fine'; flag.textContent = 'glance';
-    }
-    row.appendChild(pg); row.appendChild(body); row.appendChild(flag);
-    return row;
-  }
-
-  if (!t2.items.length) {
-    t2box.innerHTML = '<div class="tier-empty">No initials locations found to review.</div>';
-  } else {
-    // Group 1 — triaged clause initials (look_here + likely_fine). Page-ordered.
-    const reviewItems = t2.items.filter((r) => r.reviewPriority === 'look_here' || r.reviewPriority === 'likely_fine');
-    // Group 2 — routine footer-initial skim. Page-ordered.
-    const routineItems = t2.items.filter((r) => r.reviewPriority === 'routine');
-
-    if (reviewItems.length) {
-      const lbl = document.createElement('div');
-      lbl.className = 'chk-group-label';
-      lbl.textContent = 'Clause initials — review (liquidated damages, arbitration, final page)';
-      t2box.appendChild(lbl);
-      reviewItems.forEach((r) => t2box.appendChild(renderChkRow(r)));
-    }
-    if (routineItems.length) {
-      const lbl = document.createElement('div');
-      lbl.className = 'chk-group-label';
-      lbl.textContent = 'Footer initials — routine page-by-page skim';
-      t2box.appendChild(lbl);
-      routineItems.forEach((r) => t2box.appendChild(renderChkRow(r)));
-    }
-  }
+  // ===== full prose audit =====
+  const pbox = $('audit-prose');
+  pbox.innerHTML = '';
+  const pre = document.createElement('div');
+  pre.className = 'prose-block';
+  pre.textContent = prose || '(no prose returned)';
+  pbox.appendChild(pre);
 
   $('stage-audit').classList.add('visible');
-}
-
-// Friendly label for an initials locationId.
-function initialsTypeLabel(id) {
-  id = id || '';
-  if (id.startsWith('footer_initials_')) return 'Footer initials';
-  if (id.startsWith('final_page_initials_')) return 'Final-page initials';
-  if (id.startsWith('liquidated_damages_initials_')) return 'Liquidated damages initials';
-  if (id.startsWith('arbitration_of_disputes_initials_')) return 'Arbitration initials';
-  return id;
 }
 
 function escapeHtml(s) {
