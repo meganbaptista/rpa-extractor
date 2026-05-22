@@ -89,6 +89,23 @@
   .pill-needs_review { background: var(--warning-light); color: var(--warning); }
   .pill-na { background: #efefec; color: var(--muted); }
   .pill-error { background: var(--danger-light); color: var(--danger); }
+  .pill-matches_signer { background: var(--green-light); color: var(--green-text); }
+  .pill-matches_entity { background: var(--danger-light); color: var(--danger); }
+  .pill-matches_other { background: var(--danger-light); color: var(--danger); }
+  /* Tier section headers */
+  .tier-header { font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 600; color: #0f1e12; margin-bottom: 8px; }
+  .tier-sub { font-weight: 400; font-size: 12px; color: var(--muted); }
+  /* Tier 2 checklist rows — look_here is loud, likely_fine is quiet */
+  .chk-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 4px; font-size: 13px; }
+  .chk-look_here { background: var(--warning-light); border: 1px solid #f0d98a; }
+  .chk-likely_fine { background: var(--bg); border: 1px solid var(--border); opacity: 0.78; }
+  .chk-page { font-family: 'DM Mono', monospace; font-weight: 500; font-size: 12px; min-width: 46px; color: var(--text); }
+  .chk-body { flex: 1; }
+  .chk-flag { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 10px; }
+  .chk-flag-look { background: var(--warning); color: #fff; }
+  .chk-flag-fine { background: #e2e0da; color: var(--muted); }
+  .chk-reason { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .tier-empty { font-size: 12px; color: var(--hint); padding: 6px 0; }
   .audit-loc { flex: 1; }
   .audit-reason { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .summary-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -161,11 +178,19 @@
     </div>
   </div>
 
-  <!-- STEP 4: AUDIT RESULT -->
+  <!-- STEP 4: AUDIT RESULT — two tiers -->
   <div class="card stage" id="stage-audit">
     <div class="card-label">Step 4 — Signature audit result</div>
-    <div class="summary-bar" id="audit-summary"></div>
-    <div id="audit-results"></div>
+
+    <!-- TIER 1 — verified verdicts -->
+    <div class="tier-header">Tier 1 — Verified <span class="tier-sub">signatures the audit checked and stands behind</span></div>
+    <div class="summary-bar" id="tier1-summary"></div>
+    <div id="tier1-attention"></div>
+
+    <!-- TIER 2 — guided review checklist -->
+    <div class="tier-header" style="margin-top:20px;">Tier 2 — Confirmation checklist <span class="tier-sub">initials — a human confirms each; the audit triages your attention</span></div>
+    <div class="summary-bar" id="tier2-summary"></div>
+    <div id="tier2-checklist"></div>
   </div>
 
   <footer>Keeva signature audit — validation harness</footer>
@@ -403,41 +428,119 @@ async function pollChain(jobId) {
   showStatus('Chain timed out after 8 minutes.', 'error');
 }
 
-// ---- Render: audit result --------------------------------------------------
+// ---- Render: audit result — two tiers --------------------------------------
 function renderAudit(result) {
   if (!result) { showStatus('Audit returned no result object.', 'error'); return; }
   const sum = result.summary || {};
-  const bar = $('audit-summary');
-  bar.innerHTML = '';
-  [['present', sum.present], ['absent', sum.absent], ['unclear', sum.unclear],
-   ['needs_review', sum.needs_review],
-   ['not_applicable', sum.not_applicable], ['error', sum.error]].forEach(([k, v]) => {
-    if (!v) return;
+  const t1 = sum.tier1 || { total: 0, passed: 0, attention: [] };
+  const t2 = sum.tier2 || { total: 0, lookHere: 0, likelyFine: 0, items: [] };
+
+  // ===== TIER 1 — verified verdicts =====
+  const t1bar = $('tier1-summary');
+  t1bar.innerHTML = '';
+  const t1chips = [
+    [t1.passed + ' verified', 'ok'],
+    [(t1.attention.length) + ' need attention', t1.attention.length ? 'warn' : 'ok'],
+  ];
+  t1chips.forEach(([txt, kind]) => {
     const chip = document.createElement('span');
     chip.className = 'summary-chip';
-    chip.textContent = k + ': ' + v;
-    bar.appendChild(chip);
+    chip.textContent = txt;
+    t1bar.appendChild(chip);
   });
 
-  const box = $('audit-results');
-  box.innerHTML = '';
-  (result.results || []).forEach((r) => {
-    const row = document.createElement('div');
-    row.className = 'audit-row';
-    const pill = document.createElement('span');
-    const st = r.status || 'error';
-    pill.className = 'pill pill-' + (st === 'not_applicable' ? 'na' : st);
-    pill.textContent = st === 'not_applicable' ? 'n/a' : (st === 'needs_review' ? 'review' : st);
-    const loc = document.createElement('div');
-    loc.className = 'audit-loc';
-    loc.innerHTML = '<div>' + (r.locationId || '?') + ' — ' + (r.party || '') +
-      ' <span style="color:var(--hint)">(p' + (r.page || '?') + ')</span></div>' +
-      (r.reasoning ? '<div class="audit-reason">' + escapeHtml(r.reasoning) + '</div>' : '');
-    row.appendChild(pill);
-    row.appendChild(loc);
-    box.appendChild(row);
-  });
+  const t1box = $('tier1-attention');
+  t1box.innerHTML = '';
+  if (!t1.attention.length) {
+    t1box.innerHTML = '<div class="tier-empty">All Tier 1 signature checks passed — nothing flagged.</div>';
+  } else {
+    t1.attention.forEach((r) => {
+      const row = document.createElement('div');
+      row.className = 'audit-row';
+      const pill = document.createElement('span');
+      const st = r.status || 'error';
+      pill.className = 'pill pill-' + (st === 'not_applicable' ? 'na' : st);
+      pill.textContent = st === 'not_applicable' ? 'n/a' : (st === 'needs_review' ? 'review' : st);
+      const loc = document.createElement('div');
+      loc.className = 'audit-loc';
+      loc.innerHTML = '<div>' + escapeHtml(r.locationId || '?') + ' — ' + escapeHtml(r.party || '') +
+        ' <span style="color:var(--hint)">(p' + (r.page || '?') + ')</span></div>' +
+        (r.reasoning ? '<div class="audit-reason">' + escapeHtml(r.reasoning) + '</div>' : '');
+      row.appendChild(pill);
+      row.appendChild(loc);
+      t1box.appendChild(row);
+    });
+  }
+
+  // ===== TIER 2 — guided review checklist =====
+  const t2bar = $('tier2-summary');
+  t2bar.innerHTML = '';
+  // The triage headline: how many spots actually need a careful look.
+  const headline = document.createElement('span');
+  headline.className = 'summary-chip';
+  headline.style.cssText = 'background:var(--warning-light);border-color:#f0d98a;color:var(--warning);font-weight:600;';
+  headline.textContent = t2.lookHere + ' need a careful look';
+  t2bar.appendChild(headline);
+  const fineChip = document.createElement('span');
+  fineChip.className = 'summary-chip';
+  fineChip.textContent = t2.likelyFine + ' quick glance';
+  t2bar.appendChild(fineChip);
+
+  const t2box = $('tier2-checklist');
+  t2box.innerHTML = '';
+  if (!t2.items.length) {
+    t2box.innerHTML = '<div class="tier-empty">No initials locations found to review.</div>';
+  } else {
+    // Already page-ordered by the server. Render in document order.
+    t2.items.forEach((r) => {
+      const row = document.createElement('div');
+      row.className = 'chk-row chk-' + (r.reviewPriority || 'look_here');
+
+      const pg = document.createElement('div');
+      pg.className = 'chk-page';
+      pg.textContent = 'p' + (r.page || '?');
+
+      const body = document.createElement('div');
+      body.className = 'chk-body';
+      const typeLabel = initialsTypeLabel(r.locationId);
+      const sideLabel = r.party ? (' — ' + r.party) : '';
+      let line = '<div><strong>' + escapeHtml(typeLabel) + '</strong>' + escapeHtml(sideLabel) + '</div>';
+      // count info if present
+      if (typeof r.foundCount === 'number' && typeof r.expectedCount === 'number') {
+        line += '<div class="chk-reason">counted ' + r.foundCount + ', expected ' + r.expectedCount +
+          (r.confidence ? ' · ' + escapeHtml(r.confidence) + ' confidence' : '') + '</div>';
+      } else if (r.reasoning) {
+        line += '<div class="chk-reason">' + escapeHtml(r.reasoning) + '</div>';
+      }
+      body.innerHTML = line;
+
+      const flag = document.createElement('span');
+      if (r.reviewPriority === 'look_here') {
+        flag.className = 'chk-flag chk-flag-look';
+        flag.textContent = 'look here';
+      } else {
+        flag.className = 'chk-flag chk-flag-fine';
+        flag.textContent = 'glance';
+      }
+
+      row.appendChild(pg);
+      row.appendChild(body);
+      row.appendChild(flag);
+      t2box.appendChild(row);
+    });
+  }
+
   $('stage-audit').classList.add('visible');
+}
+
+// Friendly label for an initials locationId.
+function initialsTypeLabel(id) {
+  id = id || '';
+  if (id.startsWith('footer_initials_')) return 'Footer initials';
+  if (id.startsWith('final_page_initials_')) return 'Final-page initials';
+  if (id.startsWith('liquidated_damages_initials_')) return 'Liquidated damages initials';
+  if (id.startsWith('arbitration_of_disputes_initials_')) return 'Arbitration initials';
+  return id;
 }
 
 function escapeHtml(s) {
