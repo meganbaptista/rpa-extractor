@@ -8,26 +8,34 @@
 // orchestration.
 //
 // It is FAST and SYNCHRONOUS — it must return in well under a second so it
-// never hits the Netlify proxy timeout (~26s). It does four things and stops:
-//   1. Store the PDF in the SHARED extraction-payloads store under a jobId
-//      (PERMANENT pattern — same store the real extractor's submit.js uses)
+// never hits the Netlify proxy timeout. It does four things and stops:
+//   1. ASSEMBLE the uploaded chunks (uploaded separately via audit-chunk.js)
+//      into the final PDF payload, stored in the SHARED extraction-payloads
+//      store under the jobId.
 //   2. Write a `pending` record to audit-results so audit-status has something
-//      to return immediately
+//      to return immediately.
 //   3. Fire-and-forget invoke audit-orchestrator-background (the long-running
-//      extraction -> mapper -> audit chain runs THERE, with a 15-min ceiling)
-//   4. Return { jobId } to the caller
+//      extraction -> mapper -> audit chain runs THERE).
+//   4. Return { jobId } to the caller.
 //
-// The test page then polls audit-status?jobId=... for stage progress and the
-// final audit result.
-//
-// WHY THIS SHAPE: an earlier version of this file ran the whole chain inline
-// and blocked 30-180s — the Netlify proxy killed it at ~26s and returned an
-// HTML timeout page, which broke the caller's JSON parse. Long-running work
-// MUST live in a -background function. This mirrors the extractor's proven
-// submit/poll/background split.
 // ----------------------------------------------------------------------------
-// PERMANENT within this file : the shared-payload-store write (step 1)
-// SCAFFOLDING                : this endpoint existing; the override pass-through
+// CHUNKED UPLOAD (why this changed):
+// Netlify buffered synchronous functions have a 6 MB request limit, and Netlify
+// Base64-encodes binary bodies (~30% overhead) so the EFFECTIVE binary ceiling
+// is ~4.5 MB. Real contract packets exceed that. So the PDF is NO LONGER sent
+// in this function's request body. Instead:
+//   - The browser splits the PDF's base64 string into <limit pieces and POSTs
+//     them to audit-chunk.js, which stores them at chunk:{uploadId}:{n}.
+//   - This function receives just an `uploadId`, reads the chunk pieces back,
+//     concatenates the base64 strings (lossless — they are slices of one
+//     original base64 string), and writes the assembled payload under jobId.
+//
+// This is the throwaway adapter layer. On a future AWS/S3 move (presigned
+// uploads, no size ceiling) the chunk dance is deleted and this function goes
+// back to a direct payload reference.
+//
+// PERMANENT within this file : the shared-payload-store write, the job-start
+// SCAFFOLDING                : this endpoint existing; chunk assembly; override
 // ----------------------------------------------------------------------------
 
 const { getStore } = require('@netlify/blobs');
@@ -61,29 +69,66 @@ exports.handler = async function (event) {
 
   try {
     const body = event.body ? JSON.parse(event.body) : {};
-    if (!body.documents || !Array.isArray(body.documents) || body.documents.length === 0) {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: 'No documents provided' }) };
+
+    // ----- New chunked-upload path: body carries an uploadId, not documents.
+    const { uploadId, totalChunks } = body;
+    if (!uploadId || typeof uploadId !== 'string') {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing uploadId — chunks must be uploaded via audit-chunk first' }) };
+    }
+    if (typeof totalChunks !== 'number' || totalChunks < 1) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing or invalid totalChunks' }) };
     }
 
     const jobId = crypto.randomUUID();
     const now = new Date().toISOString();
 
-    // SCAFFOLDING: manual overrides from the test page (may be absent). Passed
-    // straight through to the orchestrator, which applies them over the
-    // handoff mapper's output.
+    // SCAFFOLDING: manual overrides from the test page (may be absent).
     const overrides = body.overrides || {};
 
-    // ----- Step 1: PERMANENT pattern — store the PDF once in the SHARED
-    // extraction-payloads store. This is the exact store + key convention the
-    // real extractor's submit.js uses, so extraction can read it too.
     const payloadStore = getStore(blobsConfig('extraction-payloads'));
+
+    // ----- Step 1: ASSEMBLE the uploaded chunks into the final PDF base64.
+    // Read chunk:{uploadId}:0 .. chunk:{uploadId}:{totalChunks-1} and
+    // concatenate their `data` strings in index order.
+    let assembledBase64 = '';
+    let label = 'contract';
+    for (let i = 0; i < totalChunks; i++) {
+      const chunkKey = `chunk:${uploadId}:${i}`;
+      let chunk;
+      try {
+        chunk = await payloadStore.get(chunkKey, { type: 'json' });
+      } catch (e) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: `Failed to read chunk ${i}: ${e.message}` }) };
+      }
+      if (!chunk || typeof chunk.data !== 'string') {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: `Chunk ${i} of ${totalChunks} is missing — upload incomplete` }) };
+      }
+      assembledBase64 += chunk.data;
+      if (chunk.label) label = chunk.label;
+    }
+
+    if (!assembledBase64) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Assembled payload is empty' }) };
+    }
+    console.log(`[audit-submit] jobId=${jobId} assembled ${totalChunks} chunks -> ${assembledBase64.length} b64 chars`);
+
+    // Write the assembled payload under jobId — the exact shape the extractor's
+    // submit.js produces, so extraction can read it: { documents:[{data,label}] }.
     await payloadStore.setJSON(jobId, {
-      documents: body.documents,
+      documents: [{ data: assembledBase64, label }],
       prompt_override: body.prompt_override || null,
     });
 
-    // ----- Step 2: write a pending record to audit-results so audit-status
-    // returns something meaningful the instant the test page starts polling.
+    // ----- Step 1b: clean up the temp chunk keys (best-effort).
+    for (let i = 0; i < totalChunks; i++) {
+      try {
+        await payloadStore.delete(`chunk:${uploadId}:${i}`);
+      } catch (e) {
+        console.warn(`[audit-submit] could not delete chunk ${i}: ${e.message}`);
+      }
+    }
+
+    // ----- Step 2: write a pending record to audit-results.
     const resultsStore = getStore(blobsConfig('audit-results'));
     await resultsStore.setJSON(jobId, {
       status: 'pending',
@@ -93,7 +138,6 @@ exports.handler = async function (event) {
     });
 
     // ----- Step 3: fire-and-forget the orchestrator background function.
-    // We await only the initial 202 (invocation accepted), NOT the chain.
     const proto = event.headers['x-forwarded-proto'] || 'https';
     const host = event.headers.host;
     const orchestratorUrl = proto + '://' + host + '/.netlify/functions/audit-orchestrator-background';
