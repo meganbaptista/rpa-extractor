@@ -254,32 +254,36 @@ $('rerun-btn').addEventListener('click', async () => {
 });
 
 async function submitChain(payload) {
+  // Submit is now fast — it returns { jobId } in under a second and the
+  // orchestrator runs the chain in the background. Everything (extraction,
+  // mapper, audit) is observed by polling audit-status.
   const resp = await fetch(SUBMIT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await resp.json();
 
-  if (data.stage === 'extraction' && (data.status === 'failed' || data.status === 'timeout')) {
-    showStatus('Extraction ' + data.status + ': ' + (data.error || ''), 'error');
+  // Defensive: if a proxy/edge error ever returns HTML, surface it cleanly
+  // instead of throwing an opaque JSON parse error.
+  const raw = await resp.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    showStatus('Submit returned a non-JSON response (' + resp.status + '). First bytes: ' + raw.slice(0, 60), 'error');
     $('run-btn').disabled = false;
     return;
   }
 
-  // Render extraction + mapper stages if present
-  if (data.extraction) renderExtraction(data.extraction);
-  if (data.mapped) renderMapper(data.mapped);
-
-  if (data.status === 'needs_override') {
-    showStatus(data.message || 'Form could not be classified — set it via override below.', 'error');
+  if (!resp.ok || !data.jobId) {
+    showStatus('Submit failed: ' + (data.error || resp.status), 'error');
     $('run-btn').disabled = false;
     return;
   }
 
-  // Audit was invoked — poll audit-status for the result.
-  showStatus('Extraction done. Running signature audit...', 'running');
-  await pollAudit(data.jobId);
+  // Poll audit-status — it carries stage progress and, eventually, the result.
+  showStatus('Submitted. Running extraction → mapper → audit...', 'running');
+  await pollChain(data.jobId);
   $('run-btn').disabled = false;
 }
 
@@ -341,22 +345,61 @@ function renderMapper(mapped) {
   $('stage-mapper').classList.add('visible');
 }
 
-// ---- Poll audit-status -----------------------------------------------------
-async function pollAudit(jobId) {
-  const MAX = 100; // ~5 min at 3s
+// ---- Poll audit-status through the whole chain -----------------------------
+// One loop observes every stage. The orchestrator writes stage progress into
+// audit-results; audit-background writes the final result there. We render
+// each stage's data the first time we see it.
+async function pollChain(jobId) {
+  const MAX = 160; // ~8 min at 3s — covers extraction (slow) + audit
+  let extractionShown = false;
+  let mapperShown = false;
+
   for (let i = 0; i < MAX; i++) {
     await new Promise((r) => setTimeout(r, 3000));
+
     let data;
     try {
       const resp = await fetch(STATUS_URL + '?jobId=' + encodeURIComponent(jobId));
-      data = await resp.json();
-    } catch (e) { continue; }
+      const raw = await resp.text();
+      data = JSON.parse(raw);
+    } catch (e) {
+      continue; // transient — keep polling
+    }
 
-    if (data.status === 'complete') { renderAudit(data.result); showStatus('Audit complete.', 'ok'); return; }
-    if (data.status === 'error') { showStatus('Audit error: ' + (data.error || ''), 'error'); return; }
-    showStatus('Running signature audit... (' + ((i + 1) * 3) + 's)', 'running');
+    // Render extraction + mapper as soon as the orchestrator has written them.
+    if (data.extraction && !extractionShown) { renderExtraction(data.extraction); extractionShown = true; }
+    if (data.mapped && !mapperShown) { renderMapper(data.mapped); mapperShown = true; }
+
+    // Terminal states.
+    if (data.status === 'complete') {
+      renderAudit(data.result);
+      showStatus('Audit complete.', 'ok');
+      return;
+    }
+    if (data.status === 'error') {
+      showStatus('Chain error' + (data.stage ? ' at ' + data.stage : '') + ': ' + (data.error || ''), 'error');
+      return;
+    }
+    if (data.status === 'needs_override') {
+      // Mapper couldn't classify the form — show what we have and prompt.
+      if (data.extraction && !extractionShown) { renderExtraction(data.extraction); extractionShown = true; }
+      if (data.mapped && !mapperShown) { renderMapper(data.mapped); mapperShown = true; }
+      showStatus(data.message || 'Form could not be classified — set it via override below and re-run.', 'error');
+      return;
+    }
+
+    // Pending — show which stage we're in.
+    const stage = data.stage || 'queued';
+    const elapsed = (i + 1) * 3;
+    const label = {
+      queued: 'Queued...',
+      extraction: 'Running extraction (~30-60s)...',
+      mapper: 'Running handoff mapper...',
+      audit: 'Running signature audit...',
+    }[stage] || ('Working (' + stage + ')...');
+    showStatus(label + ' (' + elapsed + 's)', 'running');
   }
-  showStatus('Audit timed out after 5 minutes.', 'error');
+  showStatus('Chain timed out after 8 minutes.', 'error');
 }
 
 // ---- Render: audit result --------------------------------------------------
