@@ -99,6 +99,9 @@
   .chk-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 4px; font-size: 13px; }
   .chk-look_here { background: var(--warning-light); border: 1px solid #f0d98a; }
   .chk-likely_fine { background: var(--bg); border: 1px solid var(--border); opacity: 0.78; }
+  .chk-routine { background: var(--surface); border: 1px solid var(--border); opacity: 0.7; }
+  .chk-flag-routine { background: #e2e0da; color: var(--muted); }
+  .chk-group-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 14px 0 6px; }
   .chk-page { font-family: 'DM Mono', monospace; font-weight: 500; font-size: 12px; min-width: 46px; color: var(--text); }
   .chk-body { flex: 1; }
   .chk-flag { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 10px; }
@@ -475,7 +478,8 @@ function renderAudit(result) {
   // ===== TIER 2 — guided review checklist =====
   const t2bar = $('tier2-summary');
   t2bar.innerHTML = '';
-  // The triage headline: how many spots actually need a careful look.
+  // Headline = ONLY genuinely-triaged suspicious items (look_here). Footer
+  // skim items are not counted here — they are a routine skim, not an alarm.
   const headline = document.createElement('span');
   headline.className = 'summary-chip';
   headline.style.cssText = 'background:var(--warning-light);border-color:#f0d98a;color:var(--warning);font-weight:600;';
@@ -483,51 +487,67 @@ function renderAudit(result) {
   t2bar.appendChild(headline);
   const fineChip = document.createElement('span');
   fineChip.className = 'summary-chip';
-  fineChip.textContent = t2.likelyFine + ' quick glance';
+  fineChip.textContent = t2.likelyFine + ' clause initials look clean';
   t2bar.appendChild(fineChip);
+  const routineChip = document.createElement('span');
+  routineChip.className = 'summary-chip';
+  routineChip.textContent = t2.routine + ' footer initials to skim';
+  t2bar.appendChild(routineChip);
 
   const t2box = $('tier2-checklist');
   t2box.innerHTML = '';
+
+  function renderChkRow(r) {
+    const row = document.createElement('div');
+    row.className = 'chk-row chk-' + (r.reviewPriority || 'look_here');
+    const pg = document.createElement('div');
+    pg.className = 'chk-page';
+    pg.textContent = 'p' + (r.page || '?');
+    const body = document.createElement('div');
+    body.className = 'chk-body';
+    const typeLabel = initialsTypeLabel(r.locationId);
+    const sideLabel = r.party ? (' — ' + r.party) : '';
+    let line = '<div><strong>' + escapeHtml(typeLabel) + '</strong>' + escapeHtml(sideLabel) + '</div>';
+    if (r.reasoning) {
+      line += '<div class="chk-reason">' + escapeHtml(r.reasoning) + '</div>';
+    } else if (typeof r.foundCount === 'number' && typeof r.expectedCount === 'number') {
+      line += '<div class="chk-reason">counted ' + r.foundCount + ', expected ' + r.expectedCount + '</div>';
+    }
+    body.innerHTML = line;
+    const flag = document.createElement('span');
+    if (r.reviewPriority === 'look_here') {
+      flag.className = 'chk-flag chk-flag-look'; flag.textContent = 'look here';
+    } else if (r.reviewPriority === 'routine') {
+      flag.className = 'chk-flag chk-flag-routine'; flag.textContent = 'skim';
+    } else {
+      flag.className = 'chk-flag chk-flag-fine'; flag.textContent = 'glance';
+    }
+    row.appendChild(pg); row.appendChild(body); row.appendChild(flag);
+    return row;
+  }
+
   if (!t2.items.length) {
     t2box.innerHTML = '<div class="tier-empty">No initials locations found to review.</div>';
   } else {
-    // Already page-ordered by the server. Render in document order.
-    t2.items.forEach((r) => {
-      const row = document.createElement('div');
-      row.className = 'chk-row chk-' + (r.reviewPriority || 'look_here');
+    // Group 1 — triaged clause initials (look_here + likely_fine). Page-ordered.
+    const reviewItems = t2.items.filter((r) => r.reviewPriority === 'look_here' || r.reviewPriority === 'likely_fine');
+    // Group 2 — routine footer-initial skim. Page-ordered.
+    const routineItems = t2.items.filter((r) => r.reviewPriority === 'routine');
 
-      const pg = document.createElement('div');
-      pg.className = 'chk-page';
-      pg.textContent = 'p' + (r.page || '?');
-
-      const body = document.createElement('div');
-      body.className = 'chk-body';
-      const typeLabel = initialsTypeLabel(r.locationId);
-      const sideLabel = r.party ? (' — ' + r.party) : '';
-      let line = '<div><strong>' + escapeHtml(typeLabel) + '</strong>' + escapeHtml(sideLabel) + '</div>';
-      // count info if present
-      if (typeof r.foundCount === 'number' && typeof r.expectedCount === 'number') {
-        line += '<div class="chk-reason">counted ' + r.foundCount + ', expected ' + r.expectedCount +
-          (r.confidence ? ' · ' + escapeHtml(r.confidence) + ' confidence' : '') + '</div>';
-      } else if (r.reasoning) {
-        line += '<div class="chk-reason">' + escapeHtml(r.reasoning) + '</div>';
-      }
-      body.innerHTML = line;
-
-      const flag = document.createElement('span');
-      if (r.reviewPriority === 'look_here') {
-        flag.className = 'chk-flag chk-flag-look';
-        flag.textContent = 'look here';
-      } else {
-        flag.className = 'chk-flag chk-flag-fine';
-        flag.textContent = 'glance';
-      }
-
-      row.appendChild(pg);
-      row.appendChild(body);
-      row.appendChild(flag);
-      t2box.appendChild(row);
-    });
+    if (reviewItems.length) {
+      const lbl = document.createElement('div');
+      lbl.className = 'chk-group-label';
+      lbl.textContent = 'Clause initials — review (liquidated damages, arbitration, final page)';
+      t2box.appendChild(lbl);
+      reviewItems.forEach((r) => t2box.appendChild(renderChkRow(r)));
+    }
+    if (routineItems.length) {
+      const lbl = document.createElement('div');
+      lbl.className = 'chk-group-label';
+      lbl.textContent = 'Footer initials — routine page-by-page skim';
+      t2box.appendChild(lbl);
+      routineItems.forEach((r) => t2box.appendChild(renderChkRow(r)));
+    }
   }
 
   $('stage-audit').classList.add('visible');
