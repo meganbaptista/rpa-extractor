@@ -109,7 +109,7 @@ const SCHEMAS = {
       "count_side": "buyer",
       "crop_anchor": {
         "text": "Buyer's Initials",
-        "match_index": 0,
+        "match_index": -1,
         "offset_in": { "x_start": 1.0, "x_end": 3.4, "y_start": -0.28, "y_end": 0.28 }
       },
       "notes": "COUNT CHECK: produces ONE check per page, not one per party. Counts distinct sets of initials in the buyer initials region and compares to the transaction's buyer count. crop_anchor anchors on the 'Buyer's Initials' label text so it crops correctly on every page including the final sheet (where the initials sit mid-page, not in the footer). The region extends generously right of the label to capture initials written beside the two printed slots when 3+ buyers sign. parties[] is retained as documentation only — it no longer drives a per-party fan-out."
@@ -132,7 +132,7 @@ const SCHEMAS = {
       "count_side": "seller",
       "crop_anchor": {
         "text": "Seller's Initials",
-        "match_index": 0,
+        "match_index": -1,
         "offset_in": { "x_start": 1.0, "x_end": 3.4, "y_start": -0.28, "y_end": 0.28 }
       },
       "notes": "COUNT CHECK: produces ONE check per page. Counts distinct sets of initials in the seller initials region and compares to the transaction's seller count. On 3-trustee deals the third initial is written beside the two printed slots — the generous region captures it. crop_anchor anchors on the 'Seller's Initials' label so it crops correctly on every page including the final sheet."
@@ -1266,7 +1266,16 @@ async function singlePagePdfBase64(sourceDoc, pageIndex) {
 // Handles cases where anchor text is split across multiple PDF text items
 // on the same line; respects line breaks (won't combine across lines).
 async function findAnchorPosition(pdfBytes, pageIndex, anchorText, matchIndex = 0) {
-  const normalize = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  // Normalize: lowercase, collapse whitespace, AND fold typographic quotes to
+  // ASCII. PDF text layers routinely use curly apostrophes (U+2019) and curly
+  // quotes; schema anchor text is typed with straight ASCII ones. Without this
+  // fold, "Buyer's Initials" (schema) never matches "Buyer’s Initials" (PDF).
+  const normalize = (s) => (s || '')
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
   const target = normalize(anchorText);
   if (!target) return null;
 
@@ -1327,9 +1336,14 @@ async function findAnchorPosition(pdfBytes, pageIndex, anchorText, matchIndex = 
       return { x, y, width, height };
     }
 
-    const match = matches[matchIndex];
+    // match_index -1 means "last match on the page". The footer "Buyer's
+    // Initials" line is always the last such string on a page (some pages also
+    // have in-body "Buyer's Initials" prompts in the arbitration / liquidated-
+    // damages sections, which appear earlier).
+    const resolvedIndex = matchIndex < 0 ? matches.length + matchIndex : matchIndex;
+    const match = matches[resolvedIndex];
     if (!match) {
-      console.log(`[findAnchorPosition] page ${pageIndex + 1} "${anchorText}" NOT FOUND (${matches.length} match candidates)`);
+      console.log(`[findAnchorPosition] page ${pageIndex + 1} "${anchorText}" NOT FOUND (${matches.length} match candidates, wanted index ${matchIndex})`);
       return null;
     }
 
