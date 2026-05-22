@@ -326,6 +326,24 @@ exports.handler = async function (event) {
   }
 
   try {
+    // ----- Step 0: give the audit its OWN copy of the PDF ------------------
+    // PERMANENT BOUNDARY — payload ownership.
+    // audit-submit wrote the PDF to extraction-payloads (shared). But the real
+    // extractor's extract-background DELETES extraction-payloads when it
+    // finishes — so by the time audit-background runs, the shared copy is
+    // gone. We copy the PDF into audit-payloads (a store the audit owns end to
+    // end) BEFORE invoking extraction. audit-background reads from
+    // audit-payloads and deletes that copy when it's done. No collision with
+    // the extractor's cleanup.
+    const extractionPayloadStore = getStore(blobsConfig('extraction-payloads'));
+    const auditPayloadStore = getStore(blobsConfig('audit-payloads'));
+    const sharedPayload = await extractionPayloadStore.get(jobId, { type: 'json' });
+    if (!sharedPayload) {
+      throw new Error('PDF payload not found in extraction-payloads — audit-submit did not store it, or it expired.');
+    }
+    await auditPayloadStore.setJSON(jobId, sharedPayload);
+    console.log(`[audit-orchestrator] jobId=${jobId} copied PDF into audit-payloads`);
+
     // ----- Step 1: invoke extraction (existing extract-background) ----------
     await writeStage('extraction');
     console.log(`[audit-orchestrator] jobId=${jobId} invoking extraction`);
