@@ -541,23 +541,23 @@ exports.handler = async function (event) {
     return { statusCode: 400 };
   }
 
-  // ===== PERMANENT BOUNDARY — shared payload store =====
-  // The audit reads the PDF from `extraction-payloads`, the SAME blob store
-  // the extractor's submit.js writes to, keyed by the SAME jobId. This is the
-  // Keeva end-state pattern: one upload stores the PDF once; every analysis
-  // stage (extraction, audit, compliance) reads it back by jobId. Do not
-  // change this to a private store — the shared store IS the integration.
+  // ===== PERMANENT BOUNDARY — payload store =====
+  // The audit reads the PDF from `audit-payloads` — a store the audit owns
+  // end to end. The orchestrator copies the PDF here (from extraction-payloads)
+  // BEFORE extraction runs, because the real extractor deletes
+  // extraction-payloads when it finishes. Reading from our own store means the
+  // extractor's cleanup can't pull the PDF out from under us.
   //
-  // Results are written to `audit-results` — a per-stage result store. Each
-  // analysis stage keeps its own result record under the jobId; Keeva reads
-  // each stage's results separately and composes the unified report.
-  const payloadStore = getStore(blobsConfig('extraction-payloads'));
+  // Results go to `audit-results` — a per-stage result store. Keeva reads each
+  // stage's results separately and composes the unified report.
+  const payloadStore = getStore(blobsConfig('audit-payloads'));
   const resultsStore = getStore(blobsConfig('audit-results'));
 
   // ===== PERMANENT BOUNDARY — audit input contract =====
   // Invocation body carries the audit PARAMETERS (small): the handoff mapper
   // computed these from the extraction result. The PDF itself is NOT in the
-  // body — it's read from the shared extraction-payloads store by jobId.
+  // body — it's read from the audit-payloads store by jobId (the orchestrator
+  // copied it there before extraction ran).
   //   body: { jobId, formId, buyerCount, sellerCount, sellerEntity?, buyerEntity? }
   // This is the contract Keeva will call: store PDF once, then invoke the
   // audit with the jobId + the mapper's parameters.
@@ -583,11 +583,11 @@ exports.handler = async function (event) {
   }
 
   if (!payload) {
-    console.error(`[audit-background] jobId=${jobId} payload not found in extraction-payloads store`);
+    console.error(`[audit-background] jobId=${jobId} payload not found in audit-payloads store`);
     await resultsStore.setJSON(jobId, {
       status: 'error',
       completedAt: Date.now(),
-      error: 'Payload not found in extraction-payloads store. Was the PDF uploaded via submit?',
+      error: 'Payload not found in audit-payloads store. The orchestrator should have copied the PDF here before extraction ran.',
     });
     return { statusCode: 404 };
   }
@@ -687,15 +687,18 @@ exports.handler = async function (event) {
 };
 
 // ===== PERMANENT BOUNDARY — payload lifecycle =====
-// No-op by design. The PDF payload lives in the SHARED extraction-payloads
-// store, which extraction owns. Extraction's own submit/background flow plus
-// the store's TTL handle deletion. The audit is a READER of that shared
-// payload — it must never delete a blob it doesn't own, or it could destroy
-// the PDF before another stage (compliance, or a re-run) needs it.
-// Kept as a function (not removed) so existing call sites need no changes.
+// Deletes the audit's OWN payload copy from the audit-payloads store. The
+// orchestrator copied the PDF into audit-payloads before extraction ran; the
+// audit owns that copy, so the audit deletes it when finished. This does NOT
+// touch extraction-payloads (the extractor owns that). Best-effort — if the
+// delete fails it's harmless, the store's TTL will evict the blob anyway.
 async function cleanupPayload(payloadStore, jobId) {
-  // intentionally does nothing — see comment above
-  return;
+  try {
+    await payloadStore.delete(jobId);
+    console.log(`[audit-background] jobId=${jobId} deleted audit-payloads copy`);
+  } catch (err) {
+    console.warn(`[audit-background] jobId=${jobId} payload cleanup failed (non-fatal): ${err.message}`);
+  }
 }
 
 // ===== Text utilities =====
