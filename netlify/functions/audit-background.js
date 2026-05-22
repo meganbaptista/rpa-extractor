@@ -4,19 +4,491 @@
 // Receives ONLY {jobId} in the request body. Reads PDF payload from the
 // audit-payloads blob store, runs the audit, writes results to audit-results,
 // deletes the payload when done.
+//
+// ---------------------------------------------------------------------------
+// INFRASTRUCTURE NOTES (why this file looks the way it does):
+//
+// 1. pdf-parse 2.x needs the CanvasFactory polyfill (DOMMatrix/Path2D/etc).
+//    Without it the module crashes at load time with "DOMMatrix is not
+//    defined" — a 500 with zero logs. We import CanvasFactory from
+//    'pdf-parse/worker' and pass it into every PDFParse constructor.
+//
+// 2. pdfjs-dist 5.x (bundled by pdf-parse) is ESM-only — there is no
+//    legacy/build/pdf.js CommonJS file. We load the .mjs build via a lazy
+//    dynamic import() the first time findAnchorPosition needs it.
+//
+// 3. Schemas are INLINED below, not require()'d from ./schemas/. Netlify
+//    bundles each function in isolation and does not reliably include
+//    sibling files — a cross-file require is a load-time crash.
+//
+// 4. Module-load checkpoint logs below: if the function ever fails to start,
+//    the last checkpoint printed tells you exactly which import died.
+// ---------------------------------------------------------------------------
+
+console.log('[audit-background] module loading (line 1)');
 
 const { PDFDocument } = require('pdf-lib');
-const pdfParse = require('pdf-parse');
-const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+console.log('[audit-background] pdf-lib loaded');
+
+// pdf-parse 2.x: PDFParse class + CanvasFactory polyfill. CanvasFactory MUST
+// be imported (and passed to every constructor) or pdf-parse crashes on load.
+const { CanvasFactory } = require('pdf-parse/worker');
+console.log('[audit-background] pdf-parse/worker (CanvasFactory) loaded');
+const { PDFParse } = require('pdf-parse');
+console.log('[audit-background] pdf-parse loaded');
+
 const { getStore } = require('@netlify/blobs');
+console.log('[audit-background] @netlify/blobs loaded');
+
+// pdfjs-dist is ESM-only in the version pdf-parse bundles. We can't require()
+// it from CommonJS; we load it lazily via dynamic import() and cache it.
+// Only findAnchorPosition uses it (it needs per-text-item coordinates, which
+// pdf-parse's getText() does not expose).
+let _pdfjsLib = null;
+async function getPdfjs() {
+  if (!_pdfjsLib) {
+    _pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  }
+  return _pdfjsLib;
+}
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-sonnet-4-20250514';
 
+// --- Signature schemas (inlined — see infrastructure note 3 above) ----------
 const SCHEMAS = {
-  'CAR-RPA-1225': require('./schemas/CAR-RPA-1225.json'),
-  'AD-BUYER-1224': require('./schemas/AD-BUYER-1224.json'),
+  'CAR-RPA-1225': JSON.parse(`{
+  "form_id": "CAR-RPA-1225",
+  "form_name": "California Residential Purchase Agreement",
+  "car_revision": "12/25",
+  "active": true,
+  "detection": {
+    "footer_patterns": [
+      "RPA REVISED 12/25",
+      "RPA Revised 12/25",
+      "32. OFFER",
+      "PROPERTY ADDENDA AND ADVISORIES",
+      "EXPIRATION OF OFFER",
+      "Property Address:"
+    ]
+  },
+  "typical_page_count": 17,
+  "notes": "Page count varies by paragraphs and addenda included. All signature locations identified by text anchor, not page number, so the schema is resilient to CAR revisions, page reordering, brokerage page injection, and counter-offer appendages.",
+  "audit_conventions": {
+    "page_resolution": "Each signature_location specifies a page_anchor — text patterns that identify the target page(s). The runtime extracts text from each PDF page and matches anchors against extracted text. Anchors of type {any_of: [...]} match a page if any pattern appears on that page. Anchors of type {scope: 'all_form_pages', exclude_anchor: {...}} resolve to every page belonging to this form (via footer_patterns) minus pages matching the exclude_anchor.",
+    "filter_by_present_parties": "Runtime only checks signatures for parties whose names exist in the extracted offer data. If only one buyer was extracted, all Buyer 2 lines are skipped (not flagged as missing). Same for Seller 2, Listing Agent on buyer-side-only files, etc.",
+    "graceful_missing_line": "If the runtime cannot find the expected signature/initial/field line on a page (e.g., form variant), it returns 'not_applicable' rather than 'missing'.",
+    "phase_filtering": "Runtime detects contract state by examining the seller signature block on the page anchored by 'Printed name of SELLER:': empty = 'offer_only' (audit only phase=buyer_offer); filled = 'fully_executed' (audit all phases); 'Seller Counter Offer' checkbox checked = 'counter_pending' (audit buyer side and check the attached SCO form for seller signatures).",
+    "scenario_filtering": "Runtime detects entity scenarios during the same upfront detection call: (a) seller_is_entity if the Section 33B 'ENTITY SELLERS:' checkbox is checked OR the extracted seller name contains entity markers (LLC, Inc, Corp, Trust, etc.); (b) buyer_is_entity, same logic for Section 32B and buyer name. When entity scenario is active, signer names and entity name are extracted for downstream identity_match checks. Locations with scenario=null run regardless. Locations with scenario=seller_is_entity only run if seller is an entity.",
+    "crop_box": "Optional per-location field. When present, the runtime renders only the specified sub-region of the page before sending to Claude vision, instead of the full page. Coordinates are normalized 0-1 against the page media box, with y measured from the TOP (y_pct_start=0 means top edge, y_pct_end=1 means bottom edge). Used to narrow vision attention to small targets like footer initial slots where full-page rendering loses the signal.",
+    "mark_types": {
+      "signature": "Handwritten signature glyph or DocuSign-style image stamp. A typed/printed name in the line area without an actual signature mark counts as absent.",
+      "initial": "Handwritten initials or DocuSign initial stamp in the specified box.",
+      "date": "Date value present in the date field.",
+      "checkbox": "Checkbox marked with X, checkmark, or filled.",
+      "filled_text": "Text field labeled per description contains any content (not blank). Content is not validated for correctness.",
+      "identity_match": "For entity signatures: compare the visible signature mark against the extracted entity name and signer names. Returns matches_signer (correct), matches_entity (incorrect — flag), matches_other, or unclear."
+    }
+  },
+  "signature_locations": [
+    {
+      "id": "footer_initials_buyer_side",
+      "active": true,
+      "description": "Buyer footer initial boxes (bottom-left of page footer) on every body page of the form",
+      "page_anchor": {
+        "scope": "all_form_pages",
+        "exclude_anchor": { "any_of": ["Printed name of BUYER:"] }
+      },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "initial",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+     "crop_box": { "x_pct_start": 0.32, "x_pct_end": 0.63, "y_pct_start": 0.89, "y_pct_end": 0.96 },
+      "notes": "Excludes the signature page (which has no footer initial line). Most common missing-sig source. Cropped region targets just the buyer footer initial slots to give vision a high-signal target instead of the full page."
+    },
+    {
+      "id": "footer_initials_seller_side",
+      "active": true,
+      "description": "Seller footer initial boxes (bottom-right of page footer) on every body page of the form",
+      "page_anchor": {
+        "scope": "all_form_pages",
+        "exclude_anchor": { "any_of": ["Printed name of BUYER:"] }
+      },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "initial",
+      "requirement": "always",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": null,
+      "crop_box": { "x_pct_start": 0.62, "x_pct_end": 0.92, "y_pct_start": 0.89, "y_pct_end": 0.96 },
+      "notes": "Only audited once seller has signed OR Seller Counter Offer box is checked. Cropped region targets just the seller footer initial slots."
+    },
+    {
+      "id": "buyer_signature_block",
+      "description": "Buyer signature block in Section 32, labeled '(Signature) By,'",
+      "page_anchor": { "any_of": ["Printed name of BUYER:"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "buyer_signature_date",
+      "description": "Date field next to each buyer signature in Section 32",
+      "page_anchor": { "any_of": ["Printed name of BUYER:"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "date",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "seller_signature_block",
+      "description": "Seller signature block in Section 33, labeled '(Signature) By,'",
+      "page_anchor": { "any_of": ["Printed name of SELLER:"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": null,
+      "notes": "If Seller Counter Offer box is checked on this page, seller may sign via the attached SCO form instead — runtime checks the SCO if present."
+    },
+    {
+      "id": "seller_signature_date",
+      "description": "Date field next to each seller signature in Section 33",
+      "page_anchor": { "any_of": ["Printed name of SELLER:"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "date",
+      "requirement": "always",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "buyer_agent_signature_brokers_section",
+      "description": "Buyer's Agent signature line in the 'Real Estate Brokers Section'",
+      "page_anchor": { "any_of": ["REAL ESTATE BROKERS SECTION"] },
+      "parties": ["Buyer Agent"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": "Often missed because the brokers section is separate from buyer/seller signature blocks."
+    },
+    {
+      "id": "listing_agent_signature_brokers_section",
+      "description": "Listing Agent signature line in the 'Real Estate Brokers Section'",
+      "page_anchor": { "any_of": ["REAL ESTATE BROKERS SECTION"] },
+      "parties": ["Listing Agent"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": null,
+      "notes": "On buyer-side-only files (no listing agent name extracted), this is skipped via filter_by_present_parties."
+    },
+    {
+      "id": "final_page_initials_buyer_side",
+      "description": "Buyer initials between the Real Estate Brokers Section and the Escrow Acknowledgment",
+      "page_anchor": { "any_of": ["REAL ESTATE BROKERS SECTION", "ESCROW HOLDER ACKNOWLEDGMENT"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "initial",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": "Sandwiched between sections rather than at the page footer — easy to miss."
+    },
+    {
+      "id": "final_page_initials_seller_side",
+      "description": "Seller initials between the Real Estate Brokers Section and the Escrow Acknowledgment",
+      "page_anchor": { "any_of": ["REAL ESTATE BROKERS SECTION", "ESCROW HOLDER ACKNOWLEDGMENT"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "initial",
+      "requirement": "always",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "liquidated_damages_initials_buyer",
+      "description": "Buyer initials in Section 29 (Liquidated Damages)",
+      "page_anchor": { "any_of": ["LIQUIDATED DAMAGES (By initialing"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "initial",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": "If buyer initials this clause, the parties have elected liquidated damages and seller initials become required.",
+      "notes": "Commonly missed — initials are near the section header, not at the page footer."
+    },
+    {
+      "id": "liquidated_damages_initials_seller",
+      "description": "Seller initials in Section 29 (Liquidated Damages)",
+      "page_anchor": { "any_of": ["LIQUIDATED DAMAGES (By initialing"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "initial",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": "Required if buyer initialed liquidated_damages_initials_buyer.",
+      "notes": ""
+    },
+    {
+      "id": "arbitration_of_disputes_initials_buyer",
+      "description": "Buyer initials in Section 31 (Arbitration of Disputes)",
+      "page_anchor": { "any_of": ["ARBITRATION OF DISPUTES: A. The Parties"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "initial",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": "If buyer initials this clause, seller initials become required.",
+      "notes": ""
+    },
+    {
+      "id": "arbitration_of_disputes_initials_seller",
+      "description": "Seller initials in Section 31 (Arbitration of Disputes)",
+      "page_anchor": { "any_of": ["ARBITRATION OF DISPUTES: A. The Parties"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "initial",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": null,
+      "condition": "Required if buyer initialed arbitration_of_disputes_initials_buyer.",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_checkbox",
+      "description": "Section 32B 'ENTITY BUYERS:' checkbox",
+      "page_anchor": { "any_of": ["ENTITY BUYERS:"] },
+      "parties": ["Buyer 1"],
+      "mark_type": "checkbox",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is a non-individual entity (trust, corporation, LLC, partnership, etc.).",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_full_name",
+      "description": "Section 32B(2) 'Full entity name:' text field — must contain the entity's full legal name",
+      "page_anchor": { "any_of": ["ENTITY BUYERS:"] },
+      "parties": ["Buyer 1"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_signer_names",
+      "description": "Section 32B(4)(B) 'The name(s) of the Legally Authorized Signer(s) is/are' text field(s)",
+      "page_anchor": { "any_of": ["ENTITY BUYERS:"] },
+      "parties": ["Buyer 1"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_legally_authorized_checkbox",
+      "description": "Section 32D 'Printed Name of Legally Authorized Signer:' checkbox next to each buyer signature",
+      "page_anchor": { "any_of": ["Printed name of BUYER:"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "checkbox",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is an entity — signals that the printed name is the legally authorized signer.",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_title",
+      "description": "Section 32D 'Title, if applicable' text field next to each buyer signature (e.g., 'Trustee', 'Managing Member', 'President')",
+      "page_anchor": { "any_of": ["Printed name of BUYER:"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_buyer_signature_identity",
+      "description": "Verify the buyer signature glyph shows the human signer's name (e.g., 'Maria Fong'), not the entity name (e.g., 'Newkirk Family Trust')",
+      "page_anchor": { "any_of": ["Printed name of BUYER:"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "identity_match",
+      "requirement": "conditional",
+      "phase": "buyer_offer",
+      "scenario": "buyer_is_entity",
+      "condition": "Required when buyer is an entity — signature glyph must depict an authorized signer, not the entity itself.",
+      "notes": "Runtime supplies entity_name and signer_names from scenario detection for comparison."
+    },
+    {
+      "id": "entity_seller_checkbox",
+      "description": "Section 33B 'ENTITY SELLERS:' checkbox",
+      "page_anchor": { "any_of": ["ENTITY SELLERS:"] },
+      "parties": ["Seller 1"],
+      "mark_type": "checkbox",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is a non-individual entity (trust, corporation, LLC, partnership, etc.).",
+      "notes": ""
+    },
+    {
+      "id": "entity_seller_full_name",
+      "description": "Section 33B(2) 'Full entity name:' text field — must contain the entity's full legal name",
+      "page_anchor": { "any_of": ["ENTITY SELLERS:"] },
+      "parties": ["Seller 1"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_seller_signer_names",
+      "description": "Section 33B(4)(B) 'The name(s) of the Legally Authorized Signer(s) is/are' text field(s)",
+      "page_anchor": { "any_of": ["ENTITY SELLERS:"] },
+      "parties": ["Seller 1"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_seller_legally_authorized_checkbox",
+      "description": "Section 33D 'Printed Name of Legally Authorized Signer:' checkbox next to each seller signature",
+      "page_anchor": { "any_of": ["Printed name of SELLER:"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "checkbox",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is an entity — signals that the printed name is the legally authorized signer.",
+      "notes": ""
+    },
+    {
+      "id": "entity_seller_title",
+      "description": "Section 33D 'Title, if applicable' text field next to each seller signature (e.g., 'Trustee', 'Managing Member', 'President')",
+      "page_anchor": { "any_of": ["Printed name of SELLER:"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "filled_text",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is an entity.",
+      "notes": ""
+    },
+    {
+      "id": "entity_seller_signature_identity",
+      "description": "Verify the seller signature glyph shows the human signer's name (e.g., 'Maria Fong'), not the entity name (e.g., 'Newkirk Family Trust')",
+      "page_anchor": { "any_of": ["Printed name of SELLER:"] },
+      "parties": ["Seller 1", "Seller 2"],
+      "mark_type": "identity_match",
+      "requirement": "conditional",
+      "phase": "seller_acceptance",
+      "scenario": "seller_is_entity",
+      "condition": "Required when seller is an entity — signature glyph must depict an authorized signer, not the entity itself.",
+      "notes": "Runtime supplies entity_name and signer_names from scenario detection for comparison."
+    }
+  ]
+}
+`),
+  'AD-BUYER-1224': JSON.parse(`{
+  "form_id": "AD-BUYER-1224",
+  "form_name": "Disclosure Regarding Real Estate Agency Relationship (Buyer Side)",
+  "car_revision": "12/24",
+  "active": true,
+  "detection": {
+    "footer_patterns": ["AD REVISED 12/24"]
+  },
+  "typical_page_count": 2,
+  "notes": "Buyer-side schema. Seller-side AD is handled by a separate schema (AD-SELLER-1224 — not yet built). All signatures are on the first page; page 2 contains only Civil Code text and the form has no entity-related fields.",
+  "audit_conventions": {
+    "page_resolution": "Each signature_location specifies a page_anchor — text patterns that identify the target page(s). The runtime extracts text from each PDF page and matches anchors against extracted text.",
+    "filter_by_present_parties": "Runtime only checks signatures for parties whose names exist in the extracted offer data.",
+    "graceful_missing_line": "If the runtime cannot find the expected line/field on a page, it returns 'not_applicable' rather than 'missing'.",
+    "phase_filtering": "Not state-dependent on this form. Buyer and agent both sign at the same moment when the agent presents the form to the buyer, so all locations use phase=buyer_offer.",
+    "scenario_filtering": "The AD form has no entity-specific fields, so no scenario filtering applies."
+  },
+  "signature_locations": [
+    {
+      "id": "buyer_signature_block",
+      "description": "Buyer signature block on the acknowledgment page, in the section with the 'Buyer/Tenant' checkbox",
+      "page_anchor": { "any_of": ["I/WE ACKNOWLEDGE RECEIPT OF A COPY OF THIS DISCLOSURE"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "buyer_signature_date",
+      "description": "Date field next to each buyer signature on the acknowledgment page",
+      "page_anchor": { "any_of": ["I/WE ACKNOWLEDGE RECEIPT OF A COPY OF THIS DISCLOSURE"] },
+      "parties": ["Buyer 1", "Buyer 2"],
+      "mark_type": "date",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    },
+    {
+      "id": "agent_signature_block",
+      "description": "Agent signature on the acknowledgment page, above the line labeled 'Salesperson or Broker-Associate, if any'",
+      "page_anchor": { "any_of": ["Salesperson or Broker-Associate, if any"] },
+      "parties": ["Buyer Agent"],
+      "mark_type": "signature",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": "Watch for typed name vs actual signature glyph — a printed name in the line area without a signature mark should be flagged for review, not auto-cleared."
+    },
+    {
+      "id": "agent_signature_date",
+      "description": "Date field next to the buyer agent signature on the acknowledgment page",
+      "page_anchor": { "any_of": ["Salesperson or Broker-Associate, if any"] },
+      "parties": ["Buyer Agent"],
+      "mark_type": "date",
+      "requirement": "always",
+      "phase": "buyer_offer",
+      "scenario": null,
+      "condition": null,
+      "notes": ""
+    }
+  ]
+}
+`),
 };
+console.log('[audit-background] schemas inlined and parsed');
+console.log('[audit-background] module fully loaded, handler ready');
+
 
 function blobsConfig(name) {
   return {
@@ -215,7 +687,12 @@ async function extractPageText(pdfDoc, pageIndex) {
     const [copied] = await singleDoc.copyPages(pdfDoc, [pageIndex]);
     singleDoc.addPage(copied);
     const bytes = await singleDoc.save();
-    const result = await pdfParse(Buffer.from(bytes));
+    // pdf-parse 2.x: construct PDFParse with the data + CanvasFactory polyfill,
+    // then call getText(). The old 1.x `pdfParse(buffer)` function-call form
+    // does not exist in 2.x.
+    const parser = new PDFParse({ data: new Uint8Array(bytes), CanvasFactory });
+    const result = await parser.getText();
+    await parser.destroy();
     text = result.text || '';
   } catch (err) {
     console.error(`[extractPageText] page ${pageIndex + 1} pdf-parse FAILED:`, err.message);
@@ -647,6 +1124,8 @@ async function findAnchorPosition(pdfBytes, pageIndex, anchorText, matchIndex = 
 
   let pdfDoc;
   try {
+    // pdfjs-dist 5.x is ESM-only; loaded lazily via dynamic import and cached.
+    const pdfjsLib = await getPdfjs();
     const loadingTask = pdfjsLib.getDocument({
       data: new Uint8Array(pdfBytes),
       disableWorker: true,
@@ -769,28 +1248,6 @@ async function croppedPagePdfBase64ByAnchor(sourceDoc, sourcePdfBytes, pageIndex
   return Buffer.from(bytes).toString('base64');
 }
 
-// Produces a single-page PDF cropped to a sub-region of the source page.
-// cropBox uses normalized 0-1 coordinates with y measured from the TOP of the
-// page (y_pct_start=0 = top edge, y_pct_end=1 = bottom edge). pdf-lib's
-// internal coordinate system has its origin at the bottom-left, so we flip
-// the y axis when computing the box.
-async function croppedPagePdfBase64(sourceDoc, pageIndex, cropBox) {
-  const newDoc = await PDFDocument.create();
-  const [copied] = await newDoc.copyPages(sourceDoc, [pageIndex]);
-  newDoc.addPage(copied);
-
-  const { width, height } = copied.getSize();
-  const cropX = cropBox.x_pct_start * width;
-  const cropY = (1 - cropBox.y_pct_end) * height;
-  const cropWidth = (cropBox.x_pct_end - cropBox.x_pct_start) * width;
-  const cropHeight = (cropBox.y_pct_end - cropBox.y_pct_start) * height;
-
-  copied.setMediaBox(cropX, cropY, cropWidth, cropHeight);
-  copied.setCropBox(cropX, cropY, cropWidth, cropHeight);
-
-  const bytes = await newDoc.save();
-  return Buffer.from(bytes).toString('base64');
-}
 
 // Produces a single-page PDF cropped to a sub-region of the source page.
 // cropBox uses normalized 0-1 coordinates with y measured from the TOP of the
