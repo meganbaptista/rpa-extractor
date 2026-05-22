@@ -1533,11 +1533,27 @@ function classifyResult(r) {
     return { ...r, tier: 1 };
   }
 
-  // Tier 2 — derive reviewPriority per the confirmed rule.
-  // look_here  : count < expected, count > expected, low confidence,
-  //              a slot/area read empty (absent), or unclear/can't-tell.
-  // likely_fine: count == expected AND confidence not low AND no empty concern.
+  // ===== Tier 2 — guided review =====
   const status = r.status;
+
+  // FOOTER INITIALS: counting tiny initials on flattened PDFs is at the
+  // entropy limit (the crop cannot reliably capture a 3rd/4th overflow
+  // initial). So the footer check does NOT produce a pass/fail count verdict.
+  // It is a neutral "routine" skim row — a per-page pointer that says
+  // "confirm the initials on this page" — never a look_here alarm and never a
+  // false likely_fine clear. The model's observation is kept in `reasoning`
+  // as a hint, but the system does not assert a count.
+  if ((r.locationId || '').startsWith('footer_initials_')) {
+    if (status === 'not_applicable') {
+      return { ...r, tier: 2, reviewPriority: 'not_applicable' };
+    }
+    return { ...r, tier: 2, reviewPriority: 'routine' };
+  }
+
+  // CLAUSE INITIALS (liquidated damages, arbitration, final-page): these are
+  // fewer, larger, clause-anchored — the audit CAN triage them. Full rule:
+  // look_here  : count mismatch, low confidence, empty/absent, unclear.
+  // likely_fine: present + (count matched OR non-count) + confidence not low.
   const conf = (r.confidence || '').toLowerCase();
   let reviewPriority = 'look_here'; // default to caution
 
@@ -1547,16 +1563,12 @@ function classifyResult(r) {
     r.foundCount === r.expectedCount;
 
   if (status === 'not_applicable') {
-    // Region genuinely not on this page — not a review item at all.
     reviewPriority = 'not_applicable';
   } else if (status === 'present' && countMatched && conf !== 'low') {
     reviewPriority = 'likely_fine';
   } else if (status === 'present' && !r.countCheck && conf !== 'low') {
-    // A non-count initials check (e.g. a single-slot initial) that came back
-    // present with non-low confidence — quick glance.
     reviewPriority = 'likely_fine';
   } else {
-    // absent, needs_review, unclear, low confidence, count mismatch -> loud.
     reviewPriority = 'look_here';
   }
 
@@ -1586,9 +1598,15 @@ function summarize(results) {
       attention: [],    // absent, needs_review, unclear, matches_entity/other, error
     },
     tier2: {
-      // Guided-review checklist for initials. Page-ordered. Never auto-cleared.
+      // Guided-review for initials. Page-ordered. Never auto-cleared.
+      //  - routine    : footer initials — a neutral per-page skim pointer.
+      //                 No count verdict (the count is not reliable enough).
+      //  - lookHere   : clause initials (liq. damages / arbitration / final-
+      //                 page) the audit flagged as suspicious. The real triage.
+      //  - likelyFine : clause initials that looked clean.
       total: 0,
-      lookHere: 0,      // count of look_here items — the triage headline number
+      routine: 0,       // footer skim items — quiet, not a "needs careful look"
+      lookHere: 0,      // genuinely-triaged suspicious items — the headline number
       likelyFine: 0,
       items: [],        // page-ordered; each carries reviewPriority
     },
@@ -1629,6 +1647,7 @@ function summarize(results) {
         summary.tier2.items.push(item);
         if (r.reviewPriority === 'look_here') summary.tier2.lookHere += 1;
         else if (r.reviewPriority === 'likely_fine') summary.tier2.likelyFine += 1;
+        else if (r.reviewPriority === 'routine') summary.tier2.routine += 1;
       }
     } else {
       // Tier 1 — verdicts.
