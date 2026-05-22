@@ -658,10 +658,15 @@ exports.handler = async function (event) {
   (c) => runCheck(pdfDoc, pdfBytes, c, detection),
   5 // max 5 Claude calls in-flight at once — tune up/down based on rate-limit headroom
 );
-    const results = settled.map((r, i) => {
+    const rawResults = settled.map((r, i) => {
       if (r.status === 'fulfilled') return r.value;
       return { ...checks[i], status: 'error', error: r.reason?.message || String(r.reason) };
     });
+
+    // Honest V1 tiering: every result gets a tier + (for Tier 2) a review
+    // priority. Tier 1 = large/reliable marks the audit verdicts. Tier 2 =
+    // initials, which are surfaced for guided human review, never auto-cleared.
+    const results = rawResults.map(classifyResult);
 
     const output = {
       formId: schema.form_id,
@@ -1498,6 +1503,66 @@ function parseJsonResponse(text) {
 
 // ===== Summary =====
 
+// ===== Honest V1 tiering =====
+// Tier 1 = large, reliable marks the audit can VERDICT (signature blocks, agent
+//          signatures, signature dates, entity checkbox/name/signer fields,
+//          entity signature-identity).
+// Tier 2 = initials (footer, liquidated damages, arbitration, final-page /
+//          mid-page). These are SURFACED for guided human review — never
+//          auto-cleared. Each gets a reviewPriority so the TC's attention is
+//          triaged: look_here (loud) vs likely_fine (quick glance).
+//
+// A check is Tier 2 if its locationId names an initials location. Everything
+// else is Tier 1.
+function isInitialsLocation(locationId) {
+  const id = locationId || '';
+  return (
+    id.startsWith('footer_initials_') ||
+    id.startsWith('final_page_initials_') ||
+    id.startsWith('liquidated_damages_initials_') ||
+    id.startsWith('arbitration_of_disputes_initials_')
+  );
+}
+
+function classifyResult(r) {
+  const tier = isInitialsLocation(r.locationId) ? 2 : 1;
+
+  if (tier === 1) {
+    // Tier 1 keeps its verdict as-is. No reviewPriority — it's a verdict, not
+    // a guided-review item.
+    return { ...r, tier: 1 };
+  }
+
+  // Tier 2 — derive reviewPriority per the confirmed rule.
+  // look_here  : count < expected, count > expected, low confidence,
+  //              a slot/area read empty (absent), or unclear/can't-tell.
+  // likely_fine: count == expected AND confidence not low AND no empty concern.
+  const status = r.status;
+  const conf = (r.confidence || '').toLowerCase();
+  let reviewPriority = 'look_here'; // default to caution
+
+  const countMatched =
+    typeof r.foundCount === 'number' &&
+    typeof r.expectedCount === 'number' &&
+    r.foundCount === r.expectedCount;
+
+  if (status === 'not_applicable') {
+    // Region genuinely not on this page — not a review item at all.
+    reviewPriority = 'not_applicable';
+  } else if (status === 'present' && countMatched && conf !== 'low') {
+    reviewPriority = 'likely_fine';
+  } else if (status === 'present' && !r.countCheck && conf !== 'low') {
+    // A non-count initials check (e.g. a single-slot initial) that came back
+    // present with non-low confidence — quick glance.
+    reviewPriority = 'likely_fine';
+  } else {
+    // absent, needs_review, unclear, low confidence, count mismatch -> loud.
+    reviewPriority = 'look_here';
+  }
+
+  return { ...r, tier: 2, reviewPriority };
+}
+
 function summarize(results) {
   const summary = {
     present: 0,
@@ -1511,39 +1576,79 @@ function summarize(results) {
     matches_other: 0,
     missingItems: [],
     flaggedItems: [],
+
+    // ===== Honest V1 two-tier summary =====
+    tier1: {
+      // Verdicts the audit stands behind. counts + the items that did NOT
+      // cleanly pass (a TC reviews these as real findings).
+      total: 0,
+      passed: 0,        // present / matches_signer
+      attention: [],    // absent, needs_review, unclear, matches_entity/other, error
+    },
+    tier2: {
+      // Guided-review checklist for initials. Page-ordered. Never auto-cleared.
+      total: 0,
+      lookHere: 0,      // count of look_here items — the triage headline number
+      likelyFine: 0,
+      items: [],        // page-ordered; each carries reviewPriority
+    },
   };
 
   for (const r of results) {
     summary[r.status] = (summary[r.status] || 0) + 1;
 
-    // missingItems = everything a human must look at: a possible miss (absent),
-    // an ambiguous read (unclear), or a count anomaly (needs_review).
+    // Legacy fields (kept so nothing downstream breaks).
     if (r.status === 'absent' || r.status === 'unclear' || r.status === 'needs_review') {
       summary.missingItems.push({
-        page: r.page,
-        party: r.party,
-        markType: r.markType,
-        locationId: r.locationId,
-        status: r.status,
-        confidence: r.confidence,
-        reasoning: r.reasoning,
-        foundCount: r.foundCount,
-        expectedCount: r.expectedCount,
+        page: r.page, party: r.party, markType: r.markType, locationId: r.locationId,
+        status: r.status, confidence: r.confidence, reasoning: r.reasoning,
+        foundCount: r.foundCount, expectedCount: r.expectedCount,
+      });
+    }
+    if (r.status === 'matches_entity' || r.status === 'matches_other') {
+      summary.flaggedItems.push({
+        page: r.page, party: r.party, markType: r.markType, locationId: r.locationId,
+        status: r.status, confidence: r.confidence, reasoning: r.reasoning,
       });
     }
 
-    if (r.status === 'matches_entity' || r.status === 'matches_other') {
-      summary.flaggedItems.push({
-        page: r.page,
-        party: r.party,
-        markType: r.markType,
-        locationId: r.locationId,
-        status: r.status,
-        confidence: r.confidence,
-        reasoning: r.reasoning,
-      });
+    // ===== Two-tier classification =====
+    const item = {
+      page: r.page, party: r.party, markType: r.markType, locationId: r.locationId,
+      locationDescription: r.locationDescription,
+      status: r.status, confidence: r.confidence, reasoning: r.reasoning,
+      foundCount: r.foundCount, expectedCount: r.expectedCount,
+    };
+
+    if (r.tier === 2) {
+      summary.tier2.total += 1;
+      if (r.reviewPriority === 'not_applicable') {
+        // region not on this page — don't put it in the checklist at all
+      } else {
+        item.reviewPriority = r.reviewPriority;
+        summary.tier2.items.push(item);
+        if (r.reviewPriority === 'look_here') summary.tier2.lookHere += 1;
+        else if (r.reviewPriority === 'likely_fine') summary.tier2.likelyFine += 1;
+      }
+    } else {
+      // Tier 1 — verdicts.
+      summary.tier1.total += 1;
+      const passed = (r.status === 'present' || r.status === 'matches_signer');
+      if (passed) {
+        summary.tier1.passed += 1;
+      } else if (r.status !== 'not_applicable') {
+        // absent / needs_review / unclear / matches_entity / matches_other / error
+        summary.tier1.attention.push(item);
+      }
     }
   }
+
+  // Tier 2 checklist is page-ordered (document order) — that's how a TC moves
+  // through the PDF. look_here items are marked but NOT reordered to the top;
+  // the test page makes them visually louder in place.
+  summary.tier2.items.sort((a, b) => (a.page || 0) - (b.page || 0));
+  // Tier 1 attention list also page-ordered.
+  summary.tier1.attention.sort((a, b) => (a.page || 0) - (b.page || 0));
 
   return summary;
 }
