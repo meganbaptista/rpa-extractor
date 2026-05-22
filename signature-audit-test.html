@@ -86,6 +86,7 @@
   .pill-present { background: var(--green-light); color: var(--green-text); }
   .pill-absent { background: var(--danger-light); color: var(--danger); }
   .pill-unclear { background: var(--warning-light); color: var(--warning); }
+  .pill-needs_review { background: var(--warning-light); color: var(--warning); }
   .pill-na { background: #efefec; color: var(--muted); }
   .pill-error { background: var(--danger-light); color: var(--danger); }
   .audit-loc { flex: 1; }
@@ -409,6 +410,7 @@ function renderAudit(result) {
   const bar = $('audit-summary');
   bar.innerHTML = '';
   [['present', sum.present], ['absent', sum.absent], ['unclear', sum.unclear],
+   ['needs_review', sum.needs_review],
    ['not_applicable', sum.not_applicable], ['error', sum.error]].forEach(([k, v]) => {
     if (!v) return;
     const chip = document.createElement('span');
@@ -425,7 +427,7 @@ function renderAudit(result) {
     const pill = document.createElement('span');
     const st = r.status || 'error';
     pill.className = 'pill pill-' + (st === 'not_applicable' ? 'na' : st);
-    pill.textContent = st === 'not_applicable' ? 'n/a' : st;
+    pill.textContent = st === 'not_applicable' ? 'n/a' : (st === 'needs_review' ? 'review' : st);
     const loc = document.createElement('div');
     loc.className = 'audit-loc';
     loc.innerHTML = '<div>' + (r.locationId || '?') + ' — ' + (r.party || '') +
