@@ -215,10 +215,18 @@
 // VALIDATION SCAFFOLDING — test harness client logic.
 // ============================================================================
 const SUBMIT_URL = '/.netlify/functions/audit-submit';
+const CHUNK_URL = '/.netlify/functions/audit-chunk';
 const STATUS_URL = '/.netlify/functions/audit-status';
 
+// Chunk size: 3 MB of base64 per request. Netlify's effective binary upload
+// ceiling is ~4.5 MB (6 MB raw, minus ~30% for Netlify's own base64 wrapping).
+// 3 MB leaves comfortable headroom for JSON envelope + metadata — deliberately
+// NOT at the edge.
+const CHUNK_SIZE = 3 * 1024 * 1024;
+
 let selectedFile = null;
-let lastDocuments = null;   // base64 docs, reused for override re-runs
+let lastBase64 = null;      // cached base64 of the PDF, reused for override re-runs
+let lastLabel = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -257,17 +265,62 @@ function showStatus(msg, kind) {
   el.className = 'status-line status-' + kind;
 }
 
+// ---- Chunked upload --------------------------------------------------------
+// Splits the PDF's base64 string into <limit pieces and POSTs each to
+// audit-chunk. Returns { uploadId, totalChunks } for audit-submit to assemble.
+// base64 string slicing + rejoining is lossless because we slice ONE original
+// base64 string (we never re-encode pieces).
+function genUploadId() {
+  return 'up-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+async function uploadChunks(base64, label) {
+  const uploadId = genUploadId();
+  const pieces = [];
+  for (let i = 0; i < base64.length; i += CHUNK_SIZE) {
+    pieces.push(base64.slice(i, i + CHUNK_SIZE));
+  }
+  const totalChunks = pieces.length;
+
+  for (let i = 0; i < totalChunks; i++) {
+    showStatus('Uploading contract — chunk ' + (i + 1) + ' of ' + totalChunks + '...', 'running');
+    const resp = await fetch(CHUNK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uploadId,
+        chunkIndex: i,
+        totalChunks,
+        data: pieces[i],
+        label,
+      }),
+    });
+    const raw = await resp.text();
+    let data;
+    try { data = JSON.parse(raw); }
+    catch (e) {
+      throw new Error('Chunk ' + (i + 1) + ' upload returned a non-JSON response (' +
+        resp.status + '): ' + raw.slice(0, 60));
+    }
+    if (!resp.ok || !data.received) {
+      throw new Error('Chunk ' + (i + 1) + ' upload failed: ' + (data.error || resp.status));
+    }
+  }
+  return { uploadId, totalChunks };
+}
+
 // ---- Run the chain ---------------------------------------------------------
 $('run-btn').addEventListener('click', async () => {
   if (!selectedFile) return;
   $('run-btn').disabled = true;
   ['stage-extraction', 'stage-mapper', 'stage-audit'].forEach((s) => $(s).classList.remove('visible'));
-  showStatus('Uploading and running extraction (this takes ~30-60s)...', 'running');
+  showStatus('Reading contract...', 'running');
 
   try {
-    const base64 = await fileToBase64(selectedFile);
-    lastDocuments = [{ data: base64, label: selectedFile.name }];
-    await submitChain({ documents: lastDocuments });
+    lastBase64 = await fileToBase64(selectedFile);
+    lastLabel = selectedFile.name;
+    const { uploadId, totalChunks } = await uploadChunks(lastBase64, lastLabel);
+    await submitChain({ uploadId, totalChunks });
   } catch (err) {
     showStatus('Error: ' + err.message, 'error');
     $('run-btn').disabled = false;
@@ -275,13 +328,17 @@ $('run-btn').addEventListener('click', async () => {
 });
 
 // ---- Re-run audit with manual overrides (SCAFFOLDING) ----------------------
+// Chunks are deleted after assembly, so a re-run re-uploads from the cached
+// base64. The PDF is already in memory (lastBase64) — no re-read needed.
 $('rerun-btn').addEventListener('click', async () => {
-  if (!lastDocuments) return;
+  if (!lastBase64) return;
   showStatus('Re-running audit with manual overrides...', 'running');
   $('stage-audit').classList.remove('visible');
   try {
+    const { uploadId, totalChunks } = await uploadChunks(lastBase64, lastLabel);
     await submitChain({
-      documents: lastDocuments,
+      uploadId,
+      totalChunks,
       overrides: {
         buyerCount: parseInt($('ov-buyers').value, 10),
         sellerCount: parseInt($('ov-sellers').value, 10),
@@ -293,9 +350,8 @@ $('rerun-btn').addEventListener('click', async () => {
 });
 
 async function submitChain(payload) {
-  // Submit is now fast — it returns { jobId } in under a second and the
-  // orchestrator runs the chain in the background. Everything (extraction,
-  // mapper, audit) is observed by polling audit-status.
+  // Submit is fast — it assembles the uploaded chunks, returns { jobId } in
+  // well under a second, and the orchestrator runs the chain in the background.
   const resp = await fetch(SUBMIT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
