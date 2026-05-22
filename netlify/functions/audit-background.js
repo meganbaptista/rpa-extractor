@@ -94,36 +94,48 @@ const SCHEMAS = {
     {
       "id": "footer_initials_buyer_side",
       "active": true,
-      "description": "Buyer footer initial boxes (bottom-left of page footer) on every body page of the form",
+      "description": "Buyer initials region (the 'Buyer's Initials' line, present on every body page and on the final sheet above the Escrow Holder Acknowledgment)",
       "page_anchor": {
         "scope": "all_form_pages",
         "exclude_anchor": { "any_of": ["Printed name of BUYER:"] }
       },
-      "parties": ["Buyer 1", "Buyer 2"],
+      "parties": ["Buyer 1", "Buyer 2", "Buyer 3", "Buyer 4"],
       "mark_type": "initial",
       "requirement": "always",
       "phase": "buyer_offer",
       "scenario": null,
       "condition": null,
-     "crop_box": { "x_pct_start": 0.32, "x_pct_end": 0.63, "y_pct_start": 0.89, "y_pct_end": 0.96 },
-      "notes": "Excludes the signature page (which has no footer initial line). Most common missing-sig source. Cropped region targets just the buyer footer initial slots to give vision a high-signal target instead of the full page."
+      "count_check": true,
+      "count_side": "buyer",
+      "crop_anchor": {
+        "text": "Buyer's Initials",
+        "match_index": 0,
+        "offset_in": { "x_start": 1.0, "x_end": 3.4, "y_start": -0.28, "y_end": 0.28 }
+      },
+      "notes": "COUNT CHECK: produces ONE check per page, not one per party. Counts distinct sets of initials in the buyer initials region and compares to the transaction's buyer count. crop_anchor anchors on the 'Buyer's Initials' label text so it crops correctly on every page including the final sheet (where the initials sit mid-page, not in the footer). The region extends generously right of the label to capture initials written beside the two printed slots when 3+ buyers sign. parties[] is retained as documentation only — it no longer drives a per-party fan-out."
     },
     {
       "id": "footer_initials_seller_side",
       "active": true,
-      "description": "Seller footer initial boxes (bottom-right of page footer) on every body page of the form",
+      "description": "Seller initials region (the 'Seller's Initials' line, present on every body page and on the final sheet above the Escrow Holder Acknowledgment)",
       "page_anchor": {
         "scope": "all_form_pages",
         "exclude_anchor": { "any_of": ["Printed name of BUYER:"] }
       },
-      "parties": ["Seller 1", "Seller 2"],
+      "parties": ["Seller 1", "Seller 2", "Seller 3", "Seller 4"],
       "mark_type": "initial",
       "requirement": "always",
       "phase": "seller_acceptance",
       "scenario": null,
       "condition": null,
-      "crop_box": { "x_pct_start": 0.62, "x_pct_end": 0.92, "y_pct_start": 0.89, "y_pct_end": 0.96 },
-      "notes": "Only audited once seller has signed OR Seller Counter Offer box is checked. Cropped region targets just the seller footer initial slots."
+      "count_check": true,
+      "count_side": "seller",
+      "crop_anchor": {
+        "text": "Seller's Initials",
+        "match_index": 0,
+        "offset_in": { "x_start": 1.0, "x_end": 3.4, "y_start": -0.28, "y_end": 0.28 }
+      },
+      "notes": "COUNT CHECK: produces ONE check per page. Counts distinct sets of initials in the seller initials region and compares to the transaction's seller count. On 3-trustee deals the third initial is written beside the two printed slots — the generous region captures it. crop_anchor anchors on the 'Seller's Initials' label so it crops correctly on every page including the final sheet."
     },
     {
       "id": "buyer_signature_block",
@@ -924,6 +936,34 @@ function expandChecks(schema, pageTexts, formPages, detection, buyerCount, selle
     const pages = resolveAnchor(loc.page_anchor, pageTexts, formPages);
     if (pages.length === 0) continue;
 
+    // COUNT CHECK locations (footer initials): emit ONE check per page, not one
+    // per party. The check carries the expected party count; the runtime counts
+    // distinct initials in the region and compares. This is what makes 3+ party
+    // / trustee deals work — the form has only 2 printed slots, so per-slot
+    // checking can't represent a 3rd signer. Counting the region can.
+    if (loc.count_check) {
+      const expectedCount = loc.count_side === 'seller' ? sellerCount : buyerCount;
+      for (const page of pages) {
+        checks.push({
+          locationId: loc.id,
+          locationDescription: loc.description,
+          page,
+          party: (loc.count_side === 'seller' ? 'Sellers' : 'Buyers'),
+          markType: loc.mark_type,
+          requirement: loc.requirement,
+          phase: loc.phase,
+          scenario: loc.scenario,
+          condition: loc.condition,
+          cropBox: loc.crop_box || null,
+          cropAnchor: loc.crop_anchor || null,
+          countCheck: true,
+          countSide: loc.count_side || 'buyer',
+          expectedCount,
+        });
+      }
+      continue;
+    }
+
     const presentParties = filterParties(loc.parties, buyerCount, sellerCount);
 
     for (const page of pages) {
@@ -992,9 +1032,49 @@ async function runCheck(pdfDoc, pdfBytes, check, detection) {
     let status = parsed.status;
     let reasoning = parsed.reasoning;
 
-    // Safety net: footer initials should not auto-fail as "absent" — vision
-    // detection is unreliable on DocuSign-flattened PDFs where initials are
-    // tiny, faint, or grayed out. Downgrade absent → unclear so a human
+    // ===== COUNT CHECK result mapping =====
+    // The model returns found_count (distinct initial sets it counted). Compare
+    // to expectedCount and map per the agreed fail-safe rules:
+    //   found == expected  -> present
+    //   found <  expected  -> absent       (a real miss — someone didn't initial)
+    //   found >  expected  -> needs_review (odd — never auto-pass an over-count)
+    //   found == null      -> not_applicable (region not on this page)
+    //   unparseable        -> needs_review
+    if (check.countCheck) {
+      const found = parsed.found_count;
+      const expected = check.expectedCount;
+      let countStatus;
+      if (found === null || found === undefined) {
+        countStatus = 'not_applicable';
+      } else if (typeof found !== 'number') {
+        countStatus = 'needs_review';
+      } else if (found === expected) {
+        countStatus = 'present';
+      } else if (found < expected) {
+        countStatus = 'absent';
+      } else {
+        countStatus = 'needs_review';
+      }
+      const countReason =
+        (found === null || found === undefined)
+          ? `initials region not visible on this page`
+          : `counted ${found} distinct initial set(s); expected ${expected}` +
+            (countStatus === 'absent' ? ' — possible missing initialer' : '') +
+            (countStatus === 'needs_review' ? ' — more marks than expected, human review' : '');
+      console.log(`[runCheck] ${check.locationId} page ${check.page}: count found=${found} expected=${expected} -> ${countStatus}`);
+      return {
+        ...check,
+        status: countStatus,
+        foundCount: (typeof found === 'number' ? found : null),
+        expectedCount: expected,
+        confidence: parsed.confidence,
+        reasoning: countReason + (reasoning ? ` (${reasoning})` : ''),
+      };
+    }
+
+    // Safety net: non-count footer initials should not auto-fail as "absent" —
+    // vision detection is unreliable on DocuSign-flattened PDFs where initials
+    // are tiny, faint, or grayed out. Downgrade absent -> unclear so a human
     // confirms rather than treating it as a real missing-sig flag.
     if (check.locationId.startsWith('footer_initials_') && status === 'absent') {
       status = 'unclear';
@@ -1017,6 +1097,36 @@ async function runCheck(pdfDoc, pdfBytes, check, detection) {
 }
 
 function buildPrompt(check, detection) {
+  // ===== COUNT CHECK branch (footer initials) =====
+  // Instead of "is party N's slot filled" (which can't represent a 3rd signer
+  // on a 2-slot form), this asks the model to COUNT distinct sets of initials
+  // in the region. It explicitly must NOT transcribe the letters — reading
+  // tiny initials is unreliable and not what we need; counting them is the job.
+  if (check.countCheck) {
+    const sideWord = check.countSide === 'seller' ? "Seller's" : "Buyer's";
+    const partyWord = check.countSide === 'seller' ? 'seller' : 'buyer';
+    return `You are auditing a California real estate contract. The image shows the ${sideWord} Initials region of one page.
+
+This transaction has ${check.expectedCount} ${partyWord}(s). Each ${partyWord} is required to initial here, so a correctly executed page should show ${check.expectedCount} distinct set(s) of initials in this region.
+
+YOUR TASK: Count how many distinct sets of initials are present in the ${sideWord} Initials region.
+
+IMPORTANT GUIDANCE:
+- The form prints two slots ( ___ / ___ ). When there are more than two ${partyWord}s, the extra initials are commonly written BESIDE or just outside the printed slots. Count those too — count every distinct set of initials anywhere in this region, not only the ones inside the printed slots.
+- A "set of initials" is a person's handwritten initials OR a DocuSign-style initial stamp. Faint, light-gray, or lightly rendered marks still count.
+- Do NOT try to read or transcribe which letters the initials are. Only COUNT the distinct sets. Reading the exact letters is not required and not wanted.
+- An empty slot (visible underline, no mark) contributes 0 to the count.
+- If this region is not visible on the page at all, set found_count to null and status to "not_applicable".
+
+Return ONLY this JSON object (no markdown fences, no other text):
+{
+  "found_count": <integer number of distinct initial sets, or null if region not visible>,
+  "status": "report",
+  "confidence": "high" | "medium" | "low",
+  "reasoning": "one sentence: how many distinct sets you counted and where they were"
+}`;
+  }
+
   const header = `You are auditing a single page of a California real estate contract.
 
 LOCATION TO CHECK: ${check.locationDescription}
@@ -1379,6 +1489,7 @@ function summarize(results) {
     present: 0,
     absent: 0,
     unclear: 0,
+    needs_review: 0,
     not_applicable: 0,
     error: 0,
     matches_signer: 0,
@@ -1391,7 +1502,9 @@ function summarize(results) {
   for (const r of results) {
     summary[r.status] = (summary[r.status] || 0) + 1;
 
-    if (r.status === 'absent' || r.status === 'unclear') {
+    // missingItems = everything a human must look at: a possible miss (absent),
+    // an ambiguous read (unclear), or a count anomaly (needs_review).
+    if (r.status === 'absent' || r.status === 'unclear' || r.status === 'needs_review') {
       summary.missingItems.push({
         page: r.page,
         party: r.party,
@@ -1400,6 +1513,8 @@ function summarize(results) {
         status: r.status,
         confidence: r.confidence,
         reasoning: r.reasoning,
+        foundCount: r.foundCount,
+        expectedCount: r.expectedCount,
       });
     }
 
