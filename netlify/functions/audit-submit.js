@@ -1,111 +1,250 @@
 // netlify/functions/audit-submit.js
 //
-// Synchronous function. Receives PDF payload from the frontend (well under
-// the 6 MB sync request limit), stores it in the audit-payloads blob store,
-// invokes the audit-background function with just a small {jobId} body,
-// and returns the jobId for the frontend to poll on.
+// ============================================================================
+// VALIDATION SCAFFOLDING — test orchestrator
+// ============================================================================
+// This endpoint exists to VALIDATE the extraction → audit chain against real
+// contracts. It is NOT the Keeva product flow and will be deleted when the
+// signature audit is wired into Keeva's real single-upload orchestration.
 //
-// This decouples the large PDF payload from the background function call,
-// which has a 256 KB request body limit.
+// What it does (the chain):
+//   1. Receives a PDF upload (this stands in for Keeva's future single upload)
+//   2. Stores the PDF in the SHARED extraction-payloads store under a jobId
+//      — exactly as the real extractor's submit.js does (PERMANENT pattern)
+//   3. Invokes the existing extract-background to run extraction
+//   4. Polls for the extraction result
+//   5. Runs the handoff mapper (PERMANENT BOUNDARY) on the extraction result
+//   6. Invokes audit-background with the mapper's parameters
+//   7. Returns the jobId; the test page polls audit-status for the result
+//
+// If the caller supplied manual overrides (validation scaffolding), those
+// replace the mapper's formId / buyerCount / sellerCount before step 6.
+//
+// ----------------------------------------------------------------------------
+// PERMANENT vs SCAFFOLDING within this file:
+//   PERMANENT  : the shared-payload-store write (step 2); the handoff-mapper
+//                call (step 5); the audit invocation contract (step 6)
+//   SCAFFOLDING: this orchestrator existing at all; the override handling;
+//                the inline extraction-polling loop
+// ----------------------------------------------------------------------------
 
 const { getStore } = require('@netlify/blobs');
-const { randomUUID } = require('crypto');
+const crypto = require('crypto');
+const { mapExtractionToAuditParams } = require('./handoff-mapper.js');
+
+console.log('[audit-submit] module loading');
+
+function blobsConfig(name) {
+  if (!process.env.NETLIFY_BLOBS_TOKEN) {
+    throw new Error('NETLIFY_BLOBS_TOKEN env var is not set.');
+  }
+  return {
+    name,
+    siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
+    token: process.env.NETLIFY_BLOBS_TOKEN,
+  };
+}
+
+const headers = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Content-Type': 'application/json',
+};
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+// ============================================================================
+// SWAP POINT — extraction result read
+// ----------------------------------------------------------------------------
+// Per the build agreement: this is the ONE piece isolated so it can be changed
+// without touching the audit engine or the handoff mapper. It assumes:
+//   - the extractor's background function is named `extract-background`
+//   - extraction results land in the `extraction-jobs` blob store, keyed by
+//     jobId, with the shape the extractor's result.js returns
+//
+// If either assumption is wrong, FIX ONLY THIS FUNCTION. The extraction result
+// returned must be the plain 50-field object the handoff mapper expects.
+//
+// The extractor's result.js wraps the data as:
+//   { status:'complete', result:{ content:[{type:'text', text:'<JSON string>'}] } }
+// so we unwrap content[0].text and JSON.parse it. If the extractor changes its
+// result shape, adjust the unwrap here.
+// ============================================================================
+async function readExtractionResult(jobsStore, jobId) {
+  const rec = await jobsStore.get(jobId, { type: 'json' });
+  if (!rec) return { ready: false };
+  if (rec.status === 'failed' || rec.status === 'error') {
+    return { ready: true, failed: true, error: rec.error || 'extraction failed' };
+  }
+  if (rec.status !== 'complete') return { ready: false };
+
+  // Unwrap the extractor's Anthropic-shaped result → the 50-field object.
+  let fields = null;
+  try {
+    const text = rec.result && rec.result.content && rec.result.content[0] && rec.result.content[0].text;
+    if (text) {
+      const cleaned = text.replace(/```json|```/g, '').trim();
+      const match = cleaned.match(/\{[\s\S]*\}/);
+      fields = match ? JSON.parse(match[0]) : JSON.parse(cleaned);
+    } else if (rec.result && typeof rec.result === 'object') {
+      // Fallback: result already the plain object
+      fields = rec.result;
+    }
+  } catch (e) {
+    return { ready: true, failed: true, error: 'could not parse extraction result: ' + e.message };
+  }
+  if (!fields) return { ready: true, failed: true, error: 'extraction result had no parseable fields' };
+  return { ready: true, failed: false, fields };
+}
+// ============================================================================
+// END SWAP POINT
+// ============================================================================
 
 exports.handler = async function (event) {
-  const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  };
-
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers: corsHeaders, body: '' };
-  }
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers: corsHeaders, body: 'Method not allowed' };
+    return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method Not Allowed' }) };
   }
 
   try {
-    const { pdfBase64, formId, buyerCount = 1, sellerCount = 1 } = JSON.parse(event.body || '{}');
-
-    if (!pdfBase64 || !formId) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders,
-        body: JSON.stringify({ error: 'pdfBase64 and formId are required' }),
-      };
+    const body = event.body ? JSON.parse(event.body) : {};
+    if (!body.documents || !Array.isArray(body.documents) || body.documents.length === 0) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'No documents provided' }) };
     }
 
-    const jobId = randomUUID();
+    // SCAFFOLDING: manual overrides from the test page (may be absent).
+    const overrides = body.overrides || {};
 
-    // Store the payload in the audit-payloads blob store
-    const payloadStore = getStore({
-  name: 'audit-payloads',
-  siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
-  token: process.env.NETLIFY_BLOBS_TOKEN,
-});
-    await payloadStore.setJSON(jobId, {
-      pdfBase64,
-      formId,
-      buyerCount,
-      sellerCount,
-      createdAt: Date.now(),
-    });
-
-    // Pre-write a "pending" status to audit-results so polling immediately sees a record
-    const resultsStore = getStore({
-  name: 'audit-results',
-  siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
-  token: process.env.NETLIFY_BLOBS_TOKEN,
-});
-    await resultsStore.setJSON(jobId, {
-      status: 'pending',
-      queuedAt: Date.now(),
-      formId,
-    });
-
-    // Invoke the background function with just the jobId.
-    // Background functions return 202 immediately; we don't need to await
-    // completion, but we do want to know the invocation was accepted.
+    const jobId = crypto.randomUUID();
+    const proto = event.headers['x-forwarded-proto'] || 'https';
     const host = event.headers.host;
-    const protocol = event.headers['x-forwarded-proto'] || 'https';
-    const bgUrl = `${protocol}://${host}/.netlify/functions/audit-background`;
 
+    const payloadStore = getStore(blobsConfig('extraction-payloads'));
+    const jobsStore = getStore(blobsConfig('extraction-jobs'));
+
+    // ----- PERMANENT PATTERN: store the PDF once in the shared payload store
+    await payloadStore.setJSON(jobId, {
+      documents: body.documents,
+      prompt_override: body.prompt_override || null,
+    });
+    await jobsStore.setJSON(jobId, { status: 'pending', submitted_at: new Date().toISOString() });
+
+    // ----- Step 3: invoke extraction (existing extract-background)
+    const extractUrl = proto + '://' + host + '/.netlify/functions/extract-background';
     try {
-      const bgResp = await fetch(bgUrl, {
+      await fetch(extractUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId }),
       });
-      console.log(`[audit-submit] jobId=${jobId} background invoke returned ${bgResp.status}`);
-    } catch (err) {
-      console.error(`[audit-submit] jobId=${jobId} background invoke failed:`, err.message);
-      // Update the results record so the frontend sees the failure
-      await resultsStore.setJSON(jobId, {
-        status: 'error',
-        completedAt: Date.now(),
-        error: `Failed to invoke audit-background: ${err.message}`,
-      });
-      // Clean up the orphaned payload
-      try { await payloadStore.delete(jobId); } catch (_) {}
-      return {
-        statusCode: 500,
-        headers: corsHeaders,
-        body: JSON.stringify({ error: 'Failed to start audit job', jobId }),
-      };
+    } catch (e) {
+      return { statusCode: 502, headers, body: JSON.stringify({ error: 'Failed to start extraction: ' + e.message }) };
     }
 
-    return {
-      statusCode: 202,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId, status: 'queued' }),
+    // ----- Step 4: poll for extraction result (SCAFFOLDING: inline poll).
+    // Extraction typically completes in 25-40s. We poll up to ~3 minutes.
+    let extraction = null;
+    let extractionError = null;
+    const MAX_WAIT_MS = 180000;
+    const POLL_MS = 3000;
+    const started = Date.now();
+    while (Date.now() - started < MAX_WAIT_MS) {
+      await sleep(POLL_MS);
+      const r = await readExtractionResult(jobsStore, jobId);
+      if (r.ready) {
+        if (r.failed) { extractionError = r.error; }
+        else { extraction = r.fields; }
+        break;
+      }
+    }
+
+    if (extractionError) {
+      return { statusCode: 200, headers, body: JSON.stringify({
+        jobId, stage: 'extraction', status: 'failed', error: extractionError,
+      })};
+    }
+    if (!extraction) {
+      return { statusCode: 200, headers, body: JSON.stringify({
+        jobId, stage: 'extraction', status: 'timeout',
+        error: 'Extraction did not complete within 3 minutes',
+      })};
+    }
+
+    // ----- Step 5: PERMANENT BOUNDARY — handoff mapper.
+    // The mapper needs page texts for form classification. The extractor does
+    // not currently surface raw page text in its result, so for the validation
+    // phase we classify from a small set of signals already in the extraction
+    // output plus any override. If the override supplies formId we skip
+    // classification entirely. (When form classification moves into extraction
+    // proper, the mapper will receive real page texts.)
+    //
+    // For now: give the mapper a best-effort "page text" assembled from
+    // extraction fields that echo form identity, so high-confidence RPA
+    // detection still works; otherwise the operator selects the form via
+    // override.
+    const pseudoPageText = [
+      extraction._form_hint || '',
+      // RPA contracts always carry these; AD will not.
+      extraction.final_purchase_price ? 'california residential purchase agreement joint escrow instructions' : '',
+    ].join(' ');
+
+    const mapped = mapExtractionToAuditParams(extraction, [pseudoPageText]);
+
+    // ----- Apply manual overrides (SCAFFOLDING) over the mapper output.
+    const auditParams = {
+      formId: overrides.formId || mapped.formId,
+      buyerCount: overrides.buyerCount != null ? overrides.buyerCount : mapped.buyerCount,
+      sellerCount: overrides.sellerCount != null ? overrides.sellerCount : mapped.sellerCount,
+      sellerEntity: mapped.sellerEntity,
+      buyerEntity: mapped.buyerEntity,
     };
+
+    // Log when an override changed a mapper-derived value — this data tells us
+    // how reliable the handoff is and whether it is Keeva-ready.
+    const overrodeForm = overrides.formId && overrides.formId !== mapped.formId;
+    const overrodeBuyers = overrides.buyerCount != null && overrides.buyerCount !== mapped.buyerCount;
+    const overrodeSellers = overrides.sellerCount != null && overrides.sellerCount !== mapped.sellerCount;
+    if (overrodeForm || overrodeBuyers || overrodeSellers) {
+      console.log(`[audit-submit] jobId=${jobId} OVERRIDE applied — ` +
+        `form:${overrodeForm ? mapped.formId + '->' + overrides.formId : 'kept'} ` +
+        `buyers:${overrodeBuyers ? mapped.buyerCount + '->' + overrides.buyerCount : 'kept'} ` +
+        `sellers:${overrodeSellers ? mapped.sellerCount + '->' + overrides.sellerCount : 'kept'}`);
+    }
+
+    if (!auditParams.formId) {
+      // Mapper couldn't classify and no override given — return so the test
+      // page can show the override panel and the operator can pick the form.
+      return { statusCode: 200, headers, body: JSON.stringify({
+        jobId, stage: 'handoff', status: 'needs_override',
+        extraction, mapped,
+        message: 'Form could not be classified. Select the form via override and resubmit.',
+      })};
+    }
+
+    // ----- Step 6: PERMANENT — invoke audit-background with mapper params.
+    const auditUrl = proto + '://' + host + '/.netlify/functions/audit-background';
+    try {
+      await fetch(auditUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId, ...auditParams }),
+      });
+    } catch (e) {
+      return { statusCode: 502, headers, body: JSON.stringify({ error: 'Failed to start audit: ' + e.message }) };
+    }
+
+    // Return everything the test page needs to show the chain + poll the audit.
+    return { statusCode: 202, headers, body: JSON.stringify({
+      jobId,
+      stage: 'audit',
+      status: 'pending',
+      extraction,          // SCAFFOLDING: shown on test page
+      mapped,              // SCAFFOLDING: shown on test page (derivation + confidence)
+      auditParams,         // what the audit was actually invoked with
+    })};
   } catch (err) {
-    console.error('[audit-submit] error:', err.message);
-    return {
-      statusCode: 500,
-      headers: corsHeaders,
-      body: JSON.stringify({ error: err.message }),
-    };
+    console.error('[audit-submit] error: ' + err.message);
+    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
   }
 };
