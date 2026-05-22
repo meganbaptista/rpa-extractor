@@ -1,391 +1,403 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Signature Audit — Test</title>
-  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      max-width: 900px;
-      margin: 2rem auto;
-      padding: 0 1rem;
-      color: #1a202c;
-    }
-    h1 { margin-top: 0; }
-    p.intro { color: #4a5568; }
-    form {
-      background: #f7fafc;
-      padding: 1.25rem;
-      border-radius: 6px;
-      border: 1px solid #e2e8f0;
-    }
-    label {
-      display: flex;
-      align-items: center;
-      margin: 0.6rem 0;
-      gap: 0.75rem;
-    }
-    label > span {
-      display: inline-block;
-      width: 11rem;
-      font-weight: 500;
-    }
-    input, select {
-      padding: 0.45rem 0.6rem;
-      font-size: 1rem;
-      border: 1px solid #cbd5e0;
-      border-radius: 4px;
-      flex: 1;
-      max-width: 24rem;
-    }
-    button {
-      padding: 0.7rem 1.4rem;
-      font-size: 1rem;
-      cursor: pointer;
-      background: #2c5282;
-      color: white;
-      border: 0;
-      border-radius: 4px;
-      margin-top: 0.6rem;
-    }
-    button:disabled { opacity: 0.55; cursor: wait; }
-    #status, #results { margin-top: 1.5rem; }
-    .progress {
-      background: #ebf8ff;
-      border-left: 4px solid #3182ce;
-      padding: 0.8rem 1.1rem;
-      border-radius: 0 4px 4px 0;
-      line-height: 1.6;
-    }
-    .summary {
-      background: #fff;
-      padding: 1rem 1.25rem;
-      border: 1px solid #e2e8f0;
-      border-radius: 6px;
-      margin-bottom: 1rem;
-      line-height: 1.7;
-    }
-    .summary.clean {
-      background: #f0fff4;
-      border-left: 4px solid #38a169;
-    }
-    .missing-item {
-      background: #fff5f5;
-      padding: 0.6rem 1rem;
-      border-left: 3px solid #c53030;
-      margin: 0.4rem 0;
-      border-radius: 0 4px 4px 0;
-    }
-    .unclear-item {
-      background: #fffaf0;
-      padding: 0.6rem 1rem;
-      border-left: 3px solid #d69e2e;
-      margin: 0.4rem 0;
-      border-radius: 0 4px 4px 0;
-    }
-    .flagged-item {
-      background: #fffaf0;
-      padding: 0.6rem 1rem;
-      border-left: 3px solid #dd6b20;
-      margin: 0.4rem 0;
-      border-radius: 0 4px 4px 0;
-    }
-    .missing-item small, .unclear-item small, .flagged-item small {
-      color: #4a5568;
-      font-style: italic;
-    }
-    pre {
-      background: #1a202c;
-      color: #cbd5e0;
-      padding: 1rem;
-      border-radius: 6px;
-      overflow-x: auto;
-      font-size: 0.82rem;
-      line-height: 1.4;
-    }
-    details { margin-top: 1.5rem; }
-    summary { cursor: pointer; font-weight: 500; padding: 0.4rem 0; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Keeva — Signature Audit (Validation)</title>
+<!--
+  ============================================================================
+  VALIDATION SCAFFOLDING — signature audit test harness
+  ============================================================================
+  This page exists to validate the extraction -> handoff mapper -> audit chain
+  against real contracts. It is NOT the Keeva product UI. In Keeva's end-state
+  there is ONE upload and the audit runs as a stage of that single job; this
+  standalone page and its manual-override panel are deleted at that point.
+
+  PERMANENT (proven here, kept for Keeva):
+    - single upload -> extraction -> handoff mapper -> audit chain
+    - the audit consuming extraction output via the shared job/payload pattern
+  SCAFFOLDING (deleted at Keeva migration):
+    - this page itself
+    - the manual override panel
+  ============================================================================
+-->
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #f7f6f3; --surface: #ffffff; --border: #e4e2dc; --border-strong: #ccc9c0;
+    --text: #1a1a18; --muted: #6b6a65; --hint: #a8a7a2;
+    --green: #1a6b4a; --green-light: #e8f4ef; --green-text: #0f4a32;
+    --blue: #1a4a7a; --blue-light: #e8f0f9;
+    --danger: #c0392b; --danger-light: #fdf0ee;
+    --warning-light: #fef9ec; --warning: #92670a;
+    --radius: 10px; --radius-sm: 6px;
+  }
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .header { background: #0f1e12; padding: 0 40px; height: 60px; display: flex; align-items: center; justify-content: space-between; }
+  .logo { font-family: 'DM Serif Display', serif; font-size: 22px; color: white; letter-spacing: 3px; }
+  .logo span { color: #5cdb95; }
+  .header-badge { font-size: 11px; color: rgba(255,255,255,0.5); letter-spacing: 1px; text-transform: uppercase; }
+  .scaffold-banner { background: var(--warning-light); border-bottom: 1px solid #f0d98a; color: var(--warning); font-size: 12px; padding: 8px 40px; text-align: center; }
+  .main { max-width: 820px; margin: 0 auto; padding: 32px 24px; }
+  .page-title { font-family: 'DM Serif Display', serif; font-size: 26px; color: #0f1e12; margin-bottom: 4px; }
+  .page-sub { font-size: 14px; color: var(--muted); margin-bottom: 24px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1rem; }
+  .card-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.75rem; }
+  .upload-slot { display: flex; align-items: center; gap: 12px; border: 1.5px dashed var(--border); border-radius: var(--radius-sm); padding: 14px; cursor: pointer; background: var(--bg); transition: all .15s; }
+  .upload-slot:hover { border-color: var(--border-strong); }
+  .upload-slot.ready { border-style: solid; border-color: var(--green); background: var(--green-light); }
+  .slot-icon { font-size: 20px; }
+  .slot-text { flex: 1; }
+  .slot-name { font-size: 13px; font-weight: 500; }
+  .slot-sub { font-size: 12px; color: var(--muted); font-family: 'DM Mono', monospace; margin-top: 2px; }
+  input[type="file"] { display: none; }
+  .btn { display: block; width: 100%; padding: 12px; font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; border-radius: var(--radius-sm); border: 1px solid var(--green); background: var(--green); color: #fff; transition: all .15s; }
+  .btn:hover:not(:disabled) { background: #155c3e; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-secondary { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
+  .btn-secondary:hover:not(:disabled) { background: var(--bg); }
+  .status-line { font-size: 13px; padding: 10px 14px; border-radius: var(--radius-sm); margin-top: 12px; display: none; }
+  .status-running { background: var(--blue-light); color: var(--blue); display: block; }
+  .status-error { background: var(--danger-light); color: var(--danger); display: block; }
+  .status-ok { background: var(--green-light); color: var(--green-text); display: block; }
+  .stage { display: none; }
+  .stage.visible { display: block; }
+  .kv { display: grid; grid-template-columns: 200px 1fr; gap: 4px 14px; font-size: 13px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { font-family: 'DM Mono', monospace; font-size: 12px; word-break: break-word; }
+  .conf { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: .04em; }
+  .conf-high { background: var(--green-light); color: var(--green-text); }
+  .conf-medium { background: var(--warning-light); color: var(--warning); }
+  .conf-low { background: var(--danger-light); color: var(--danger); }
+  .conf-none { background: var(--danger-light); color: var(--danger); }
+  .override-panel { background: var(--warning-light); border: 1px solid #f0d98a; border-radius: var(--radius-sm); padding: 14px; margin-top: 12px; }
+  .override-title { font-size: 12px; font-weight: 600; color: var(--warning); margin-bottom: 4px; }
+  .override-note { font-size: 11px; color: var(--warning); margin-bottom: 12px; }
+  .override-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field label { font-size: 11px; color: var(--muted); font-weight: 500; }
+  .field select, .field input { font-family: 'DM Mono', monospace; font-size: 13px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: #fff; }
+  .field input { width: 70px; }
+  .audit-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .audit-row:last-child { border-bottom: none; }
+  .pill { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; flex-shrink: 0; }
+  .pill-present { background: var(--green-light); color: var(--green-text); }
+  .pill-absent { background: var(--danger-light); color: var(--danger); }
+  .pill-unclear { background: var(--warning-light); color: var(--warning); }
+  .pill-na { background: #efefec; color: var(--muted); }
+  .pill-error { background: var(--danger-light); color: var(--danger); }
+  .audit-loc { flex: 1; }
+  .audit-reason { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .summary-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .summary-chip { font-size: 12px; padding: 4px 10px; border-radius: 14px; background: var(--bg); border: 1px solid var(--border); }
+  footer { text-align: center; font-size: 12px; color: var(--hint); margin-top: 24px; }
+</style>
 </head>
 <body>
-  <h1>Signature Audit — Test</h1>
-  <p class="intro">
-    Upload a contract PDF, pick the matching schema, and the audit runs in the background.
-    Large packets are compressed client-side before upload (temporary — direct blob upload coming).
-  </p>
 
-  <form id="auditForm">
-    <label>
-      <span>Form schema</span>
-      <select name="formId" required>
-        <option value="CAR-RPA-1225">CAR-RPA-1225 (California RPA, 12/25 revision)</option>
-        <option value="AD-BUYER-1224">AD-BUYER-1224 (Agency Disclosure, buyer side)</option>
-      </select>
+<div class="header">
+  <div class="logo">KEE<span>VA</span></div>
+  <div class="header-badge">Signature Audit</div>
+</div>
+<div class="scaffold-banner">
+  ⚙ Validation harness — single upload runs extraction → handoff mapper → audit. Not the final Keeva UI.
+</div>
+
+<div class="main">
+  <div class="page-title">Signature Audit — Chain Validation</div>
+  <div class="page-sub">Upload one contract. Extraction runs, the handoff mapper derives the audit parameters, then the signature audit runs against them.</div>
+
+  <!-- STEP 1: UPLOAD -->
+  <div class="card">
+    <div class="card-label">Step 1 — Upload contract PDF</div>
+    <label class="upload-slot" id="slot">
+      <span class="slot-icon">📄</span>
+      <div class="slot-text">
+        <div class="slot-name" id="slot-name">Click or drag a contract PDF here</div>
+        <div class="slot-sub" id="slot-sub"></div>
+      </div>
+      <input type="file" accept=".pdf" id="file-input">
     </label>
-    <label>
-      <span>Buyer count</span>
-      <input type="number" name="buyerCount" value="1" min="1" max="4" required />
-    </label>
-    <label>
-      <span>Seller count</span>
-      <input type="number" name="sellerCount" value="1" min="1" max="4" required />
-    </label>
-    <label>
-      <span>PDF file</span>
-      <input type="file" name="pdf" accept="application/pdf" required />
-    </label>
-    <button type="submit">Run audit</button>
-  </form>
+    <button class="btn" id="run-btn" style="margin-top:12px;" disabled>Run extraction + audit</button>
+    <div class="status-line" id="status"></div>
+  </div>
 
-  <div id="status"></div>
-  <div id="results"></div>
+  <!-- STEP 2: EXTRACTION RESULT -->
+  <div class="card stage" id="stage-extraction">
+    <div class="card-label">Step 2 — Extraction result</div>
+    <dl class="kv" id="extraction-kv"></dl>
+  </div>
 
-  <script>
-    const POLL_INTERVAL_MS = 3000;
-    const POLL_TIMEOUT_MS = 10 * 60 * 1000;
+  <!-- STEP 3: HANDOFF MAPPER -->
+  <div class="card stage" id="stage-mapper">
+    <div class="card-label">Step 3 — Handoff mapper output <span style="color:var(--hint);font-weight:400;text-transform:none;letter-spacing:0;">(permanent boundary)</span></div>
+    <dl class="kv" id="mapper-kv"></dl>
 
-    // Netlify sync function body limit is 6 MB. Base64 encoding inflates ~33%.
-    // So binary PDF must be under ~4.5 MB to fit after encoding.
-    const FUNCTION_BODY_LIMIT = 6 * 1024 * 1024;
-    const BASE64_INFLATION = 1.34;
-    const MAX_BINARY_SIZE = Math.floor(FUNCTION_BODY_LIMIT / BASE64_INFLATION);
+    <!-- SCAFFOLDING: manual override -->
+    <div class="override-panel" id="override-panel">
+      <div class="override-title">⚙ Manual override (validation scaffolding)</div>
+      <div class="override-note">Pre-filled with the mapper's output. Correct any value the mapper got wrong, then re-run the audit. Overrides are logged so we can measure how reliable the handoff is.</div>
+      <div class="override-row">
+        <div class="field">
+          <label>Form</label>
+          <select id="ov-form">
+            <option value="CAR-RPA-1225">CAR-RPA-1225</option>
+            <option value="AD-BUYER-1224">AD-BUYER-1224</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Buyers</label>
+          <input type="number" id="ov-buyers" min="1" max="4" value="1">
+        </div>
+        <div class="field">
+          <label>Sellers</label>
+          <input type="number" id="ov-sellers" min="1" max="4" value="1">
+        </div>
+        <button class="btn btn-secondary" id="rerun-btn" style="width:auto;">Re-run audit with overrides</button>
+      </div>
+    </div>
+  </div>
 
-    document.getElementById('auditForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = e.target.querySelector('button');
-      const statusEl = document.getElementById('status');
-      const resultsEl = document.getElementById('results');
+  <!-- STEP 4: AUDIT RESULT -->
+  <div class="card stage" id="stage-audit">
+    <div class="card-label">Step 4 — Signature audit result</div>
+    <div class="summary-bar" id="audit-summary"></div>
+    <div id="audit-results"></div>
+  </div>
 
-      btn.disabled = true;
-      btn.textContent = 'Running…';
-      statusEl.innerHTML = '';
-      resultsEl.innerHTML = '';
+  <footer>Keeva signature audit — validation harness</footer>
+</div>
 
-      try {
-        const fd = new FormData(e.target);
-        const file = fd.get('pdf');
-        const formId = fd.get('formId');
-        const buyerCount = parseInt(fd.get('buyerCount'), 10);
-        const sellerCount = parseInt(fd.get('sellerCount'), 10);
+<script>
+// ============================================================================
+// VALIDATION SCAFFOLDING — test harness client logic.
+// ============================================================================
+const SUBMIT_URL = '/.netlify/functions/audit-submit';
+const STATUS_URL = '/.netlify/functions/audit-status';
 
-        // 1. Compress PDF client-side
-        renderStatus(statusEl, `Compressing PDF (original: ${formatSize(file.size)})…`);
-        const compressionResult = await safeCompress(file);
-        const workingFile = compressionResult.file;
-        const compressionMsg = compressionResult.message;
-        renderStatus(statusEl, compressionMsg);
+let selectedFile = null;
+let lastDocuments = null;   // base64 docs, reused for override re-runs
 
-        // 2. Hard cap check
-        if (workingFile.size > MAX_BINARY_SIZE) {
-          throw new Error(
-            `PDF is too large to upload: ${formatSize(workingFile.size)} after compression. ` +
-            `Current test page supports up to ${formatSize(MAX_BINARY_SIZE)}. ` +
-            `This limit will be removed when we move to direct blob upload.`
-          );
-        }
+const $ = (id) => document.getElementById(id);
 
-        // 3. Encode and submit
-        renderStatus(statusEl, `${compressionMsg} · Uploading…`);
-        const pdfBase64 = await fileToBase64(workingFile);
+// ---- Upload handling -------------------------------------------------------
+$('file-input').addEventListener('change', (e) => {
+  if (e.target.files[0]) setFile(e.target.files[0]);
+});
+$('slot').addEventListener('dragover', (e) => { e.preventDefault(); });
+$('slot').addEventListener('drop', (e) => {
+  e.preventDefault();
+  if (e.dataTransfer.files[0] && e.dataTransfer.files[0].type === 'application/pdf') {
+    setFile(e.dataTransfer.files[0]);
+  }
+});
 
-        const submitResp = await fetch('/.netlify/functions/audit-submit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pdfBase64, formId, buyerCount, sellerCount }),
-        });
+function setFile(file) {
+  selectedFile = file;
+  $('slot').classList.add('ready');
+  $('slot-name').textContent = file.name;
+  $('slot-sub').textContent = (file.size / 1024 / 1024).toFixed(1) + ' MB';
+  $('run-btn').disabled = false;
+}
 
-        if (!submitResp.ok) {
-          const errText = await submitResp.text();
-          throw new Error(`Submit failed (${submitResp.status}): ${errText}`);
-        }
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.onerror = () => rej(new Error('read failed'));
+    r.readAsDataURL(file);
+  });
+}
 
-        const { jobId } = await submitResp.json();
-        if (!jobId) throw new Error('Submit response did not include jobId');
+function showStatus(msg, kind) {
+  const el = $('status');
+  el.textContent = msg;
+  el.className = 'status-line status-' + kind;
+}
 
-        renderProgress(statusEl, jobId, 0);
+// ---- Run the chain ---------------------------------------------------------
+$('run-btn').addEventListener('click', async () => {
+  if (!selectedFile) return;
+  $('run-btn').disabled = true;
+  ['stage-extraction', 'stage-mapper', 'stage-audit'].forEach((s) => $(s).classList.remove('visible'));
+  showStatus('Uploading and running extraction (this takes ~30-60s)...', 'running');
 
-        // 4. Poll for results
-        const final = await pollUntilDone(jobId, statusEl);
-        statusEl.innerHTML = '';
+  try {
+    const base64 = await fileToBase64(selectedFile);
+    lastDocuments = [{ data: base64, label: selectedFile.name }];
+    await submitChain({ documents: lastDocuments });
+  } catch (err) {
+    showStatus('Error: ' + err.message, 'error');
+    $('run-btn').disabled = false;
+  }
+});
 
-        if (final.status === 'error') {
-          resultsEl.innerHTML = `<div class="missing-item"><strong>Audit failed:</strong> ${escapeHtml(final.error || 'unknown error')}</div>`;
-          return;
-        }
-
-        renderResults(final.result);
-      } catch (err) {
-        statusEl.innerHTML = '';
-        resultsEl.innerHTML = `<div class="missing-item">Error: ${escapeHtml(err.message)}</div>`;
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Run audit';
-      }
+// ---- Re-run audit with manual overrides (SCAFFOLDING) ----------------------
+$('rerun-btn').addEventListener('click', async () => {
+  if (!lastDocuments) return;
+  showStatus('Re-running audit with manual overrides...', 'running');
+  $('stage-audit').classList.remove('visible');
+  try {
+    await submitChain({
+      documents: lastDocuments,
+      overrides: {
+        formId: $('ov-form').value,
+        buyerCount: parseInt($('ov-buyers').value, 10),
+        sellerCount: parseInt($('ov-sellers').value, 10),
+      },
     });
+  } catch (err) {
+    showStatus('Error: ' + err.message, 'error');
+  }
+});
 
-    // ===== PDF compression =====
+async function submitChain(payload) {
+  const resp = await fetch(SUBMIT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
 
-    async function safeCompress(file) {
-      try {
-        const compressed = await compressPdf(file);
-        const ratio = ((1 - compressed.size / file.size) * 100).toFixed(0);
-        const message = compressed.size < file.size
-          ? `Compressed: ${formatSize(file.size)} → ${formatSize(compressed.size)} (${ratio}% reduction)`
-          : `Compression complete (no size reduction). Using ${formatSize(compressed.size)}.`;
-        return { file: compressed, message };
-      } catch (err) {
-        console.warn('Compression failed, falling back to original:', err);
-        return {
-          file,
-          message: `Compression unavailable (${err.message}). Using original: ${formatSize(file.size)}.`,
-        };
-      }
+  if (data.stage === 'extraction' && (data.status === 'failed' || data.status === 'timeout')) {
+    showStatus('Extraction ' + data.status + ': ' + (data.error || ''), 'error');
+    $('run-btn').disabled = false;
+    return;
+  }
+
+  // Render extraction + mapper stages if present
+  if (data.extraction) renderExtraction(data.extraction);
+  if (data.mapped) renderMapper(data.mapped);
+
+  if (data.status === 'needs_override') {
+    showStatus(data.message || 'Form could not be classified — set it via override below.', 'error');
+    $('run-btn').disabled = false;
+    return;
+  }
+
+  // Audit was invoked — poll audit-status for the result.
+  showStatus('Extraction done. Running signature audit...', 'running');
+  await pollAudit(data.jobId);
+  $('run-btn').disabled = false;
+}
+
+// ---- Render: extraction ----------------------------------------------------
+function renderExtraction(ex) {
+  const fields = ['property_address', 'buyer_names', 'seller_names', 'seller_type',
+    'seller_entity_name', 'date_rpa_prepared', '_extraction_status'];
+  const kv = $('extraction-kv');
+  kv.innerHTML = '';
+  fields.forEach((f) => {
+    if (ex[f] === undefined) return;
+    const dt = document.createElement('dt'); dt.textContent = f;
+    const dd = document.createElement('dd'); dd.textContent = ex[f] || '(empty)';
+    kv.appendChild(dt); kv.appendChild(dd);
+  });
+  $('stage-extraction').classList.add('visible');
+}
+
+// ---- Render: mapper output + pre-fill override -----------------------------
+function renderMapper(mapped) {
+  const kv = $('mapper-kv');
+  kv.innerHTML = '';
+  const d = mapped.derivation || {};
+
+  const rows = [
+    ['formId', mapped.formId || '(not classified)', d.formId && d.formId.confidence, d.formId && d.formId.reason],
+    ['buyerCount', mapped.buyerCount, d.buyerCount && d.buyerCount.confidence, d.buyerCount && d.buyerCount.reason],
+    ['sellerCount', mapped.sellerCount, d.sellerCount && d.sellerCount.confidence, d.sellerCount && d.sellerCount.reason],
+    ['sellerEntity', mapped.sellerEntity && mapped.sellerEntity.isEntity
+      ? (mapped.sellerEntity.entityName || 'entity') : 'no', null, null],
+    ['extraction_status', d.extraction_status, d.extraction_status === 'main_call_only' ? 'low' : null,
+      d.extraction_status === 'main_call_only' ? 'least-reliable extraction path — verify carefully' : null],
+  ];
+
+  rows.forEach(([k, v, conf, reason]) => {
+    const dt = document.createElement('dt'); dt.textContent = k;
+    const dd = document.createElement('dd');
+    dd.textContent = (v == null ? '' : v) + '  ';
+    if (conf) {
+      const c = document.createElement('span');
+      c.className = 'conf conf-' + conf;
+      c.textContent = conf;
+      dd.appendChild(c);
     }
-
-    async function compressPdf(file) {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-      const compressedBytes = await pdfDoc.save({
-        useObjectStreams: true,
-        addDefaultPage: false,
-        objectsPerTick: 50,
-      });
-      return new Blob([compressedBytes], { type: 'application/pdf' });
+    if (reason) {
+      const r = document.createElement('div');
+      r.style.cssText = 'font-family:DM Sans;font-size:11px;color:var(--muted);margin-top:2px;';
+      r.textContent = reason;
+      dd.appendChild(r);
     }
+    kv.appendChild(dt); kv.appendChild(dd);
+  });
 
-    // ===== Utilities =====
+  // Pre-fill the override controls with the mapper's values.
+  if (mapped.formId) $('ov-form').value = mapped.formId;
+  $('ov-buyers').value = mapped.buyerCount || 1;
+  $('ov-sellers').value = mapped.sellerCount || 1;
 
-    function formatSize(bytes) {
-      if (bytes < 1024) return `${bytes} B`;
-      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-      return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-    }
+  $('stage-mapper').classList.add('visible');
+}
 
-    function fileToBase64(blob) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result.split(',')[1]);
-        reader.onerror = () => reject(new Error('Failed to read file'));
-        reader.readAsDataURL(blob);
-      });
-    }
+// ---- Poll audit-status -----------------------------------------------------
+async function pollAudit(jobId) {
+  const MAX = 100; // ~5 min at 3s
+  for (let i = 0; i < MAX; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    let data;
+    try {
+      const resp = await fetch(STATUS_URL + '?jobId=' + encodeURIComponent(jobId));
+      data = await resp.json();
+    } catch (e) { continue; }
 
-    async function pollUntilDone(jobId, statusEl) {
-      const startTime = Date.now();
-      while (true) {
-        if (Date.now() - startTime > POLL_TIMEOUT_MS) {
-          throw new Error('Audit timed out after 10 minutes');
-        }
+    if (data.status === 'complete') { renderAudit(data.result); showStatus('Audit complete.', 'ok'); return; }
+    if (data.status === 'error') { showStatus('Audit error: ' + (data.error || ''), 'error'); return; }
+    showStatus('Running signature audit... (' + ((i + 1) * 3) + 's)', 'running');
+  }
+  showStatus('Audit timed out after 5 minutes.', 'error');
+}
 
-        await sleep(POLL_INTERVAL_MS);
+// ---- Render: audit result --------------------------------------------------
+function renderAudit(result) {
+  if (!result) { showStatus('Audit returned no result object.', 'error'); return; }
+  const sum = result.summary || {};
+  const bar = $('audit-summary');
+  bar.innerHTML = '';
+  [['present', sum.present], ['absent', sum.absent], ['unclear', sum.unclear],
+   ['not_applicable', sum.not_applicable], ['error', sum.error]].forEach(([k, v]) => {
+    if (!v) return;
+    const chip = document.createElement('span');
+    chip.className = 'summary-chip';
+    chip.textContent = k + ': ' + v;
+    bar.appendChild(chip);
+  });
 
-        const resp = await fetch(`/.netlify/functions/audit-status?jobId=${encodeURIComponent(jobId)}`);
-        const data = await resp.json();
+  const box = $('audit-results');
+  box.innerHTML = '';
+  (result.results || []).forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'audit-row';
+    const pill = document.createElement('span');
+    const st = r.status || 'error';
+    pill.className = 'pill pill-' + (st === 'not_applicable' ? 'na' : st);
+    pill.textContent = st === 'not_applicable' ? 'n/a' : st;
+    const loc = document.createElement('div');
+    loc.className = 'audit-loc';
+    loc.innerHTML = '<div>' + (r.locationId || '?') + ' — ' + (r.party || '') +
+      ' <span style="color:var(--hint)">(p' + (r.page || '?') + ')</span></div>' +
+      (r.reasoning ? '<div class="audit-reason">' + escapeHtml(r.reasoning) + '</div>' : '');
+    row.appendChild(pill);
+    row.appendChild(loc);
+    box.appendChild(row);
+  });
+  $('stage-audit').classList.add('visible');
+}
 
-        const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
-        renderProgress(statusEl, jobId, elapsedSec);
-
-        if (data.status === 'complete' || data.status === 'error') {
-          return data;
-        }
-      }
-    }
-
-    function sleep(ms) {
-      return new Promise((r) => setTimeout(r, ms));
-    }
-
-    function renderStatus(el, message) {
-      el.innerHTML = `<div class="progress">${escapeHtml(message)}</div>`;
-    }
-
-    function renderProgress(el, jobId, elapsedSec) {
-      el.innerHTML = `<div class="progress">
-        <strong>Audit running…</strong> Elapsed: ${elapsedSec}s. Polling every ${POLL_INTERVAL_MS / 1000}s.<br>
-        <small>Job ID: ${escapeHtml(jobId)}</small>
-      </div>`;
-    }
-
-    function renderResults(data) {
-      const resultsEl = document.getElementById('results');
-
-      if (!data) {
-        resultsEl.innerHTML = `<div class="missing-item">No result data returned.</div>`;
-        return;
-      }
-
-      const s = data.summary || {};
-      const missing = (s.missingItems || []).filter((i) => i.status === 'absent');
-      const unclear = (s.missingItems || []).filter((i) => i.status === 'unclear');
-      const flagged = s.flaggedItems || [];
-
-      const isClean = missing.length === 0 && unclear.length === 0 && flagged.length === 0;
-
-      let html = `<div class="summary${isClean ? ' clean' : ''}">
-        <strong>Form:</strong> ${escapeHtml(data.formName)} (${escapeHtml(data.formId)})<br>
-        <strong>Contract state:</strong> ${escapeHtml(data.detection ? data.detection.state : 'n/a')}<br>
-        <strong>Parties:</strong> ${data.partyCount.buyers} buyer(s), ${data.partyCount.sellers} seller(s)<br>
-        <strong>Entity scenarios:</strong> buyer=${data.detection && data.detection.buyer_is_entity}, seller=${data.detection && data.detection.seller_is_entity}<br>
-        <strong>Form pages:</strong> ${JSON.stringify(data.formPages)} of ${data.totalPages}<br>
-        <strong>Checks run:</strong> ${data.checksRun}<br>
-        <strong>Present:</strong> ${s.present || 0} &nbsp;|&nbsp;
-        <strong>Absent:</strong> ${s.absent || 0} &nbsp;|&nbsp;
-        <strong>Unclear:</strong> ${s.unclear || 0} &nbsp;|&nbsp;
-        <strong>N/A:</strong> ${s.not_applicable || 0} &nbsp;|&nbsp;
-        <strong>Errors:</strong> ${s.error || 0}<br>
-        <strong>Identity matches:</strong> signer=${s.matches_signer || 0}, entity=${s.matches_entity || 0}, other=${s.matches_other || 0}
-      </div>`;
-
-      if (isClean) {
-        html += `<div class="summary clean"><strong>No missing signatures, initials, or entity mismatches detected.</strong></div>`;
-      } else {
-        if (missing.length > 0) {
-          html += `<h2>Missing (${missing.length})</h2>`;
-          for (const item of missing) {
-            html += `<div class="missing-item">
-              <strong>${escapeHtml(item.party)} — ${escapeHtml(item.markType)}</strong>
-              on page ${item.page} &nbsp;·&nbsp; <code>${escapeHtml(item.locationId)}</code><br>
-              <small>${escapeHtml(item.reasoning || '')}</small>
-            </div>`;
-          }
-        }
-        if (unclear.length > 0) {
-          html += `<h2>Needs human review — unclear (${unclear.length})</h2>`;
-          for (const item of unclear) {
-            html += `<div class="unclear-item">
-              <strong>${escapeHtml(item.party)} — ${escapeHtml(item.markType)}</strong>
-              on page ${item.page} &nbsp;·&nbsp; <code>${escapeHtml(item.locationId)}</code><br>
-              <small>${escapeHtml(item.reasoning || '')}</small>
-            </div>`;
-          }
-        }
-        if (flagged.length > 0) {
-          html += `<h2>Entity signature issues (${flagged.length})</h2>`;
-          for (const item of flagged) {
-            html += `<div class="flagged-item">
-              <strong>${escapeHtml(item.party)} — ${escapeHtml(item.status)}</strong>
-              on page ${item.page} &nbsp;·&nbsp; <code>${escapeHtml(item.locationId)}</code><br>
-              <small>${escapeHtml(item.reasoning || '')}</small>
-            </div>`;
-          }
-        }
-      }
-
-      html += `<details><summary>Raw JSON output</summary><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></details>`;
-      resultsEl.innerHTML = html;
-    }
-
-    function escapeHtml(str) {
-      return String(str == null ? '' : str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-    }
-  </script>
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+</script>
 </body>
 </html>
