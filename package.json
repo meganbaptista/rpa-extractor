@@ -7,6 +7,7 @@
   "dependencies": {
     "@netlify/blobs": "^10.0.0",
     "pdf-lib": "^1.17.1",
-    "pdf-parse": "2.4.5"
+    "pdf-parse": "2.4.5",
+    "pdfjs-dist": "5.4.296"
   }
 }
