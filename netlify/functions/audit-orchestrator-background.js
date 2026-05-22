@@ -419,20 +419,11 @@ exports.handler = async function (event) {
         `sellers:${overrodeSellers ? mapped.sellerCount + '->' + overrides.sellerCount : 'kept'}`);
     }
 
-    // If the form could not be classified and no override supplied one, stop
-    // here with a needs_override status so the test page can prompt for it.
-    if (!auditParams.formId) {
-      await resultsStore.setJSON(jobId, {
-        status: 'needs_override',
-        stage: 'mapper',
-        extraction,
-        mapped,
-        message: 'Form could not be classified. Select the form via override and resubmit.',
-        completedAt: Date.now(),
-      });
-      console.log(`[audit-orchestrator] jobId=${jobId} needs override (form not classified)`);
-      return { statusCode: 200 };
-    }
+    // NOTE: form classification (formId) is no longer required. The Phase 1
+    // holistic audit reads the whole packet and reasons about it regardless of
+    // form type — there is no per-form schema anymore. The handoff mapper's
+    // formId is kept in auditParams for now (harmless; audit-background ignores
+    // it) but it never blocks the audit.
 
     // Record the extraction + mapper output alongside the stage marker so the
     // test page can show them while the audit runs.
