@@ -110,7 +110,7 @@ const SCHEMAS = {
       "crop_anchor": {
         "text": "Buyer's Initials",
         "match_index": -1,
-        "offset_in": { "x_start": 1.0, "x_end": 3.4, "y_start": -0.28, "y_end": 0.28 }
+        "offset_in": { "x_start": 1.0, "x_end": 3.0, "y_start": -0.42, "y_end": 0.42 }
       },
       "notes": "COUNT CHECK: produces ONE check per page, not one per party. Counts distinct sets of initials in the buyer initials region and compares to the transaction's buyer count. crop_anchor anchors on the 'Buyer's Initials' label text so it crops correctly on every page including the final sheet (where the initials sit mid-page, not in the footer). The region extends generously right of the label to capture initials written beside the two printed slots when 3+ buyers sign. parties[] is retained as documentation only — it no longer drives a per-party fan-out."
     },
@@ -133,7 +133,7 @@ const SCHEMAS = {
       "crop_anchor": {
         "text": "Seller's Initials",
         "match_index": -1,
-        "offset_in": { "x_start": 1.0, "x_end": 3.4, "y_start": -0.28, "y_end": 0.28 }
+        "offset_in": { "x_start": 3.2, "x_end": 5.5, "y_start": -0.42, "y_end": 0.42 }
       },
       "notes": "COUNT CHECK: produces ONE check per page. Counts distinct sets of initials in the seller initials region and compares to the transaction's seller count. On 3-trustee deals the third initial is written beside the two printed slots — the generous region captures it. crop_anchor anchors on the 'Seller's Initials' label so it crops correctly on every page including the final sheet."
     },
