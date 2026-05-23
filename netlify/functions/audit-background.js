@@ -18,6 +18,18 @@
 // make it mandatory. This file is that.
 //
 // ----------------------------------------------------------------------------
+// TEST 2 — MODEL + THINKING ISOLATION (current change):
+// The deployed pipeline confabulated on the 5.8 MB / 40-page Tigertail packet
+// (false-positive "missing initials" on para 29, para 31, and RPA footers
+// that were in fact initialed). Delivery was proven byte-clean (md5 match), so
+// the bug is the prompt and/or the model+thinking config. The native-chat
+// control that audited this packet correctly was Opus 4.7 with adaptive
+// thinking; the pipeline was running claude-sonnet-4-20250514 with no
+// thinking. This change matches the model side of that control ONLY — the
+// prompt (buildAuditPrompt) is intentionally left exactly as-is so the
+// model+thinking config is the single isolated variable under test.
+// ----------------------------------------------------------------------------
+//
 // DESIGNED FOR THE FULL VISION (Phases 2-4):
 // The output envelope below has `audit` populated now, and `extracted` +
 // `reconciled` reserved (null in Phase 1). Phase 2 adds property/transaction
@@ -40,7 +52,13 @@ const { getStore } = require('@netlify/blobs');
 console.log('[audit-background] @netlify/blobs loaded');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-sonnet-4-20250514';
+
+// TEST 2: swapped from 'claude-sonnet-4-20250514' to Opus 4.7 to match the
+// native-chat control that audited the hard contract correctly. Opus 4.7 uses
+// adaptive thinking (configured in callClaude); manual extended thinking
+// ({ type:'enabled', budget_tokens }) is NOT accepted on this model and would
+// return a 400.
+const MODEL = 'claude-opus-4-7';
 
 console.log('[audit-background] module fully loaded, handler ready');
 
@@ -63,6 +81,11 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // document and writes its full analysis as prose (this is what makes it good
 // -- free reasoning). THEN it emits a structured JSON block derived from its
 // own reasoning. We never force rigid JSON in a way that chokes the analysis.
+//
+// NOTE (Test 2): this function is intentionally UNCHANGED. The current change
+// isolates the model+thinking config; the prompt is held constant so the test
+// has a single variable. If Test 2 still fails, the prompt becomes the next
+// change to make.
 // ============================================================================
 function buildAuditPrompt(params) {
   const { buyerCount, sellerCount, sellerEntity, buyerEntity } = params;
@@ -259,8 +282,21 @@ function parseAuditResponse(raw) {
 }
 
 // ----------------------------------------------------------------------------
-// Anthropic call. Whole PDF as a document block + the prompt. Generous
-// max_tokens because the holistic audit produces substantial prose.
+// Anthropic call. Whole PDF as a document block + the prompt.
+//
+// Opus 4.7 with ADAPTIVE THINKING (Test 2): the model decides how much to
+// reason before answering. effort='high' (the Opus 4.7 default and documented
+// sweet spot) lives in output_config, NOT inside `thinking`. 'max' is avoided
+// on purpose -- the docs warn it can cause overthinking on structured-output
+// tasks, and this audit emits a JSON block.
+//
+// max_tokens is generous (32000) because adaptive thinking tokens are billed
+// as output and count toward max_tokens -- the ceiling must cover thinking
+// PLUS the substantial audit prose + JSON. You are billed only for tokens
+// actually generated, so a high ceiling costs nothing extra; it only prevents
+// truncation. The stop_reason guard below turns any remaining truncation into
+// a loud failure instead of a silently partial audit.
+//
 // Retries on 429/529.
 // ----------------------------------------------------------------------------
 async function callClaude(prompt, pdfBase64, attempt = 0) {
@@ -277,7 +313,15 @@ async function callClaude(prompt, pdfBase64, attempt = 0) {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 8000,
+      // Raised from 8000 for Test 2: see header note above. Well within Opus
+      // 4.7's 128k output limit; only billed for tokens actually generated.
+      max_tokens: 32000,
+      // Opus 4.7 requires adaptive thinking. display:'omitted' skips streaming
+      // the thinking text (this is a server-to-server pipeline that never
+      // surfaces it); the text-block filter below is unaffected by this.
+      thinking: { type: 'adaptive', display: 'omitted' },
+      // effort is a top-level output_config field (NOT nested in `thinking`).
+      output_config: { effort: 'high' },
       messages: [
         {
           role: 'user',
@@ -309,6 +353,21 @@ async function callClaude(prompt, pdfBase64, attempt = 0) {
   }
 
   const data = await response.json();
+
+  // Truncation guard: with adaptive thinking, thinking tokens consume the same
+  // budget as the response. If max_tokens were too small the audit would be
+  // cut off mid-sentence and parseAuditResponse would still "succeed" on a
+  // partial answer -- a silent bad audit. Fail loudly instead.
+  if (data.stop_reason === 'max_tokens') {
+    throw new Error(
+      'Audit response hit max_tokens -- output was truncated before completion. ' +
+      'Raise max_tokens in callClaude and re-run this job.'
+    );
+  }
+
+  // Adaptive thinking returns thinking blocks before text blocks. We keep only
+  // the text blocks (the prose audit + the ===STRUCTURED=== JSON); this filter
+  // already ignores thinking blocks correctly.
   return (data.content || [])
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
