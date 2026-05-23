@@ -82,23 +82,37 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // -- free reasoning). THEN it emits a structured JSON block derived from its
 // own reasoning. We never force rigid JSON in a way that chokes the analysis.
 //
-// NOTE (Test 2): this function is intentionally UNCHANGED. The current change
-// isolates the model+thinking config; the prompt is held constant so the test
-// has a single variable. If Test 2 still fails, the prompt becomes the next
-// change to make.
+// NOTE: Test 2 (the model + adaptive-thinking swap) is confirmed across three
+// runs -- the holistic audit reads the document reliably. The party-context
+// construction below was then changed (see its inline comment): the seller
+// authorized-signer roster is no longer fed to the audit, because an
+// extraction-derived roster is a low-confidence guess that caused false
+// "unaccounted-for signer" flags. The rest of this prompt -- task list,
+// reasoning guidance, PART 1 / PART 2 -- is unchanged.
 // ============================================================================
 function buildAuditPrompt(params) {
   const { buyerCount, sellerCount, sellerEntity, buyerEntity } = params;
 
   // Party context -- the equivalent of "one buyer, one seller, one agent" that
-  // made the native-chat prompt work. Derived by the handoff mapper.
+  // made the native-chat prompt work.
+  //
+  // We feed only RELIABLE categorical facts: party counts per side, and whether
+  // each side is an entity (+ its name). We deliberately do NOT feed a seller
+  // authorized-signer roster, even though the handoff mapper still derives
+  // sellerEntity.signerNames from extraction. That roster is a low-confidence
+  // guess -- CAR seller printed-name slots are typically blank, so extraction
+  // reads names off cursive DocuSign signatures. Feeding it as an authoritative
+  // roster made the audit flag legitimate signers as "unaccounted for" whenever
+  // extraction undercounted. The holistic audit reads signers straight from the
+  // document -- that is the source of truth. The buyer side already works this
+  // way (buyerEntity carries no signer roster).
+  // V2-READY: when party context comes from the Brick 7 wizard as human-
+  // confirmed input, a roster CAN be passed and treated as authoritative --
+  // gate any future signer-roster clause on a "confirmed" flag, never on raw
+  // extraction output.
   let partyContext = `This transaction has ${buyerCount} buyer(s) and ${sellerCount} seller(s), plus a buyer's agent and a listing agent.`;
   if (sellerEntity && sellerEntity.isEntity) {
-    partyContext += ` The seller side is an entity${sellerEntity.entityName ? ` ("${sellerEntity.entityName}")` : ''}`;
-    if (sellerEntity.signerNames && sellerEntity.signerNames.length) {
-      partyContext += `, signed by its authorized signer(s): ${sellerEntity.signerNames.join(', ')}`;
-    }
-    partyContext += '.';
+    partyContext += ` The seller side is an entity${sellerEntity.entityName ? ` ("${sellerEntity.entityName}")` : ''}.`;
   }
   if (buyerEntity && buyerEntity.isEntity) {
     partyContext += ` The buyer side is an entity${buyerEntity.entityName ? ` ("${buyerEntity.entityName}")` : ''}.`;
