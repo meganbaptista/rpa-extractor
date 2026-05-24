@@ -32,6 +32,7 @@
     --blue: #1a4a7a; --blue-light: #e8f0f9;
     --danger: #c0392b; --danger-light: #fdf0ee;
     --warning-light: #fef9ec; --warning: #92670a;
+    --slate: #46586a; --slate-light: #eef1f3;
     --radius: 10px; --radius-sm: 6px;
   }
   body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
@@ -109,27 +110,64 @@
   .chk-flag-fine { background: #e2e0da; color: var(--muted); }
   .chk-reason { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .tier-empty { font-size: 12px; color: var(--hint); padding: 6px 0; }
-  /* Holistic audit result */
-  .status-banner { padding: 12px 14px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 500; }
-  .status-complete { background: var(--green-light); color: var(--green-text); border: 1px solid #bfe0d0; }
-  .status-issues_found { background: var(--danger-light); color: var(--danger); border: 1px solid #e8c4be; }
-  .status-needs_review { background: var(--warning-light); color: var(--warning); border: 1px solid #f0d98a; }
-  .finding-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; border-radius: var(--radius-sm); margin-bottom: 4px; font-size: 13px; }
-  .finding-missing { background: var(--danger-light); border: 1px solid #e8c4be; }
-  .finding-qc_flag { background: var(--warning-light); border: 1px solid #f0d98a; }
-  .finding-review { background: var(--bg); border: 1px solid var(--border); }
-  .finding-sev { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 2px 8px; border-radius: 10px; flex-shrink: 0; }
-  .sev-missing { background: var(--danger); color: #fff; }
-  .sev-qc_flag { background: var(--warning); color: #fff; }
-  .sev-review { background: #e2e0da; color: var(--muted); }
-  .finding-body { flex: 1; }
-  .finding-loc { font-weight: 600; }
-  .finding-detail { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  .prose-block { font-size: 13px; line-height: 1.62; color: var(--text); white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; }
-  .audit-loc { flex: 1; }
-  .audit-reason { font-size: 11px; color: var(--muted); margin-top: 2px; }
-  .summary-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-  .summary-chip { font-size: 12px; padding: 4px 10px; border-radius: 14px; background: var(--bg); border: 1px solid var(--border); }
+  /* ===== Step 4 — triage audit surface ===== */
+  #stage-audit { padding: 30px 32px; }
+  /* Layer 1 — verdict, counts, summary */
+  .verdict { font-family: 'DM Serif Display', serif; font-size: clamp(24px, 5.5vw, 30px); line-height: 1.12; display: flex; align-items: center; gap: 11px; }
+  .verdict-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+  .v-needs_review { color: var(--warning); }
+  .v-needs_review .verdict-dot { background: var(--warning); }
+  .v-issues_found { color: var(--danger); }
+  .v-issues_found .verdict-dot { background: var(--danger); }
+  .v-complete { color: var(--green); }
+  .v-complete .verdict-dot { background: var(--green); }
+  .counts { display: flex; gap: clamp(24px, 7vw, 48px); margin-top: 20px; }
+  .count-num { font-size: clamp(30px, 8vw, 38px); font-weight: 600; line-height: 1; color: var(--text); letter-spacing: -.01em; }
+  .count-clear .count-num { color: var(--green); }
+  .count-label { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  .count-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .summary-line { margin-top: 18px; font-size: 14px; line-height: 1.6; color: var(--muted); max-width: 62ch; }
+  .triage-rule { height: 1px; background: var(--border); margin: 24px 0; }
+  .dot-clear { background: var(--green); }
+  .dot-alert { background: var(--danger); }
+  .dot-qc { background: var(--warning); }
+  .dot-confirm { background: var(--slate); }
+  /* Layer 2 — zones */
+  .zone { margin-bottom: 20px; }
+  .zone:last-of-type { margin-bottom: 0; }
+  .zone-head { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  .z-dot { width: 7px; height: 7px; border-radius: 50%; }
+  .z-count { color: var(--hint); font-weight: 500; }
+  .zone-clear { display: flex; align-items: flex-start; gap: 9px; background: var(--green-light); border-radius: var(--radius-sm); padding: 11px 13px; font-size: 13px; line-height: 1.5; color: var(--green-text); }
+  .zone-clear svg { width: 15px; height: 15px; flex-shrink: 0; margin-top: 1px; color: var(--green); }
+  .zone-empty { font-size: 12.5px; color: var(--hint); padding: 3px 0; }
+  /* finding rows — typography + tint, no per-row boxes */
+  .finding { border: none; }
+  .finding + .finding { border-top: 1px solid var(--border); }
+  .finding summary { list-style: none; cursor: pointer; display: flex; align-items: flex-start; gap: 10px; padding: 11px 0; }
+  .finding summary::-webkit-details-marker { display: none; }
+  .finding summary:focus-visible { outline: 2px solid var(--slate); outline-offset: 2px; border-radius: 3px; }
+  .f-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+  .f-text { flex: 1; min-width: 0; }
+  .f-loc { font-size: 13.5px; font-weight: 600; color: var(--text); }
+  .f-issue { display: block; font-size: 13px; line-height: 1.5; color: var(--text); margin-top: 2px; }
+  .chev { width: 14px; height: 14px; flex-shrink: 0; margin-top: 4px; color: var(--hint); transition: transform .18s ease; }
+  .finding[open] .chev, .triage-prose[open] .chev { transform: rotate(90deg); }
+  .f-detail { font-size: 12.5px; line-height: 1.6; color: var(--muted); margin: 2px 0 13px 16px; padding-left: 13px; border-left: 2px solid var(--border); }
+  /* Layer 3 — full reasoning, collapsed */
+  .triage-prose { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px; }
+  .triage-prose summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--muted); }
+  .triage-prose summary::-webkit-details-marker { display: none; }
+  .triage-prose summary:focus-visible { outline: 2px solid var(--slate); outline-offset: 2px; border-radius: 3px; }
+  .prose-block { font-size: 13px; line-height: 1.66; color: var(--text); white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 15px 17px; margin-top: 11px; }
+  .triage-note { font-size: 12.5px; color: var(--warning); background: var(--warning-light); border: 1px solid #f0d98a; border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 12px; }
+  /* subtle entrance */
+  @keyframes triage-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  #audit-result > * { animation: triage-rise .4s cubic-bezier(.2,.7,.3,1) both; }
+  #audit-result > *:nth-child(2) { animation-delay: .06s; }
+  #audit-result > *:nth-child(3) { animation-delay: .1s; }
+  #audit-result > *:nth-child(n+4) { animation-delay: .14s; }
+  @media (prefers-reduced-motion: reduce) { #audit-result > * { animation: none; } }
   footer { text-align: center; font-size: 12px; color: var(--hint); margin-top: 24px; }
 </style>
 </head>
@@ -191,20 +229,10 @@
     </div>
   </div>
 
-  <!-- STEP 4: AUDIT RESULT — holistic -->
+  <!-- STEP 4: AUDIT RESULT — triage surface -->
   <div class="card stage" id="stage-audit">
     <div class="card-label">Step 4 — Signature audit result</div>
-
-    <!-- overall status banner -->
-    <div id="audit-status-banner"></div>
-
-    <!-- structured findings -->
-    <div class="tier-header" style="margin-top:16px;">Findings <span class="tier-sub">missing signatures, QC flags, and spots to review</span></div>
-    <div id="audit-findings"></div>
-
-    <!-- full prose audit -->
-    <div class="tier-header" style="margin-top:20px;">Full audit <span class="tier-sub">the complete reasoning, document by document</span></div>
-    <div id="audit-prose"></div>
+    <div id="audit-result"></div>
   </div>
 
   <footer>Keeva signature audit — validation harness</footer>
@@ -491,67 +519,158 @@ async function pollChain(jobId) {
 
 // ---- Render: holistic audit result -----------------------------------------
 function renderAudit(result) {
+  const mount = $('audit-result');
+  mount.innerHTML = '';
   if (!result) { showStatus('Audit returned no result object.', 'error'); return; }
 
-  // The envelope: { phase, audit:{prose,structured}, extracted, reconciled }
   const audit = result.audit || {};
   const prose = audit.prose || '';
   const structured = audit.structured || null;
 
-  // ===== overall status banner =====
-  const banner = $('audit-status-banner');
-  banner.innerHTML = '';
-  const status = (structured && structured.overall_status) || 'needs_review';
-  const div = document.createElement('div');
-  div.className = 'status-banner status-' + status;
-  const label = {
-    complete: '\u2713 Complete — every required signature and initial is present',
-    issues_found: '\u26a0 Issues found — a required signature or initial is missing',
-    needs_review: '\u26a0 Needs review — some items could not be auto-determined',
-  }[status] || status;
-  const summaryLine = structured && structured.summary ? '  ·  ' + structured.summary : '';
-  div.textContent = label + summaryLine;
-  banner.appendChild(div);
-
-  // ===== structured findings =====
-  const fbox = $('audit-findings');
-  fbox.innerHTML = '';
-  const findings = (structured && Array.isArray(structured.findings)) ? structured.findings : [];
+  // Fallback: no structured envelope — show a notice + the prose, expanded.
   if (!structured) {
-    fbox.innerHTML = '<div class="tier-empty">The audit returned prose only — structured findings unavailable for this run. See the full audit below.</div>';
-  } else if (!findings.length) {
-    fbox.innerHTML = '<div class="tier-empty">No missing signatures, QC flags, or review items. Packet looks clean.</div>';
-  } else {
-    // Order: missing first, then qc_flag, then review.
-    const order = { missing: 0, qc_flag: 1, review: 2 };
-    findings.slice().sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9))
-      .forEach((f) => {
-        const row = document.createElement('div');
-        const sev = f.severity || 'review';
-        row.className = 'finding-row finding-' + sev;
-        const sevTag = document.createElement('span');
-        sevTag.className = 'finding-sev sev-' + sev;
-        sevTag.textContent = sev === 'qc_flag' ? 'QC' : sev;
-        const body = document.createElement('div');
-        body.className = 'finding-body';
-        body.innerHTML =
-          '<div class="finding-loc">' + escapeHtml(f.location || '?') + ' — ' + escapeHtml(f.issue || '') + '</div>' +
-          (f.detail ? '<div class="finding-detail">' + escapeHtml(f.detail) + '</div>' : '');
-        row.appendChild(sevTag);
-        row.appendChild(body);
-        fbox.appendChild(row);
-      });
+    mount.appendChild(triEl('div', 'triage-note',
+      'Structured findings unavailable for this run — showing the full audit below.'));
+    mount.appendChild(buildProse(prose, true));
+    $('stage-audit').classList.add('visible');
+    return;
   }
 
-  // ===== full prose audit =====
-  const pbox = $('audit-prose');
-  pbox.innerHTML = '';
-  const pre = document.createElement('div');
-  pre.className = 'prose-block';
-  pre.textContent = prose || '(no prose returned)';
-  pbox.appendChild(pre);
+  const findings = Array.isArray(structured.findings) ? structured.findings : [];
+  const status = structured.overall_status || 'needs_review';
+
+  // Map the data's three severities onto the three triage zones.
+  // Any unrecognized severity falls into Confirm (review) so nothing is lost.
+  const buckets = { missing: [], qc_flag: [], review: [] };
+  findings.forEach((f) => {
+    const sev = (f && (f.severity === 'missing' || f.severity === 'qc_flag' || f.severity === 'review'))
+      ? f.severity : 'review';
+    buckets[sev].push(f || {});
+  });
+
+  // Layer 1 — the 20-second verdict.
+  mount.appendChild(buildVerdict(status, structured.summary, buckets));
+  mount.appendChild(triEl('div', 'triage-rule'));
+
+  // Layer 2 — the three zones.
+  mount.appendChild(buildZone('action',  'Action',  buckets.missing));
+  mount.appendChild(buildZone('qc',      'QC',      buckets.qc_flag));
+  mount.appendChild(buildZone('confirm', 'Confirm', buckets.review));
+
+  // Layer 3 — the full reasoning, collapsed.
+  mount.appendChild(buildProse(prose, false));
 
   $('stage-audit').classList.add('visible');
+}
+
+// --- triage render helpers --------------------------------------------------
+// Data values always go in via textContent (model output is untrusted); the
+// only innerHTML used is the static chevron SVG.
+function triEl(tag, cls, txt) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (txt != null) n.textContent = txt;
+  return n;
+}
+
+const CHEVRON_SVG =
+  '<svg class="chev" viewBox="0 0 16 16" aria-hidden="true">' +
+  '<path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" ' +
+  'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+// Layer 1 — verdict word, the three counts, the summary line.
+function buildVerdict(status, summary, buckets) {
+  const block = triEl('div', 'verdict-block');
+
+  const label = { complete: 'Complete', issues_found: 'Issues Found',
+    needs_review: 'Needs Review' }[status] || status;
+  const verdict = triEl('div', 'verdict v-' + status);
+  verdict.appendChild(triEl('span', 'verdict-dot'));
+  verdict.appendChild(document.createTextNode(label));
+  block.appendChild(verdict);
+
+  const counts = triEl('div', 'counts');
+  counts.appendChild(buildCount('Action',  buckets.missing.length, 'action'));
+  counts.appendChild(buildCount('QC',      buckets.qc_flag.length, 'qc'));
+  counts.appendChild(buildCount('Confirm', buckets.review.length,  'confirm'));
+  block.appendChild(counts);
+
+  if (summary) block.appendChild(triEl('p', 'summary-line', summary));
+  return block;
+}
+
+// One count unit. Action with 0 reads as a positive "clear" state.
+function buildCount(label, n, kind) {
+  const clear = (kind === 'action' && n === 0);
+  const unit = triEl('div', 'count' + (clear ? ' count-clear' : ''));
+  unit.appendChild(triEl('div', 'count-num', String(n)));
+  const lab = triEl('div', 'count-label');
+  const dot = kind === 'action' ? (n === 0 ? 'dot-clear' : 'dot-alert')
+    : kind === 'qc' ? 'dot-qc' : 'dot-confirm';
+  lab.appendChild(triEl('span', 'count-dot ' + dot));
+  lab.appendChild(document.createTextNode(label));
+  unit.appendChild(lab);
+  return unit;
+}
+
+// One zone — action | qc | confirm.
+function buildZone(kind, label, items) {
+  const zone = triEl('div', 'zone');
+
+  const headDot = kind === 'action' ? (items.length ? 'dot-alert' : 'dot-clear')
+    : kind === 'qc' ? 'dot-qc' : 'dot-confirm';
+  const head = triEl('div', 'zone-head');
+  head.appendChild(triEl('span', 'z-dot ' + headDot));
+  head.appendChild(document.createTextNode(label));
+  head.appendChild(triEl('span', 'z-count', '\u00b7 ' + items.length));
+  zone.appendChild(head);
+
+  if (items.length) {
+    const fDot = kind === 'action' ? 'dot-alert' : kind === 'qc' ? 'dot-qc' : 'dot-confirm';
+    items.forEach((f) => zone.appendChild(buildFinding(f, fDot)));
+  } else if (kind === 'action') {
+    // Empty Action is a result, not a void — render it as a green pass.
+    const clear = triEl('div', 'zone-clear');
+    clear.innerHTML =
+      '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.4l3.4 3.4L13 4.6" ' +
+      'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" ' +
+      'stroke-linejoin="round"/></svg>';
+    clear.appendChild(triEl('span', null,
+      'No missing required signatures or initials — nothing here is deal-blocking.'));
+    zone.appendChild(clear);
+  } else {
+    zone.appendChild(triEl('div', 'zone-empty', 'None.'));
+  }
+  return zone;
+}
+
+// One finding — collapsed row (location + issue) expanding to its detail.
+function buildFinding(f, dotClass) {
+  const det = triEl('details', 'finding');
+  const sum = document.createElement('summary');
+
+  sum.appendChild(triEl('span', 'f-dot ' + dotClass));
+  const text = triEl('div', 'f-text');
+  text.appendChild(triEl('span', 'f-loc', f.location || 'Unspecified location'));
+  text.appendChild(triEl('span', 'f-issue', f.issue || ''));
+  sum.appendChild(text);
+  sum.insertAdjacentHTML('beforeend', CHEVRON_SVG);
+
+  det.appendChild(sum);
+  if (f.detail) det.appendChild(triEl('div', 'f-detail', f.detail));
+  return det;
+}
+
+// Layer 3 — the full prose audit, collapsed (open in the prose-only fallback).
+function buildProse(prose, openByDefault) {
+  const det = triEl('details', 'triage-prose');
+  if (openByDefault) det.setAttribute('open', '');
+  const sum = document.createElement('summary');
+  sum.insertAdjacentHTML('beforeend', CHEVRON_SVG);
+  sum.appendChild(document.createTextNode('Full audit reasoning \u2014 document by document'));
+  det.appendChild(sum);
+  det.appendChild(triEl('div', 'prose-block', prose || '(no prose returned)'));
+  return det;
 }
 
 function escapeHtml(s) {
