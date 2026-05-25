@@ -1,0 +1,336 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://keeva.app/schemas/transaction-state.json",
+  "title": "Keeva transaction_state",
+  "description": "The locked contract for a transaction's final reconciled state. Call B (transaction-background.js) produces this object from a California contract packet. One field is NOT produced by Call B: property.type is sourced from MLS data via the extractor and merged in downstream — it is absent or null on raw Call B output, which is why it is not in property's required list.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["counter_chain", "parties", "property", "terms", "negotiated_terms", "needs_review"],
+  "properties": {
+    "counter_chain": {
+      "type": "object",
+      "description": "The offer/counter sequence and which document governs.",
+      "additionalProperties": false,
+      "required": ["controlling_document", "steps"],
+      "properties": {
+        "controlling_document": {
+          "type": "string",
+          "description": "The document whose terms govern — the last accepted document in the chain (e.g. 'SCO #1', or 'RPA' if accepted outright)."
+        },
+        "steps": {
+          "type": "array",
+          "description": "The chain in order, oldest first.",
+          "items": { "$ref": "#/definitions/counterStep" }
+        }
+      }
+    },
+    "parties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["buyers", "sellers"],
+      "properties": {
+        "buyers": { "type": "array", "items": { "$ref": "#/definitions/party" } },
+        "sellers": { "type": "array", "items": { "$ref": "#/definitions/party" } }
+      }
+    },
+    "property": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "county", "apn"],
+      "properties": {
+        "address": { "type": "string" },
+        "county": { "type": "string" },
+        "apn": { "type": ["string", "null"] },
+        "type": {
+          "type": ["string", "null"],
+          "description": "Property type. NOT determined by Call B — sourced from MLS data via the extractor and merged in downstream. Absent or null on raw Call B output."
+        }
+      }
+    },
+    "terms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purchase_price",
+        "initial_deposit",
+        "acceptance_date",
+        "close_of_escrow",
+        "seller_disclosures_due",
+        "contingencies"
+      ],
+      "properties": {
+        "purchase_price": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reconciled"],
+          "properties": {
+            "reconciled": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value", "source", "confidence"],
+              "properties": {
+                "value": { "type": "number" },
+                "source": { "type": "string" },
+                "confidence": { "$ref": "#/definitions/confidence" }
+              }
+            },
+            "as_offered": {
+              "type": "object",
+              "description": "Present only when a counter changed the price from the RPA's offered value.",
+              "additionalProperties": false,
+              "required": ["value", "source"],
+              "properties": {
+                "value": { "type": "number" },
+                "source": { "type": "string" }
+              }
+            }
+          }
+        },
+        "initial_deposit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reconciled"],
+          "properties": {
+            "reconciled": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value", "basis", "source", "confidence"],
+              "properties": {
+                "value": { "type": "number" },
+                "basis": {
+                  "type": ["string", "null"],
+                  "description": "Non-null when the deposit is rule-derived (e.g. '3% of purchase price'); null when it is a plain stated dollar figure."
+                },
+                "source": { "type": "string" },
+                "confidence": { "$ref": "#/definitions/confidence" }
+              }
+            },
+            "as_offered": {
+              "type": "object",
+              "description": "Present only when a counter changed the deposit from the RPA's offered value.",
+              "additionalProperties": false,
+              "required": ["value", "basis", "source"],
+              "properties": {
+                "value": { "type": "number" },
+                "basis": { "type": ["string", "null"] },
+                "source": { "type": "string" }
+              }
+            }
+          }
+        },
+        "acceptance_date": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reconciled"],
+          "properties": {
+            "reconciled": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value", "source", "confidence"],
+              "properties": {
+                "value": { "type": "string", "description": "ISO date (YYYY-MM-DD) the final counter was fully executed." },
+                "source": { "type": "string" },
+                "confidence": { "$ref": "#/definitions/confidence" }
+              }
+            }
+          }
+        },
+        "close_of_escrow": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reconciled"],
+          "properties": {
+            "reconciled": { "$ref": "#/definitions/computedDate" }
+          }
+        },
+        "seller_disclosures_due": {
+          "type": "object",
+          "description": "The SELLER's deadline to deliver statutory disclosures — RPA paragraph 3N(1). Distinct from the buyer's 3L review periods.",
+          "additionalProperties": false,
+          "required": ["reconciled"],
+          "properties": {
+            "reconciled": { "$ref": "#/definitions/computedDate" }
+          }
+        },
+        "contingencies": {
+          "type": "object",
+          "description": "Seven fixed keys — every key is always present, each with a status.",
+          "additionalProperties": false,
+          "required": [
+            "loan",
+            "appraisal",
+            "inspection",
+            "insurance",
+            "document_review",
+            "sale_of_buyers_property",
+            "seller_replacement_property"
+          ],
+          "properties": {
+            "loan": { "$ref": "#/definitions/contingency" },
+            "appraisal": { "$ref": "#/definitions/contingency" },
+            "inspection": {
+              "allOf": [{ "$ref": "#/definitions/contingency" }],
+              "description": "RPA 3L(3) Investigation of Property — a day-count contingency."
+            },
+            "insurance": {
+              "allOf": [{ "$ref": "#/definitions/contingency" }],
+              "description": "RPA 3L(4) — a day-count contingency."
+            },
+            "document_review": {
+              "allOf": [{ "$ref": "#/definitions/contingency" }],
+              "description": "The bundled RPA 3L(5)-(8) buyer document-review contingency (seller documents, title report, HOA disclosures, leased/liened items). Normally 'active' with a delivery-relative period: reconciled.days and reconciled.removal_date are null, basis is '5 days after delivery of the documents'."
+            },
+            "sale_of_buyers_property": { "$ref": "#/definitions/contingency" },
+            "seller_replacement_property": { "$ref": "#/definitions/contingency" }
+          }
+        }
+      }
+    },
+    "negotiated_terms": {
+      "type": "array",
+      "description": "Credits, repairs, inclusions, exclusions and other specifically-negotiated terms. May be an empty array.",
+      "items": { "$ref": "#/definitions/negotiatedTerm" }
+    },
+    "needs_review": {
+      "type": "array",
+      "description": "Items the documents genuinely do not settle and a human must confirm. May be an empty array.",
+      "items": { "$ref": "#/definitions/needsReviewItem" }
+    }
+  },
+  "definitions": {
+    "confidence": {
+      "type": "string",
+      "enum": ["high", "low"]
+    },
+    "computedDate": {
+      "type": "object",
+      "description": "A date computed relative to Acceptance. Counted in calendar days, then rolled forward to the next business day if it lands on a weekend or legal holiday; value carries the business-day-adjusted date.",
+      "additionalProperties": false,
+      "required": ["value", "basis", "source", "confidence"],
+      "properties": {
+        "value": { "type": "string", "description": "ISO date (YYYY-MM-DD)." },
+        "basis": { "type": "string", "description": "The relative rule, e.g. '30 days after Acceptance'." },
+        "source": { "type": "string" },
+        "confidence": { "$ref": "#/definitions/confidence" }
+      }
+    },
+    "counterStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document", "role", "date", "status", "changes"],
+      "properties": {
+        "document": { "type": "string", "description": "e.g. 'RPA', 'SCO #1', 'BCO #1'." },
+        "role": { "type": "string", "description": "e.g. 'original_offer', 'seller_counter', 'buyer_counter'." },
+        "date": { "type": "string", "description": "ISO date (YYYY-MM-DD) the document was dated/signed." },
+        "status": { "type": "string", "enum": ["superseded", "controlling"] },
+        "accepted": {
+          "type": "object",
+          "description": "Present on an accepted counter offer; absent on the original offer.",
+          "additionalProperties": false,
+          "required": ["by", "date", "within_window"],
+          "properties": {
+            "by": { "type": "string", "description": "'buyers' or 'sellers'." },
+            "date": { "type": "string", "description": "ISO date of acceptance." },
+            "within_window": { "type": "boolean", "description": "Whether acceptance fell within the offer's response window." }
+          }
+        },
+        "changes": {
+          "type": "array",
+          "description": "Plain-English summary of what this document changed. Empty array on the original offer.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "party": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "capacity"],
+      "properties": {
+        "name": { "type": "string" },
+        "capacity": {
+          "type": "string",
+          "enum": ["individual", "trust", "llc", "corporation", "estate", "ambiguous"],
+          "description": "'ambiguous' when the contract documents disagree on, or fail to properly designate, the party's signing capacity. The defect is recorded in needs_review rather than resolved."
+        },
+        "signers": {
+          "type": ["array", "null"],
+          "description": "The individuals who sign for an entity party (trustees of a trust, authorized signers of an LLC or corporation). Null or omitted for an individual party.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "description": "'not legible' when the signature cannot be confidently read." }
+            }
+          }
+        }
+      }
+    },
+    "contingency": {
+      "type": "object",
+      "description": "A contingency. 'active' carries a 'reconciled' block (and 'as_offered' if a counter changed its period). 'waived' and 'not_present' carry a 'note' instead.",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["active", "waived", "not_present"],
+          "description": "active = in effect, with a removal deadline (which may be delivery-relative). waived = the contingency applies to a deal of this kind but the parties affirmatively removed it. not_present = the contingency was never engaged in this transaction at all."
+        },
+        "reconciled": {
+          "type": "object",
+          "description": "Present on 'active' contingencies.",
+          "additionalProperties": false,
+          "required": ["basis", "source", "confidence"],
+          "properties": {
+            "days": {
+              "type": ["integer", "null"],
+              "description": "Day-count after Acceptance. Null for document_review, whose clock is delivery-relative."
+            },
+            "basis": { "type": "string" },
+            "removal_date": {
+              "type": ["string", "null"],
+              "description": "ISO date the contingency is removed. Null for document_review (delivery is a future event, not computable at file-open)."
+            },
+            "source": { "type": "string" },
+            "confidence": { "$ref": "#/definitions/confidence" }
+          }
+        },
+        "as_offered": {
+          "type": "object",
+          "description": "Present only when a counter changed the contingency period from the RPA's offered value.",
+          "additionalProperties": false,
+          "required": ["days", "source"],
+          "properties": {
+            "days": { "type": "integer" },
+            "source": { "type": "string" }
+          }
+        },
+        "note": {
+          "type": "string",
+          "description": "Explanation for a 'waived' or 'not_present' status."
+        }
+      }
+    },
+    "negotiatedTerm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "description", "source", "confidence"],
+      "properties": {
+        "type": { "type": "string", "enum": ["credit", "repair", "inclusion", "exclusion", "other"] },
+        "description": { "type": "string" },
+        "source": { "type": "string" },
+        "confidence": { "$ref": "#/definitions/confidence" }
+      }
+    },
+    "needsReviewItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "reason"],
+      "properties": {
+        "field": { "type": "string", "description": "The transaction_state field or area in question." },
+        "reason": { "type": "string", "description": "Why a human must confirm it." }
+      }
+    }
+  }
+}
