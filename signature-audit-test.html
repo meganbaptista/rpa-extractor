@@ -169,6 +169,37 @@
   #audit-result > *:nth-child(n+4) { animation-delay: .14s; }
   @media (prefers-reduced-motion: reduce) { #audit-result > * { animation: none; } }
   footer { text-align: center; font-size: 12px; color: var(--hint); margin-top: 24px; }
+  /* ===== Step 5 — transaction state (Call B) ===== */
+  .tx-status { font-size: 13px; color: var(--blue); background: var(--blue-light); border-radius: var(--radius-sm); padding: 10px 14px; }
+  .tx-group { margin-bottom: 22px; }
+  .tx-group:last-child { margin-bottom: 0; }
+  .tx-group-head { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 9px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .tx-controlling { font-size: 13px; margin-bottom: 10px; }
+  .tx-step { padding: 9px 0; border-bottom: 1px solid var(--border); }
+  .tx-step:last-child { border-bottom: none; }
+  .tx-step-head { font-size: 13px; font-weight: 600; }
+  .tx-step-sub { font-size: 12px; color: var(--muted); font-family: 'DM Mono', monospace; margin-top: 2px; }
+  .tx-list { list-style: none; margin: 6px 0 0; }
+  .tx-list li { font-size: 12.5px; line-height: 1.55; padding-left: 14px; position: relative; margin-bottom: 3px; }
+  .tx-list li::before { content: '\2013'; position: absolute; left: 0; color: var(--hint); }
+  .tx-party { padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .tx-party:last-child { border-bottom: none; }
+  .tx-party-name { font-size: 13px; font-weight: 600; }
+  .tx-party-sub { font-size: 12px; color: var(--muted); font-family: 'DM Mono', monospace; margin-top: 2px; }
+  .tx-cont { display: flex; align-items: baseline; gap: 9px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .tx-cont:last-child { border-bottom: none; }
+  .tx-cont-name { font-size: 13px; font-weight: 600; min-width: 150px; }
+  .tx-cont-detail { flex: 1; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+  .tx-stat { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: .04em; flex-shrink: 0; background: #efefec; color: var(--muted); }
+  .tx-stat-active { background: var(--green-light); color: var(--green-text); }
+  .tx-stat-waived { background: var(--slate-light); color: var(--slate); }
+  .tx-stat-not_present { background: #efefec; color: var(--muted); }
+  .tx-review { background: var(--warning-light); border: 1px solid #f0d98a; border-radius: var(--radius-sm); padding: 9px 12px; margin-bottom: 6px; }
+  .tx-review:last-child { margin-bottom: 0; }
+  .tx-review-field { font-family: 'DM Mono', monospace; font-weight: 500; font-size: 12px; color: var(--warning); }
+  .tx-review-reason { font-size: 12.5px; color: var(--text); line-height: 1.55; margin-top: 3px; }
+  .tx-review-clear { font-size: 12.5px; color: var(--green-text); background: var(--green-light); border-radius: var(--radius-sm); padding: 9px 12px; }
+  .tx-asoffered { color: var(--hint); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -235,6 +266,12 @@
     <div id="audit-result"></div>
   </div>
 
+  <!-- STEP 5: TRANSACTION STATE — Call B, runs in parallel with the audit chain -->
+  <div class="card stage" id="stage-transaction">
+    <div class="card-label">Step 5 — Transaction State <span style="color:var(--hint);font-weight:400;text-transform:none;letter-spacing:0;">(Call B — runs in parallel)</span></div>
+    <div id="transaction-result"></div>
+  </div>
+
   <footer>Keeva signature audit — validation harness</footer>
 </div>
 
@@ -245,6 +282,7 @@
 const SUBMIT_URL = '/.netlify/functions/audit-submit';
 const CHUNK_URL = '/.netlify/functions/audit-chunk';
 const STATUS_URL = '/.netlify/functions/audit-status';
+const TRANSACTION_STATUS_URL = '/.netlify/functions/transaction-status';
 
 // Chunk size: 3 MB of base64 per request. Netlify's effective binary upload
 // ceiling is ~4.5 MB (6 MB raw, minus ~30% for Netlify's own base64 wrapping).
@@ -406,6 +444,9 @@ async function submitChain(payload) {
 
   // Poll audit-status — it carries stage progress and, eventually, the result.
   showStatus('Submitted. Running extraction → mapper → audit...', 'running');
+  // Call B is fanned out by the orchestrator alongside the audit. Poll it in
+  // parallel — NOT awaited — so it and the audit chain never block each other.
+  pollTransaction(data.jobId);
   await pollChain(data.jobId);
   $('run-btn').disabled = false;
 }
@@ -675,6 +716,261 @@ function buildProse(prose, openByDefault) {
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ============================================================================
+// CALL B — transaction-state (parallel to the audit chain).
+// ----------------------------------------------------------------------------
+// The orchestrator fans out transaction-background alongside the audit. Call B
+// writes to its own transaction-results store on its own ~2-minute timeline,
+// independent of extraction -> mapper -> audit. So this is a SEPARATE poll from
+// pollChain — neither can stall or break the other. It never touches the shared
+// status line; all of its state lives inside the Step 5 card.
+// ============================================================================
+async function pollTransaction(jobId) {
+  const MAX = 140; // ~7 min at 3s; Call B itself runs ~2 min
+  const card = $('stage-transaction');
+  const mount = $('transaction-result');
+  card.classList.add('visible');
+  mount.innerHTML = '';
+  const status = triEl('div', 'tx-status', 'Transaction-state reasoning running\u2026 (~2 min)');
+  mount.appendChild(status);
+
+  for (let i = 0; i < MAX; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+
+    let data;
+    try {
+      const resp = await fetch(TRANSACTION_STATUS_URL + '?jobId=' + encodeURIComponent(jobId));
+      data = JSON.parse(await resp.text());
+    } catch (e) {
+      continue; // transient — keep polling
+    }
+
+    if (data.status === 'complete') {
+      renderTransactionState(data.result);
+      return;
+    }
+    if (data.status === 'error') {
+      mount.innerHTML = '';
+      mount.appendChild(triEl('div', 'triage-note',
+        'Call B error: ' + (data.error || 'unknown error')));
+      return;
+    }
+    // 'pending' or 'unknown' (Call B has not written its first record yet) —
+    // both mean not-ready-yet; keep polling.
+    status.textContent = 'Transaction-state reasoning running\u2026 (' + ((i + 1) * 3) + 's)';
+  }
+  status.textContent = 'Transaction-state reasoning timed out after 7 minutes.';
+}
+
+// ---- Render: transaction state — grouped, readable -------------------------
+function renderTransactionState(envelope) {
+  const mount = $('transaction-result');
+  mount.innerHTML = '';
+  if (!envelope) {
+    mount.appendChild(triEl('div', 'triage-note', 'Call B returned no result object.'));
+    return;
+  }
+  const prose = envelope.prose || '';
+  const ts = envelope.transaction_state || null;
+
+  // Fallback: the marker / JSON could not be parsed — show the reasoning prose.
+  if (!ts) {
+    mount.appendChild(triEl('div', 'triage-note',
+      'transaction_state could not be parsed for this run — showing the reasoning below.'));
+    mount.appendChild(txCollapse('Call B reasoning', proseBlock(prose), true));
+    return;
+  }
+
+  mount.appendChild(txTerms(ts.terms));
+  mount.appendChild(txCounterChain(ts.counter_chain));
+  mount.appendChild(txParties(ts.parties));
+  mount.appendChild(txContingencies(ts.terms && ts.terms.contingencies));
+  mount.appendChild(txNeedsReview(ts.needs_review));
+  mount.appendChild(txCollapse('Call B reasoning \u2014 the counter-chain walkthrough',
+    proseBlock(prose), false));
+  mount.appendChild(txCollapse('Raw transaction_state JSON', proseBlock(txJson(ts)), false));
+}
+
+// ---- transaction-state render helpers --------------------------------------
+function txGroup(headText) {
+  const g = triEl('div', 'tx-group');
+  g.appendChild(triEl('div', 'tx-group-head', headText));
+  return g;
+}
+
+function proseBlock(text) {
+  return triEl('div', 'prose-block', (text == null || text === '') ? '(none)' : text);
+}
+
+function txJson(obj) {
+  try { return JSON.stringify(obj, null, 2); } catch (e) { return '(could not serialize)'; }
+}
+
+// Collapsed <details>, reusing the triage-prose styling.
+function txCollapse(summaryText, bodyNode, openByDefault) {
+  const det = triEl('details', 'triage-prose');
+  if (openByDefault) det.setAttribute('open', '');
+  const sum = document.createElement('summary');
+  sum.insertAdjacentHTML('beforeend', CHEVRON_SVG);
+  sum.appendChild(document.createTextNode(summaryText));
+  det.appendChild(sum);
+  det.appendChild(bodyNode);
+  return det;
+}
+
+function fmtMoney(n) {
+  if (typeof n !== 'number' || !isFinite(n)) return String(n);
+  return '$' + n.toLocaleString('en-US');
+}
+
+function confChip(c) {
+  return c ? triEl('span', 'conf conf-' + c, c) : null;
+}
+
+// --- Group: final terms -----------------------------------------------------
+function txTerms(terms) {
+  const g = txGroup('Final terms');
+  if (!terms) { g.appendChild(triEl('div', 'tx-cont-detail', '(no terms in output)')); return g; }
+  const dl = triEl('dl', 'kv');
+
+  function termRow(label, rec, asOffered, isMoney) {
+    if (!rec) return;
+    const dt = triEl('dt', null, label);
+    const dd = triEl('dd');
+    const val = (rec.value == null) ? '(none)'
+      : (isMoney ? fmtMoney(rec.value) : String(rec.value));
+    dd.appendChild(document.createTextNode(val + '  '));
+    if (rec.basis) dd.appendChild(triEl('span', 'tx-asoffered', '(' + rec.basis + ')  '));
+    const c = confChip(rec.confidence);
+    if (c) dd.appendChild(c);
+    if (asOffered && asOffered.value != null) {
+      const ao = isMoney ? fmtMoney(asOffered.value) : String(asOffered.value);
+      dd.appendChild(triEl('div', 'tx-asoffered', 'as offered: ' + ao));
+    }
+    dl.appendChild(dt); dl.appendChild(dd);
+  }
+
+  termRow('Purchase price', terms.purchase_price && terms.purchase_price.reconciled,
+    terms.purchase_price && terms.purchase_price.as_offered, true);
+  termRow('Initial deposit', terms.initial_deposit && terms.initial_deposit.reconciled,
+    terms.initial_deposit && terms.initial_deposit.as_offered, true);
+  termRow('Acceptance date', terms.acceptance_date && terms.acceptance_date.reconciled, null, false);
+  termRow('Close of escrow', terms.close_of_escrow && terms.close_of_escrow.reconciled, null, false);
+  termRow('Seller disclosures due',
+    terms.seller_disclosures_due && terms.seller_disclosures_due.reconciled, null, false);
+
+  g.appendChild(dl);
+  return g;
+}
+
+// --- Group: counter chain ---------------------------------------------------
+function txCounterChain(cc) {
+  const g = txGroup('Counter chain');
+  if (!cc) { g.appendChild(triEl('div', 'tx-cont-detail', '(no counter chain in output)')); return g; }
+
+  const ctrl = triEl('div', 'tx-controlling');
+  ctrl.appendChild(document.createTextNode('Controlling document: '));
+  ctrl.appendChild(triEl('b', null, cc.controlling_document || '(unknown)'));
+  g.appendChild(ctrl);
+
+  (cc.steps || []).forEach((s) => {
+    const step = triEl('div', 'tx-step');
+    step.appendChild(triEl('div', 'tx-step-head',
+      [s.document || '?', s.role || '', s.status || ''].filter(Boolean).join('  \u2014  ')));
+    const sub = [];
+    if (s.date) sub.push(s.date);
+    if (s.accepted) {
+      sub.push('accepted by ' + (s.accepted.by || '?') + ' ' + (s.accepted.date || '') +
+        (s.accepted.within_window === false ? ' (outside window)' : ' (within window)'));
+    }
+    if (sub.length) step.appendChild(triEl('div', 'tx-step-sub', sub.join('   \u00b7   ')));
+    if (Array.isArray(s.changes) && s.changes.length) {
+      const ul = triEl('ul', 'tx-list');
+      s.changes.forEach((ch) => ul.appendChild(triEl('li', null, ch)));
+      step.appendChild(ul);
+    }
+    g.appendChild(step);
+  });
+  return g;
+}
+
+// --- Group: parties ---------------------------------------------------------
+function txParties(parties) {
+  const g = txGroup('Parties');
+  if (!parties) { g.appendChild(triEl('div', 'tx-cont-detail', '(no parties in output)')); return g; }
+
+  function rows(list, role) {
+    (list || []).forEach((p) => {
+      const row = triEl('div', 'tx-party');
+      row.appendChild(triEl('div', 'tx-party-name', role + ': ' + (p.name || '(unnamed)')));
+      const bits = ['capacity: ' + (p.capacity || '?')];
+      if (Array.isArray(p.signers) && p.signers.length) {
+        bits.push('signers: ' + p.signers.map((s) => (s && s.name) || '?').join(', '));
+      }
+      row.appendChild(triEl('div', 'tx-party-sub', bits.join('    \u00b7    ')));
+      g.appendChild(row);
+    });
+  }
+  rows(parties.buyers, 'Buyer');
+  rows(parties.sellers, 'Seller');
+  return g;
+}
+
+// --- Group: contingencies (seven fixed keys) --------------------------------
+function txContingencies(cont) {
+  const g = txGroup('Contingencies');
+  if (!cont) { g.appendChild(triEl('div', 'tx-cont-detail', '(no contingencies in output)')); return g; }
+
+  const order = ['loan', 'appraisal', 'inspection', 'insurance', 'document_review',
+    'sale_of_buyers_property', 'seller_replacement_property'];
+  const labels = {
+    loan: 'Loan', appraisal: 'Appraisal', inspection: 'Inspection', insurance: 'Insurance',
+    document_review: 'Document review',
+    sale_of_buyers_property: 'Sale of buyer\u2019s property',
+    seller_replacement_property: 'Seller replacement property',
+  };
+
+  order.forEach((key) => {
+    const c = cont[key];
+    if (!c) return;
+    const row = triEl('div', 'tx-cont');
+    row.appendChild(triEl('span', 'tx-cont-name', labels[key] || key));
+    const st = c.status || 'unknown';
+    row.appendChild(triEl('span', 'tx-stat tx-stat-' + st, st.replace(/_/g, ' ')));
+
+    let detail = '';
+    if (c.reconciled) {
+      const r = c.reconciled, parts = [];
+      if (r.basis) parts.push(r.basis);
+      if (r.removal_date) parts.push('removal ' + r.removal_date);
+      if (r.confidence) parts.push('[' + r.confidence + ']');
+      detail = parts.join('   \u00b7   ');
+    } else if (c.note) {
+      detail = c.note;
+    }
+    row.appendChild(triEl('span', 'tx-cont-detail', detail));
+    g.appendChild(row);
+  });
+  return g;
+}
+
+// --- Group: needs review ----------------------------------------------------
+function txNeedsReview(nr) {
+  const g = txGroup('Needs review');
+  if (!Array.isArray(nr) || nr.length === 0) {
+    g.appendChild(triEl('div', 'tx-review-clear',
+      'Nothing flagged \u2014 every value resolved cleanly.'));
+    return g;
+  }
+  nr.forEach((item) => {
+    const box = triEl('div', 'tx-review');
+    box.appendChild(triEl('div', 'tx-review-field', (item && item.field) || '(unspecified field)'));
+    box.appendChild(triEl('div', 'tx-review-reason', (item && item.reason) || ''));
+    g.appendChild(box);
+  });
+  return g;
 }
 </script>
 </body>
