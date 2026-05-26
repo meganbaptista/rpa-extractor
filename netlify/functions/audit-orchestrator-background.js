@@ -344,12 +344,39 @@ exports.handler = async function (event) {
     await auditPayloadStore.setJSON(jobId, sharedPayload);
     console.log(`[audit-orchestrator] jobId=${jobId} copied PDF into audit-payloads`);
 
+    // proto/host are derived once here — used by the Call B fan-out just below
+    // and by the extraction + audit invocations further down.
+    const proto = (event.headers && event.headers['x-forwarded-proto']) || 'https';
+    const host = event.headers && event.headers.host;
+
+    // ----- Step 0b: fan out Call B (transaction-state) — ADDITIVE -----------
+    // B3a. Call B (transaction-background) reasons the transaction_state out of
+    // the SAME packet. It needs only the PDF — not extraction, the mapper, or
+    // auditParams — so it is fired HERE, the moment the audit-payloads copy
+    // exists, and runs fully parallel to the extraction -> audit chain below.
+    // It reads that same audit-payloads copy and writes its own
+    // transaction-results store; audit-background's end-of-run cleanup of
+    // audit-payloads happens minutes later, well after Call B has read it.
+    //
+    // Fire-and-forget AND wrapped so a failure here can NEVER fail the audit:
+    // Call B is additive — the extraction -> audit chain is the committed path
+    // and must not depend on it.
+    try {
+      const transactionUrl = proto + '://' + host + '/.netlify/functions/transaction-background';
+      await fetch(transactionUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId }),
+      });
+      console.log(`[audit-orchestrator] jobId=${jobId} fanned out Call B (transaction-background)`);
+    } catch (e) {
+      console.error(`[audit-orchestrator] jobId=${jobId} Call B fan-out failed (non-fatal):`, e.message);
+    }
+
     // ----- Step 1: invoke extraction (existing extract-background) ----------
     await writeStage('extraction');
     console.log(`[audit-orchestrator] jobId=${jobId} invoking extraction`);
 
-    const proto = (event.headers && event.headers['x-forwarded-proto']) || 'https';
-    const host = event.headers && event.headers.host;
     const extractUrl = proto + '://' + host + '/.netlify/functions/extract-background';
 
     try {
