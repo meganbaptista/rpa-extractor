@@ -263,8 +263,21 @@
 // New background extraction endpoints. The old single /extract endpoint is
 // still deployed and functional — see Zapier/external callers. We switched
 // the frontend to submit → poll for the long-running extraction work.
+//
+// CHUNKED UPLOAD: large PDFs (a 6.2 MB contract base64-encodes to ~8.3 MB of
+// JSON) exceed Netlify's ~6 MB synchronous request cap, so the PDF is no
+// longer sent in the /submit body. Each file is sliced into base64 chunks,
+// each POSTed to extract-chunk, then /submit is called with lightweight
+// per-file references. Mirrors the proven signature-audit pipeline.
 const SUBMIT_URL = '/.netlify/functions/submit';
 const RESULT_URL = '/.netlify/functions/result';
+const CHUNK_URL  = '/.netlify/functions/extract-chunk';
+
+// Chunk size: 3 MB of base64 per request. Netlify's effective synchronous
+// upload ceiling is ~4.5 MB (6 MB raw, minus ~30% for Netlify's own base64
+// wrapping). 3 MB leaves comfortable headroom for the JSON envelope and
+// metadata — deliberately NOT at the edge.
+const CHUNK_SIZE = 3 * 1024 * 1024;
 
 const ZAPIER = {
   rpa: 'https://hooks.zapier.com/hooks/catch/4252316/uvbvfoa/',
@@ -522,22 +535,65 @@ function showStatus(type, msg, cls) {
   el.textContent=msg; el.className='status-box status-'+cls; el.style.display='block';
 }
 
+// ─── CHUNKED UPLOAD ───────────────────────────────────────────────────────
+// Splits one PDF's base64 string into <limit pieces and POSTs each to
+// extract-chunk. Returns { uploadId, totalChunks, label } — a lightweight
+// reference /submit uses to assemble the file back together server-side.
+// base64 string slicing + rejoining is lossless because we slice ONE original
+// base64 string and never re-encode the pieces.
+function genUploadId() {
+  return 'up-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+async function uploadChunks(base64, label, type, fileLabel) {
+  const uploadId = genUploadId();
+  const pieces = [];
+  for (let i = 0; i < base64.length; i += CHUNK_SIZE) {
+    pieces.push(base64.slice(i, i + CHUNK_SIZE));
+  }
+  const totalChunks = pieces.length;
+
+  for (let i = 0; i < totalChunks; i++) {
+    showStatus(type, 'Uploading ' + fileLabel + ' — chunk ' + (i + 1) + ' of ' + totalChunks + '...', 'info');
+    const resp = await fetch(CHUNK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploadId, chunkIndex: i, totalChunks, data: pieces[i], label })
+    });
+    const raw = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      throw new Error('Chunk ' + (i + 1) + ' of ' + fileLabel + ' returned a non-JSON response (' +
+        resp.status + '): ' + raw.slice(0, 60));
+    }
+    if (!resp.ok || !data.received) {
+      throw new Error('Chunk ' + (i + 1) + ' of ' + fileLabel + ' failed to upload: ' + (data.error || resp.status));
+    }
+  }
+  return { uploadId, totalChunks, label };
+}
+
 // ─── BACKGROUND EXTRACTION VIA SUBMIT + POLL ──────────────────────────────
 // Replaces the old single-fetch /extract call. Same return shape (full
 // Anthropic-style response with content[0].text holding the field JSON),
 // so the downstream parsing in runExtraction is unchanged.
 //
 // Flow:
-//   1. POST to /submit with the payload, get back a jobId in <1s
+//   1. POST to /submit with per-file chunk references, get back a jobId in <1s
 //   2. Poll /result?jobId=... every 2s
 //   3. When status === 'complete', return the result; when 'failed', throw
 //   4. After 60 polls (= 2 minutes), give up
-async function callExtractAPI(payload, type) {
+//
+// `submitBody` is { files:[{uploadId,totalChunks,label}], prompt_override? } —
+// the PDF bytes themselves were already uploaded via uploadChunks().
+async function callExtractAPI(submitBody, type) {
   // Step 1: submit
   const submitResp = await fetch(SUBMIT_URL, {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(payload)
+    body:JSON.stringify(submitBody)
   });
   const submitText = await submitResp.text();
   let submitData;
@@ -606,21 +662,41 @@ async function runExtraction(type) {
     const docLabels = type==='rpa'
       ? ['California Residential Purchase Agreement (RPA) and all addenda','Property Profile Report','MLS Listing']
       : ['California Residential Listing Agreement (RLA)','Property Profile Report','MLS Listing'];
-    const documents=[];
+
+    // Chunked upload: each uploaded file is sliced into base64 chunks and
+    // uploaded under its own uploadId, so document boundaries and labels are
+    // preserved. /submit reassembles them into the documents[] payload that
+    // extract-background already expects — that downstream shape is unchanged.
+    const files = [];
     for(let i=0;i<3;i++) {
-      if(FILES[type][i]) { const data=await toBase64(FILES[type][i]); documents.push({label:docLabels[i],data}); }
+      if(FILES[type][i]) {
+        const data = await toBase64(FILES[type][i]);
+        const ref = await uploadChunks(data, docLabels[i], type, docLabels[i]);
+        files.push(ref);
+      }
     }
-    const payload = {documents, prompt_override: type==='rla' ? RLA_PROMPT : null};
+    const submitBody = {files, prompt_override: type==='rla' ? RLA_PROMPT : null};
     showStatus(type,'Submitting extraction job...','info'); setProgress(type,25);
     let result;
     try {
-      result = await callExtractAPI(payload, type);
+      result = await callExtractAPI(submitBody, type);
     } catch(err) {
       // Retry once for transient submit failures. The polling loop has its own
       // built-in resilience, so this only catches outright submit errors.
+      // Note: chunks are deleted after a successful assembly, so a retry that
+      // reaches assembly may need re-upload — handled by re-running the whole
+      // chunk+submit sequence below.
       showStatus(type,'First attempt failed, retrying in 5 seconds... ('+err.message+')','info');
       await new Promise(r => setTimeout(r, 5000));
-      result = await callExtractAPI(payload, type);
+      const retryFiles = [];
+      for(let i=0;i<3;i++) {
+        if(FILES[type][i]) {
+          const data = await toBase64(FILES[type][i]);
+          const ref = await uploadChunks(data, docLabels[i], type, docLabels[i]);
+          retryFiles.push(ref);
+        }
+      }
+      result = await callExtractAPI({files: retryFiles, prompt_override: type==='rla' ? RLA_PROMPT : null}, type);
     }
     setProgress(type,90);
     const text=result.content.map(b=>b.text||'').join('');
