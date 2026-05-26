@@ -289,8 +289,11 @@ async function buildTrimmedPdf(documents, located) {
 
   if (located.dpDoc === located.brokersDoc) {
     // Both target pages live in the same source PDF — load it once.
+    // ignoreEncryption: many CAR/DocuSign PDFs are permissions-encrypted
+    // (empty owner password, restriction flags) but fully readable. Without
+    // this flag pdf-lib throws on load and the trim is skipped.
     const srcBuffer = Buffer.from(documents[located.dpDoc].data, 'base64');
-    const srcPdf = await PDFDocument.load(srcBuffer);
+    const srcPdf = await PDFDocument.load(srcBuffer, { ignoreEncryption: true });
     const [dpPage, brokersPage] = await newPdf.copyPages(
       srcPdf,
       [located.dpPage, located.brokersPage]
@@ -301,12 +304,12 @@ async function buildTrimmedPdf(documents, located) {
     // The two target pages live in different source PDFs (e.g. RPA uploaded
     // as two separate files). Load each source separately.
     const dpBuffer = Buffer.from(documents[located.dpDoc].data, 'base64');
-    const dpSrc = await PDFDocument.load(dpBuffer);
+    const dpSrc = await PDFDocument.load(dpBuffer, { ignoreEncryption: true });
     const [dpPage] = await newPdf.copyPages(dpSrc, [located.dpPage]);
     newPdf.addPage(dpPage);
 
     const brokersBuffer = Buffer.from(documents[located.brokersDoc].data, 'base64');
-    const brokersSrc = await PDFDocument.load(brokersBuffer);
+    const brokersSrc = await PDFDocument.load(brokersBuffer, { ignoreEncryption: true });
     const [brokersPage] = await newPdf.copyPages(brokersSrc, [located.brokersPage]);
     newPdf.addPage(brokersPage);
   }
@@ -346,7 +349,7 @@ async function buildTrimmedMainPdf(documents, located) {
   }
 
   const srcBuffer = Buffer.from(documents[docIdx].data, 'base64');
-  const srcPdf = await PDFDocument.load(srcBuffer);
+  const srcPdf = await PDFDocument.load(srcBuffer, { ignoreEncryption: true });
   const totalPages = srcPdf.getPageCount();
 
   // Build the list of page indices to keep, in document order.
