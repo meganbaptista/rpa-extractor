@@ -87,8 +87,34 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // construction below was then changed (see its inline comment): the seller
 // authorized-signer roster is no longer fed to the audit, because an
 // extraction-derived roster is a low-confidence guess that caused false
-// "unaccounted-for signer" flags. The rest of this prompt -- task list,
-// reasoning guidance, PART 1 / PART 2 -- is unchanged.
+// "unaccounted-for signer" flags.
+//
+// TEST 3 -- PER-PAGE PASS + QC DE-SCOPE (current change, prompt only):
+// The Westshire run produced a false hedge: seller per-page footer initials
+// flagged "do not clearly appear" on RPA pages 4-14, when the "SL" DocuSign
+// initials are in fact crisp on every footer. Root cause: in a single
+// holistic read of a ~30-page packet the model never resolved the footer band
+// hard enough, so it fell back on the hedge clause. The cropped/zoomed footer
+// engine is NOT a fallback -- it was tried and never produced one clean
+// contract; the holistic call is the only approach that works.
+//
+// Fix (prompt only -- no architecture change):
+//  (a) The per-page-initials task is now an explicit page-by-page pass: the
+//      model must walk every RPA page in order and state, per page, what is in
+//      the buyer initial box and the seller initial box. Enumeration forces
+//      the model to actually resolve each footer rather than glance past it.
+//      Nothing is assumed -- a DocuSign envelope ID does NOT mean every initial
+//      tab was completed; every page is checked on its own.
+//  (b) The hedge clause is kept but re-scoped: hedging is permitted only AFTER
+//      a genuine page-by-page pass and only on the SPECIFIC page that will not
+//      resolve. A page-range hedge ("pages 4-14 unclear") is disallowed.
+//  (c) QC ("note anything that looks off") is REMOVED from this prompt. Call A
+//      is the perception pipeline -- signatures and initials, full stop. QC was
+//      never perception: structural QC (blank fields) is the extractor's job;
+//      interpretive QC (deal oddities) is Call B's job, where it already
+//      happens. severity "qc_flag" is removed from the PART 2 enum accordingly.
+// The rest of this prompt -- party context, counter-chain reasoning, the
+// PART 1 / PART 2 contract and the ===STRUCTURED=== marker -- is unchanged.
 // ============================================================================
 function buildAuditPrompt(params) {
   const { buyerCount, sellerCount, sellerEntity, buyerEntity } = params;
@@ -124,8 +150,10 @@ ${partyContext}
 
 The packet may contain a Residential Purchase Agreement (RPA) plus counter offers (SCO, SMCO, BCO) and addenda. Read the ENTIRE packet and reason about it as a whole.
 
+This is a signature and initials audit ONLY. Audit whether every required signature and initial is present. Do not report blank data fields, form-choice issues, or other quality-control observations -- those are out of scope for this audit.
+
 YOUR TASK -- audit every required signature and initial:
-- Every per-page initial on the RPA (buyer and seller initials on each page footer).
+- Per-page initials on the RPA. Do this as an explicit PAGE-BY-PAGE pass: go through every page of the RPA in order, and for EACH page state what you see in the Buyer's Initials box and what you see in the Seller's Initials box on that page's footer. Name the page, then the buyer box, then the seller box -- one line per page. Do not summarize a range of pages in a single statement; each page is inspected and reported on its own.
 - The Liquidated Damages (paragraph 29) and Arbitration of Disputes (paragraph 31) initials.
 - Buyer and seller signature blocks (RPA paragraphs 32 and 33).
 - Buyer's Agent and Listing Agent signatures (Real Estate Brokers Section).
@@ -136,12 +164,12 @@ IMPORTANT REASONING GUIDANCE:
 - A counter offer chain matters: the LAST accepted document governs. If a counter offer was accepted, that is where the binding signatures are. A blank signature line on an earlier document may be CORRECT if the form instructs parties to sign the attached counter instead -- reason about this, do not blindly flag every blank line.
 - The Escrow Holder Acknowledgment is normally blank at file-open -- that is expected, not a missing signature.
 - Distinguish a genuine MISSING required signature/initial from something that is blank by design.
-- You are reading rendered scanned pages; CAR forms scan messily. If you cannot clearly tell whether a small initial is present, say so and flag it for human eyes rather than guessing.
-- Also note any QC issues you happen to see -- a stray/incorrect name, a form that should have been used (e.g. Form ASA for more than two signers), data that looks inconsistent -- even though they are not missing signatures.
+- Do NOT assume. An electronic-signature envelope ID stamped on the pages (e.g. a DocuSign Envelope ID) only proves the packet went through an e-sign platform -- it does NOT prove every initial tab was completed. Check every page on its own merits regardless of any envelope ID.
+- You are reading rendered scanned pages; CAR forms scan messily. Hedging is a last resort, permitted ONLY after you have genuinely completed the page-by-page pass above, and ONLY for the specific individual page where a mark truly will not resolve. If you find yourself wanting to hedge a range of pages, that means you have not done the page-by-page pass -- go back and inspect each page. Never flag a range of pages as collectively unclear.
 
 OUTPUT FORMAT -- two parts, in this order:
 
-PART 1 -- Your full audit as prose. Write it the way you would explain it to the transaction coordinator: bottom line first, then a walk through each document in the packet, then QC items. Be thorough and specific (cite paragraphs and pages).
+PART 1 -- Your full audit as prose. Write it the way you would explain it to the transaction coordinator: bottom line first, then a walk through each document in the packet. Include the explicit page-by-page initials pass. Be thorough and specific (cite paragraphs and pages).
 
 PART 2 -- After the prose, on a new line, output exactly this marker:
 ===STRUCTURED===
@@ -153,14 +181,17 @@ followed by a single JSON object (no markdown fences) with this shape:
     {
       "location": "where, e.g. 'RPA p17 Real Estate Brokers Section' or 'BCO #1 para 4'",
       "issue": "what is missing or wrong",
-      "severity": "missing" | "qc_flag" | "review",
+      "severity": "missing" | "review",
       "detail": "one sentence of specifics"
     }
   ]
 }
 Rules for PART 2:
 - "overall_status": "complete" if every required signature/initial is present and only normal-at-this-stage blanks remain; "issues_found" if a required signature/initial is genuinely missing; "needs_review" if you could not clearly determine something and a human must check.
-- "findings": include every genuine missing signature/initial (severity "missing"), every QC issue (severity "qc_flag"), and every spot you could not clearly read (severity "review"). If there are none, use an empty array.
+- "findings": include every genuine missing signature/initial (severity "missing") and every spot you genuinely could not read after a real page-by-page inspection (severity "review"). If there are none, use an empty array.
+- Each finding is ONE tight sentence in "detail". Do not write a paragraph.
+- Per-page initials appear in "findings" ONLY as a specific named page that is genuinely missing or unreadable -- never as a page range, and never at all if the page-by-page pass found them present.
+- This audit does not produce QC findings. Do not add findings for blank data fields, form-choice issues, or other non-signature observations.
 - The JSON must be valid and parseable. PART 1 prose is the audit; PART 2 JSON is the machine-readable summary of it -- they must agree.`;
 }
 
