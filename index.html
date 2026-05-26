@@ -110,6 +110,17 @@
   .field-key { color: var(--muted); }
   .field-val { color: var(--text); word-break: break-word; font-family: 'DM Mono', monospace; font-size: 12px; }
   .field-empty { color: var(--hint); font-style: italic; font-family: 'DM Sans', sans-serif; font-size: 13px; }
+  /* Recent extractions — browser-local history (per-machine, fields only) */
+  .history-section { margin-top: 1.25rem; }
+  .history-list { display: flex; flex-direction: column; }
+  .history-row { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
+    padding: 9px 2px; border-bottom: 1px solid var(--border); cursor: pointer; background: none; border-left: none; border-right: none; border-top: none; width: 100%; text-align: left; font-family: inherit; }
+  .history-row:last-child { border-bottom: none; }
+  .history-row:hover .history-addr { color: var(--text); }
+  .history-addr { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .history-time { font-size: 11px; color: var(--hint); white-space: nowrap; font-family: 'DM Mono', monospace; }
+  .history-empty { font-size: 12px; color: var(--hint); font-style: italic; padding: 4px 2px; }
+  .history-viewing { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
   footer { text-align: center; font-size: 12px; color: var(--hint); margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 </style>
 </head>
@@ -180,7 +191,12 @@
         <div class="card-label" style="margin:0;" id="rpa-results-count">Fields extracted</div>
         <button class="btn btn-small" onclick="copyJSON('rpa')">Copy JSON ↗</button>
       </div>
+      <div class="history-viewing" id="rpa-history-viewing" style="display:none;"></div>
       <table class="fields-table"><colgroup><col><col></colgroup><tbody id="rpa-results-body"></tbody></table>
+    </div>
+    <div class="card history-section" id="rpa-history-card" style="display:none;">
+      <div class="card-label">Recent extractions <span style="text-transform:none;font-weight:400;letter-spacing:0;">— this browser only</span></div>
+      <div class="history-list" id="rpa-history-list"></div>
     </div>
     <div id="rpa-send-section" style="display:none;">
       <div class="card">
@@ -245,7 +261,12 @@
         <div class="card-label" style="margin:0;" id="rla-results-count">Fields extracted</div>
         <button class="btn btn-small" onclick="copyJSON('rla')">Copy JSON ↗</button>
       </div>
+      <div class="history-viewing" id="rla-history-viewing" style="display:none;"></div>
       <table class="fields-table"><colgroup><col><col></colgroup><tbody id="rla-results-body"></tbody></table>
+    </div>
+    <div class="card history-section" id="rla-history-card" style="display:none;">
+      <div class="card-label">Recent extractions <span style="text-transform:none;font-weight:400;letter-spacing:0;">— this browser only</span></div>
+      <div class="history-list" id="rla-history-list"></div>
     </div>
     <div id="rla-send-section" style="display:none;">
       <div class="card">
@@ -656,6 +677,7 @@ async function callExtractAPI(submitBody, type) {
 async function runExtraction(type) {
   document.getElementById(type+'-results-card').style.display='none';
   document.getElementById(type+'-send-section').style.display='none';
+  document.getElementById(type+'-history-viewing').style.display='none';
   document.getElementById(type+'-extract-btn').disabled=true;
   try {
     showStatus(type,'Reading documents...','info'); setProgress(type,15);
@@ -699,28 +721,23 @@ async function runExtraction(type) {
       result = await callExtractAPI({files: retryFiles, prompt_override: type==='rla' ? RLA_PROMPT : null}, type);
     }
     setProgress(type,90);
+    // Guard: a healthy extraction returns { content: [...] }. If extraction
+    // ran but produced no usable output (e.g. an unreadable/encrypted PDF the
+    // model couldn't parse), extract-background writes a fallback result with
+    // no `content` array. Catch that here and show a clear message instead of
+    // letting `.map()` throw "Cannot read properties of undefined".
+    if (!result || !Array.isArray(result.content)) {
+      throw new Error('The contract could not be read — extraction returned no usable data. The PDF may be encrypted, image-only, or corrupted. Try re-saving or re-exporting the PDF, then upload again.');
+    }
     const text=result.content.map(b=>b.text||'').join('');
     // Extract JSON from response which may contain reasoning text before it
     const cleanText = text.replace(/```json|```/g,'').trim();
     const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON found in response');
     extracted[type]=JSON.parse(jsonMatch[0]);
-    const labels=type==='rpa'?RPA_FIELD_LABELS:RLA_FIELD_LABELS;
-    const sections=type==='rpa'?RPA_SECTIONS:RLA_SECTIONS;
-    const tbody=document.getElementById(type+'-results-body');
-    tbody.innerHTML=''; let filled=0;
-    for(const [section,keys] of Object.entries(sections)) {
-      const hdr=document.createElement('tr'); hdr.className='section-head';
-      hdr.innerHTML='<td colspan="2">'+section+'</td>'; tbody.appendChild(hdr);
-      keys.forEach(key=>{
-        const val=extracted[type][key]||''; if(val) filled++;
-        const tr=document.createElement('tr'); tr.className='field-row';
-        tr.innerHTML='<td class="field-key">'+(labels[key]||key)+'</td><td class="field-val '+(val?'':'field-empty')+'">'+(val||'—')+'</td>';
-        tbody.appendChild(tr);
-      });
-    }
-    const total=Object.keys(labels).length;
-    document.getElementById(type+'-results-count').textContent=filled+' of '+total+' fields extracted';
+    renderResults(type);
+    // Save this run to browser-local history (per-machine, fields only).
+    saveToHistory(type, extracted[type]);
     setProgress(type,100);
     document.getElementById(type+'-status-box').style.display='none';
     document.getElementById(type+'-progress-wrap').style.display='none';
@@ -732,6 +749,114 @@ async function runExtraction(type) {
     document.getElementById(type+'-progress-wrap').style.display='none';
     document.getElementById(type+'-extract-btn').disabled=false;
   }
+}
+
+// Render the extracted[type] field set into the results table. Used by both a
+// live extraction and a replay of a saved history entry — identical output.
+function renderResults(type) {
+  const labels=type==='rpa'?RPA_FIELD_LABELS:RLA_FIELD_LABELS;
+  const sections=type==='rpa'?RPA_SECTIONS:RLA_SECTIONS;
+  const tbody=document.getElementById(type+'-results-body');
+  tbody.innerHTML=''; let filled=0;
+  for(const [section,keys] of Object.entries(sections)) {
+    const hdr=document.createElement('tr'); hdr.className='section-head';
+    hdr.innerHTML='<td colspan="2">'+section+'</td>'; tbody.appendChild(hdr);
+    keys.forEach(key=>{
+      const val=extracted[type][key]||''; if(val) filled++;
+      const tr=document.createElement('tr'); tr.className='field-row';
+      tr.innerHTML='<td class="field-key">'+(labels[key]||key)+'</td><td class="field-val '+(val?'':'field-empty')+'">'+(val||'—')+'</td>';
+      tbody.appendChild(tr);
+    });
+  }
+  const total=Object.keys(labels).length;
+  document.getElementById(type+'-results-count').textContent=filled+' of '+total+' fields extracted';
+}
+
+// ─── RECENT EXTRACTIONS — browser-local history ───────────────────────────
+// Per-machine, this-browser-only. Stores the extracted FIELDS only (never the
+// PDF) so localStorage's ~5MB ceiling is never a concern. Capped at 20 runs,
+// oldest dropped. V2 NOTE: this is an explicit temporary stopgap — Keeva V2
+// will persist extraction history in its own storage so the audit-trail
+// record is not lost downstream in Zapier logs.
+const HISTORY_LIMIT = 20;
+function historyKey(type) { return 'keeva_extraction_history_' + type; }
+
+function readHistory(type) {
+  try {
+    const raw = localStorage.getItem(historyKey(type));
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    console.warn('history read failed: ' + e.message);
+    return [];
+  }
+}
+
+function saveToHistory(type, fields) {
+  try {
+    const addr = (fields.property_address || '').trim() || 'Unknown address';
+    const entry = {
+      id: 'h-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+      label: addr,
+      savedAt: new Date().toISOString(),
+      fields: fields
+    };
+    const list = readHistory(type);
+    list.unshift(entry);                       // newest first
+    const trimmed = list.slice(0, HISTORY_LIMIT);
+    localStorage.setItem(historyKey(type), JSON.stringify(trimmed));
+  } catch (e) {
+    // Non-fatal — history is a convenience, never block an extraction for it.
+    console.warn('history save failed: ' + e.message);
+  }
+  renderHistory(type);
+}
+
+function renderHistory(type) {
+  const list = readHistory(type);
+  const card = document.getElementById(type+'-history-card');
+  const listEl = document.getElementById(type+'-history-list');
+  if (!card || !listEl) return;
+  card.style.display = 'block';
+  listEl.innerHTML = '';
+  if (list.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+    empty.textContent = 'No past extractions on this browser yet.';
+    listEl.appendChild(empty);
+    return;
+  }
+  list.forEach(entry => {
+    const when = new Date(entry.savedAt);
+    const stamp = when.toLocaleDateString(undefined,{month:'short',day:'numeric'}) +
+      ', ' + when.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
+    const row = document.createElement('button');
+    row.className = 'history-row';
+    row.innerHTML = '<span class="history-addr"></span><span class="history-time"></span>';
+    row.querySelector('.history-addr').textContent = entry.label;
+    row.querySelector('.history-time').textContent = stamp;
+    row.onclick = () => viewHistoryEntry(type, entry.id);
+    listEl.appendChild(row);
+  });
+}
+
+// Replay a saved extraction into the results table. Read-only — does NOT
+// re-send to Zapier/Process Street; the send section is hidden while viewing
+// history so a past run can't be re-sent by mistake.
+function viewHistoryEntry(type, id) {
+  const entry = readHistory(type).find(e => e.id === id);
+  if (!entry) return;
+  extracted[type] = entry.fields;
+  renderResults(type);
+  const when = new Date(entry.savedAt);
+  const stamp = when.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) +
+    ' at ' + when.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
+  const viewing = document.getElementById(type+'-history-viewing');
+  viewing.textContent = 'Viewing a saved extraction — ' + entry.label + ', ' + stamp + ' (read-only)';
+  viewing.style.display = 'block';
+  document.getElementById(type+'-results-card').style.display = 'block';
+  document.getElementById(type+'-send-section').style.display = 'none';
+  document.getElementById(type+'-results-card').scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 async function sendToZapier(type) {
@@ -750,6 +875,10 @@ async function sendToZapier(type) {
   }
 }
 function copyJSON(type) { navigator.clipboard.writeText(JSON.stringify(extracted[type],null,2)).then(()=>alert('JSON copied!')); }
+
+// On page load, surface any saved extraction history for both tabs.
+renderHistory('rpa');
+renderHistory('rla');
 </script>
 </body>
 </html>
