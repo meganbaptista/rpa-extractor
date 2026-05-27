@@ -58,6 +58,17 @@ const headers = {
 };
 
 exports.handler = async function (event) {
+  // DIAGNOSTIC PROBE (temporary — remove after Blobs 401 is resolved).
+  // Logs which env vars are actually injected, so we can tell whether the 401
+  // is caused by a missing siteID (auto-injection gone) vs. a bad token vs.
+  // something else. Uses !! to log only true/false — never the values.
+  console.log('[extract-chunk] env probe:',
+    'SITE_ID=', !!process.env.SITE_ID,
+    'NETLIFY_SITE_ID=', !!process.env.NETLIFY_SITE_ID,
+    'NETLIFY_PROJECT_ID=', !!process.env.NETLIFY_PROJECT_ID,
+    'BLOBS_TOKEN=', !!process.env.NETLIFY_BLOBS_TOKEN
+  );
+
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method Not Allowed' }) };
