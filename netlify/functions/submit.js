@@ -46,6 +46,34 @@
 //
 // The legacy /extract endpoint is left in place for backward compatibility
 // (Zapier integrations etc.). New callers should use this submit+poll flow.
+//
+// ----------------------------------------------------------------------------
+// AUDIT FAN-OUT (added after extraction invocation):
+// Every successful submission ALSO fans out to the signature-audit pipeline
+// so the contract gets a holistic signature/initials audit alongside the
+// extraction. The two pipelines run independently and end in two separate
+// Process Street workflows via two separate Zapier webhooks.
+//
+// Critical design point — SEPARATE jobId:
+// `extract-background` DELETES extraction-payloads[jobId] when it finishes.
+// If we shared one jobId between extraction and the audit orchestrator, the
+// extractor could delete the payload before the orchestrator's Step 0 copies
+// it to audit-payloads, and the audit would silently fail with "PDF payload
+// not found." It would also cause the orchestrator to re-invoke
+// extract-background on the same jobId, doubling extraction cost and racing
+// the two writes to extraction-jobs[jobId].
+//
+// So: the audit gets its OWN jobId and its OWN payload copy in
+// extraction-payloads, keyed by that audit jobId. The orchestrator's Step 0
+// will copy from extraction-payloads[auditJobId] into audit-payloads and own
+// the lifecycle from there. No collision with the extractor's cleanup.
+//
+// The fan-out is FULLY WRAPPED: any failure (payload write, fetch, anything)
+// is logged and swallowed. The extraction critical path is not affected.
+// The audit jobId is server-side only — not surfaced to the browser; the
+// extraction response still returns the EXTRACTION jobId. The audit jobId is
+// logged next to the extraction jobId so a specific audit can be traced back
+// to its extraction in the Netlify function logs.
 
 const { getStore } = require('@netlify/blobs');
 const crypto = require('crypto');
@@ -247,6 +275,38 @@ exports.handler = async function(event) {
         expires_at: expiresAt.toISOString()
       });
       return { statusCode: 500, headers, body: JSON.stringify({ error: 'Failed to start extraction job' }) };
+    }
+
+    // ----- AUDIT FAN-OUT (additive; fully isolated from the extraction path)
+    // Generate a SEPARATE jobId for the audit, write a second payload copy
+    // under that jobId in extraction-payloads, and fire-and-forget the audit
+    // orchestrator. The orchestrator's Step 0 will copy from
+    // extraction-payloads[auditJobId] into audit-payloads and own the
+    // lifecycle from there.
+    //
+    // Any failure in this block — payload write, fetch, anything — is logged
+    // and swallowed. The extraction 202 response below is unaffected. There
+    // is no audit jobId in the response: V1 is two-PS-workflow, and nothing
+    // in the extractor UI waits on the audit.
+    try {
+      const auditJobId = crypto.randomUUID();
+      await payloadStore.setJSON(auditJobId, {
+        documents: documents,
+        prompt_override: body.prompt_override || null
+      });
+
+      const auditUrl = protocol + '://' + host + '/.netlify/functions/audit-orchestrator-background';
+      await fetch(auditUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: auditJobId })  // No overrides — V1
+      });
+
+      console.log('submit: fanned out audit for extraction jobId=' + jobId + ', auditJobId=' + auditJobId);
+    } catch (auditErr) {
+      // Audit fan-out failure must NEVER touch the extraction path. Log and
+      // continue — the extraction will still succeed and return 202 below.
+      console.error('audit fan-out failed for extraction jobId=' + jobId + ': ' + auditErr.message);
     }
 
     return {
