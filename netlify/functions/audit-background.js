@@ -48,10 +48,16 @@
 // ----------------------------------------------------------------------------
 // ZAPIER FAN-OUT (added at end of success path):
 // On successful audit completion, a fire-and-forget POST is sent to the
-// audit Zapier catch-hook with a flat payload derived from the structured
-// audit (overall_status, summary, findings_count, findings_text, prose).
-// This feeds the 2nd Process Street workflow where Jill reviews signature
-// audit findings, separate from the extraction workflow.
+// audit Zapier catch-hook with a flat payload: property identity
+// (property_address, apn) + the structured audit (overall_status, summary,
+// findings_count, findings_text, prose). This feeds the 2nd Process Street
+// workflow where Jill reviews signature audit findings, separate from the
+// extraction workflow.
+//
+// property_address and apn are passed in by the orchestrator (pulled from
+// the extraction result) so the audit's Zapier payload carries the SAME
+// canonical strings the extractor's Zapier payload uses — that is what
+// lets the two PS workflows be reconciled by property address downstream.
 //
 // Failure isolation: any error in the Zapier send is logged and swallowed.
 // The audit result is already written to audit-results before the send —
@@ -238,12 +244,17 @@ function buildEnvelope(auditPart) {
 // variable, mappable to PS form fields individually or concatenated into one
 // text box at the Zap step.
 //
+// Property identity (property_address, apn) is placed at the TOP of the
+// payload because PS uses these to join the audit row to the same
+// transaction's extraction row. Empty strings are sent (not undefined) when
+// the orchestrator did not have a value — keeps the payload shape stable.
+//
 // Defensive on structured=null (the model may not have emitted the
 // ===STRUCTURED=== marker, or the JSON may not have parsed). In that case
 // the prose is still sent -- the audit is never lost -- with overall_status
 // downgraded to "needs_review" so Jill knows to lean on the prose.
 // ----------------------------------------------------------------------------
-function buildZapierPayload(jobId, auditPart, completedAtMs) {
+function buildZapierPayload(jobId, auditPart, completedAtMs, propertyAddress, apn) {
   const prose = (auditPart && auditPart.prose) || '';
   const structured = auditPart && auditPart.structured;
 
@@ -263,6 +274,8 @@ function buildZapierPayload(jobId, auditPart, completedAtMs) {
     return {
       jobId: jobId,
       completedAt: new Date(completedAtMs).toISOString(),
+      property_address: propertyAddress || '',
+      apn: apn || '',
       overall_status: structured.overall_status || 'needs_review',
       summary: structured.summary || '',
       findings_count: findings.length,
@@ -276,6 +289,8 @@ function buildZapierPayload(jobId, auditPart, completedAtMs) {
   return {
     jobId: jobId,
     completedAt: new Date(completedAtMs).toISOString(),
+    property_address: propertyAddress || '',
+    apn: apn || '',
     overall_status: 'needs_review',
     summary: 'Audit completed but structured summary could not be parsed -- see prose.',
     findings_count: 0,
@@ -316,7 +331,8 @@ exports.handler = async function (event) {
     return { statusCode: 400 };
   }
 
-  const { jobId, buyerCount = 1, sellerCount = 1, sellerEntity, buyerEntity } = body;
+  const { jobId, buyerCount = 1, sellerCount = 1, sellerEntity, buyerEntity,
+          propertyAddress = '', apn = '' } = body;
   if (!jobId) {
     console.error('[audit-background] missing jobId');
     return { statusCode: 400 };
@@ -384,7 +400,7 @@ exports.handler = async function (event) {
     // Audit result is already persisted above. This is downstream notification.
     // sendToAuditZapier swallows all errors -- a webhook hiccup cannot fail
     // a completed audit.
-    const zapierPayload = buildZapierPayload(jobId, auditPart, completedAt);
+    const zapierPayload = buildZapierPayload(jobId, auditPart, completedAt, propertyAddress, apn);
     await sendToAuditZapier(jobId, zapierPayload);
 
     return { statusCode: 200 };
