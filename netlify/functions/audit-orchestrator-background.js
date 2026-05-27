@@ -464,13 +464,24 @@ exports.handler = async function (event) {
     });
 
     // ----- Step 5: PERMANENT — invoke audit-background ---------------------
+    // Property identity fields (property_address, apn) are pulled from the
+    // extraction result and passed through to audit-background so the audit's
+    // Zapier payload carries the SAME canonical strings the extractor's
+    // Zapier payload uses. This is what lets the two PS workflows (extraction
+    // and signature audit) be reconciled by property address downstream.
+    // Empty-string fallback if extraction missed the field — keeps the
+    // Zapier payload shape consistent for PS field mapping.
     console.log(`[audit-orchestrator] jobId=${jobId} invoking audit-background`);
     const auditUrl = proto + '://' + host + '/.netlify/functions/audit-background';
     try {
       await fetch(auditUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign({ jobId }, auditParams)),
+        body: JSON.stringify(Object.assign({
+          jobId,
+          propertyAddress: extraction.property_address || '',
+          apn: extraction.apn || '',
+        }, auditParams)),
       });
     } catch (e) {
       throw new Error('Failed to invoke audit-background: ' + e.message);
