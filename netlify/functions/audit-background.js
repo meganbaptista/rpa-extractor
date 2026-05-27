@@ -44,6 +44,20 @@
 //
 // Output (written to audit-results under jobId):
 //   { status:'complete', result: { ...envelope } }
+//
+// ----------------------------------------------------------------------------
+// ZAPIER FAN-OUT (added at end of success path):
+// On successful audit completion, a fire-and-forget POST is sent to the
+// audit Zapier catch-hook with a flat payload derived from the structured
+// audit (overall_status, summary, findings_count, findings_text, prose).
+// This feeds the 2nd Process Street workflow where Jill reviews signature
+// audit findings, separate from the extraction workflow.
+//
+// Failure isolation: any error in the Zapier send is logged and swallowed.
+// The audit result is already written to audit-results before the send —
+// the webhook is a downstream notification, not the result. Failure does
+// NOT mark the audit as errored. On audit FAILURE (error path) we do NOT
+// send to Zapier in V1.
 // ============================================================================
 
 console.log('[audit-background] module loading (line 1)');
@@ -59,6 +73,13 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 // ({ type:'enabled', budget_tokens }) is NOT accepted on this model and would
 // return a 400.
 const MODEL = 'claude-opus-4-7';
+
+// Audit Zapier catch-hook URL. This is the 2nd Zapier webhook (separate from
+// the extractor's RPA/RLA webhooks); it feeds the signature-audit Process
+// Street workflow. Hardcoded to match the existing pattern for the extractor
+// webhooks elsewhere in the codebase. To rotate: edit this constant and
+// redeploy.
+const AUDIT_ZAPIER_WEBHOOK_URL = 'https://hooks.zapier.com/hooks/catch/4252316/4bor90h/';
 
 console.log('[audit-background] module fully loaded, handler ready');
 
@@ -211,6 +232,81 @@ function buildEnvelope(auditPart) {
   };
 }
 
+// ----------------------------------------------------------------------------
+// Flatten the structured audit + prose into the flat key/value payload the
+// audit Zapier catch-hook receives. Each top-level key becomes its own Zap
+// variable, mappable to PS form fields individually or concatenated into one
+// text box at the Zap step.
+//
+// Defensive on structured=null (the model may not have emitted the
+// ===STRUCTURED=== marker, or the JSON may not have parsed). In that case
+// the prose is still sent -- the audit is never lost -- with overall_status
+// downgraded to "needs_review" so Jill knows to lean on the prose.
+// ----------------------------------------------------------------------------
+function buildZapierPayload(jobId, auditPart, completedAtMs) {
+  const prose = (auditPart && auditPart.prose) || '';
+  const structured = auditPart && auditPart.structured;
+
+  // Normal path: structured parsed cleanly.
+  if (structured && typeof structured === 'object') {
+    const findings = Array.isArray(structured.findings) ? structured.findings : [];
+    const findingsText = findings
+      .map((f) => {
+        const sev = f && f.severity ? `[${f.severity}]` : '[review]';
+        const loc = (f && f.location) || 'unspecified location';
+        const iss = (f && f.issue) || 'unspecified issue';
+        const det = f && f.detail ? ` ${f.detail}` : '';
+        return `• ${sev} ${loc} — ${iss}.${det}`;
+      })
+      .join('\n');
+
+    return {
+      jobId: jobId,
+      completedAt: new Date(completedAtMs).toISOString(),
+      overall_status: structured.overall_status || 'needs_review',
+      summary: structured.summary || '',
+      findings_count: findings.length,
+      findings_text: findingsText,
+      prose: prose,
+    };
+  }
+
+  // Degraded path: structured missing/unparseable. Send prose + a clear
+  // needs-review status so Jill works from the prose.
+  return {
+    jobId: jobId,
+    completedAt: new Date(completedAtMs).toISOString(),
+    overall_status: 'needs_review',
+    summary: 'Audit completed but structured summary could not be parsed -- see prose.',
+    findings_count: 0,
+    findings_text: '',
+    prose: prose,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Fire-and-forget POST to the audit Zapier catch-hook. Awaits the dispatch
+// so we know the request left, but never throws -- failure is logged and
+// swallowed so a Zapier hiccup cannot corrupt or fail-mark a completed audit.
+// The audit result is already written to audit-results before this runs.
+// ----------------------------------------------------------------------------
+async function sendToAuditZapier(jobId, payload) {
+  try {
+    const response = await fetch(AUDIT_ZAPIER_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      console.warn(`[audit-background] jobId=${jobId} Zapier send returned status ${response.status} (non-fatal)`);
+    } else {
+      console.log(`[audit-background] jobId=${jobId} Zapier send dispatched (status ${response.status})`);
+    }
+  } catch (err) {
+    console.error(`[audit-background] jobId=${jobId} Zapier send failed (non-fatal): ${err.message}`);
+  }
+}
+
 exports.handler = async function (event) {
   let body;
   try {
@@ -276,12 +372,21 @@ exports.handler = async function (event) {
 
     const envelope = buildEnvelope(auditPart);
 
+    const completedAt = Date.now();
     await resultsStore.setJSON(jobId, {
       status: 'complete',
-      completedAt: Date.now(),
+      completedAt: completedAt,
       result: envelope,
     });
     console.log(`[audit-background] jobId=${jobId} complete -- overall_status=${auditPart.structured && auditPart.structured.overall_status}`);
+
+    // ----- ZAPIER FAN-OUT (success path only; fully isolated) ---------------
+    // Audit result is already persisted above. This is downstream notification.
+    // sendToAuditZapier swallows all errors -- a webhook hiccup cannot fail
+    // a completed audit.
+    const zapierPayload = buildZapierPayload(jobId, auditPart, completedAt);
+    await sendToAuditZapier(jobId, zapierPayload);
+
     return { statusCode: 200 };
   } catch (err) {
     console.error(`[audit-background] jobId=${jobId} ERROR:`, err.message);
@@ -289,6 +394,8 @@ exports.handler = async function (event) {
       status: 'error', completedAt: Date.now(),
       error: err.message,
     });
+    // V1: no Zapier send on audit failure. The audit-results record carries
+    // the error for the test page / future Keeva consumers.
     return { statusCode: 500 };
   }
 };
