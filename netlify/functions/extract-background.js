@@ -813,6 +813,10 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
     // can monitor in Process Street/Airtable which path each contract took.
     let extractionStatus = 'not_attempted';
 
+    // Set if a trim fails with a structurally-damaged-PDF signature. Surfaced
+    // in the fallback result so the frontend can give a specific message.
+    let pdfStructureError = null;
+
     let detection = null;
     try {
       detection = await locateRpaPagesWithFallback(documents, process.env.ANTHROPIC_API_KEY);
@@ -832,16 +836,26 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
       // we fall back to the full original content for the main call.
       let trimmedTargetedB64 = null;
       let trimmedMainB64 = null;
+      // Detects a structurally-damaged PDF: pdf-lib throws errors like
+      // "Expected instance of PDFDict, but got instance of undefined" when a
+      // PDF's internal object table is broken (dangling object refs). This is
+      // distinct from encryption (handled by ignoreEncryption) — a corrupt
+      // PDF cannot be trimmed AND usually cannot be extracted from. We capture
+      // it so the frontend can tell the user specifically to re-save the file.
+      const isPdfStructureError = (msg) =>
+        /PDFDict|invalid object|object ref|got instance of undefined/i.test(msg || '');
       try {
         [trimmedMainB64, trimmedTargetedB64] = await Promise.all([
           buildTrimmedMainPdf(documents, located).catch((err) => {
             console.warn('main trim failed (' + err.message + '), main call will use full content');
+            if (isPdfStructureError(err.message)) pdfStructureError = err.message;
             return null;
           }),
           buildTrimmedPdf(documents, located)
         ]);
       } catch (trimErr) {
         console.warn('targeted trim failed (' + trimErr.message + '), no targeted call this run');
+        if (isPdfStructureError(trimErr.message)) pdfStructureError = trimErr.message;
       }
 
       // Build main content — swap in the trimmed RPA document if we got one.
@@ -983,14 +997,24 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
     }
 
     // Fallback: main tool call didn't produce output — write raw main response.
+    // `reason` tells the frontend WHY there's no usable data: a structurally
+    // damaged PDF (re-save needed) vs. a generic no-output result. It is
+    // attached BOTH at the top level and inside `result` so it reaches the
+    // browser regardless of whether result.js forwards top-level fields.
+    const fallbackReason = pdfStructureError ? 'corrupt_pdf' : 'no_output';
+    const fallbackResult = (mainData && typeof mainData === 'object')
+      ? { ...mainData, reason: fallbackReason }
+      : { reason: fallbackReason };
     await store.setJSON(jobId, {
       ...existing,
       status: 'complete',
-      result: mainData,
+      result: fallbackResult,
+      reason: fallbackReason,
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - startedAt
     });
-    console.log('extract-background: job ' + jobId + ' complete (fallback path — main call returned no tool output)');
+    console.log('extract-background: job ' + jobId + ' complete (fallback path — main call returned no tool output' +
+      (pdfStructureError ? '; corrupt PDF structure detected' : '') + ')');
     await deletePayloadSafe(payloadStore, jobId);
     return { statusCode: 200 };
 
