@@ -301,7 +301,7 @@ const CHUNK_URL  = '/.netlify/functions/extract-chunk';
 // Set to false for production: the button is hidden but the Step 3 card (and
 // its ✓ / error status) stays visible, and a FAILED auto-send always re-shows
 // the button as a retry affordance regardless of this flag.
-const SHOW_MANUAL_SEND = true;
+const SHOW_MANUAL_SEND = false;
 
 // Chunk size: 3 MB of base64 per request. Netlify's effective synchronous
 // upload ceiling is ~4.5 MB (6 MB raw, minus ~30% for Netlify's own base64
