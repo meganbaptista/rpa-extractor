@@ -294,6 +294,15 @@ const SUBMIT_URL = '/.netlify/functions/submit';
 const RESULT_URL = '/.netlify/functions/result';
 const CHUNK_URL  = '/.netlify/functions/extract-chunk';
 
+// AUTO-SEND: a successful extraction now sends to Process Street automatically
+// — the employee was clicking "Send" without reviewing, and the real audit is
+// Jill downstream in PS, so the manual click added no review value.
+// SHOW_MANUAL_SEND keeps the manual button visible while building/testing.
+// Set to false for production: the button is hidden but the Step 3 card (and
+// its ✓ / error status) stays visible, and a FAILED auto-send always re-shows
+// the button as a retry affordance regardless of this flag.
+const SHOW_MANUAL_SEND = true;
+
 // Chunk size: 3 MB of base64 per request. Netlify's effective synchronous
 // upload ceiling is ~4.5 MB (6 MB raw, minus ~30% for Netlify's own base64
 // wrapping). 3 MB leaves comfortable headroom for the JSON envelope and
@@ -745,8 +754,16 @@ async function runExtraction(type) {
     document.getElementById(type+'-status-box').style.display='none';
     document.getElementById(type+'-progress-wrap').style.display='none';
     document.getElementById(type+'-results-card').style.display='block';
+    // Show the Step 3 card so its status box (✓ / error) is visible. When
+    // SHOW_MANUAL_SEND is false, hide only the button — the card and status
+    // stay so the user still sees confirmation of the auto-send.
     document.getElementById(type+'-send-section').style.display='block';
+    document.getElementById(type+'-send-btn').style.display = SHOW_MANUAL_SEND ? 'block' : 'none';
     document.getElementById(type+'-extract-btn').disabled=false;
+    // Auto-send to Process Street. Fires once — this is the tail of a single
+    // runExtraction() call, not inside the poll loop, so no double-fire guard
+    // is needed. A failed send re-shows the button as a retry affordance.
+    sendToZapier(type);
   } catch(err) {
     showStatus(type,'Error: '+err.message,'error');
     document.getElementById(type+'-progress-wrap').style.display='none';
@@ -874,6 +891,9 @@ async function sendToZapier(type) {
   } catch(err) {
     statusEl.textContent='Send failed: '+err.message;
     statusEl.className='status-box status-error'; statusEl.style.display='block';
+    // A failed send always surfaces a clickable retry — even in production
+    // (SHOW_MANUAL_SEND false), where the button is otherwise hidden.
+    btn.style.display='block';
     btn.disabled=false; btn.textContent='Retry — Send to Process Street';
   }
 }
