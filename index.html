@@ -722,12 +722,15 @@ async function runExtraction(type) {
     }
     setProgress(type,90);
     // Guard: a healthy extraction returns { content: [...] }. If extraction
-    // ran but produced no usable output (e.g. an unreadable/encrypted PDF the
-    // model couldn't parse), extract-background writes a fallback result with
-    // no `content` array. Catch that here and show a clear message instead of
-    // letting `.map()` throw "Cannot read properties of undefined".
+    // ran but produced no usable output, extract-background writes a fallback
+    // result with no `content` array and a `reason`. Show a specific,
+    // actionable message based on that reason instead of letting `.map()`
+    // throw "Cannot read properties of undefined".
     if (!result || !Array.isArray(result.content)) {
-      throw new Error('The contract could not be read — extraction returned no usable data. The PDF may be encrypted, image-only, or corrupted. Try re-saving or re-exporting the PDF, then upload again.');
+      if (result && result.reason === 'corrupt_pdf') {
+        throw new Error('This PDF\u2019s structure is damaged, so it could not be read. Fix: open the file in PDF Expert, then use File \u2192 Print as PDF / Save As to save a fresh copy, and upload that copy.');
+      }
+      throw new Error('The contract could not be read \u2014 extraction returned no usable data. The PDF may be image-only (a scan) or corrupted. Try opening it in PDF Expert and saving a fresh copy, then upload again \u2014 or use the original PDF from DocuSign / your TMS.');
     }
     const text=result.content.map(b=>b.text||'').join('');
     // Extract JSON from response which may contain reasoning text before it
