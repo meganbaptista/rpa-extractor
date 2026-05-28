@@ -140,8 +140,46 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 //      never perception: structural QC (blank fields) is the extractor's job;
 //      interpretive QC (deal oddities) is Call B's job, where it already
 //      happens. severity "qc_flag" is removed from the PART 2 enum accordingly.
-// The rest of this prompt -- party context, counter-chain reasoning, the
-// PART 1 / PART 2 contract and the ===STRUCTURED=== marker -- is unchanged.
+//
+// TEST 4 -- SIGNATURE PARITY + RPA 33A/33B BOX-STATE CHECKS (current change,
+// prompt only):
+// Two real-contract misses on real production audits drove this change:
+//   (1) Canyon Lake Dr: RPA Section 33D Seller Signature was completely
+//       blank. The audit said "fine because the counter offers were signed."
+//       This was wrong. The RPA seller signature is ALWAYS required regardless
+//       of counter offers; counters are additional documents, not substitutes.
+//       The audit rationalized away a missing signature by mis-applying
+//       counter-chain reasoning to signatures.
+//   (2) Same packet: RPA Section 33A "Counter Offer attached" box was
+//       unchecked even though an SCO was physically in the packet. The audit
+//       missed this entirely -- it was treating the box-state question as out
+//       of scope (per the Test 3 QC de-scope).
+// Root cause for both: the previous prompt carried a "counter offer chain
+// matters: the LAST accepted document governs ... a blank signature line on
+// an earlier document may be CORRECT if the form instructs parties to sign
+// the attached counter instead" clause. That clause is wrong as applied to
+// SIGNATURES. The "last document governs" idea belongs in Phase 3
+// (reconciliation of final price/dates) -- it does NOT belong in signature
+// auditing. Signatures and initials are required per-document, per-party,
+// per-page regardless of counter chains.
+//
+// Fix (prompt only -- no architecture change):
+//  (a) The "counter chain governs signatures" clause is REMOVED in full.
+//  (b) Replaced with the explicit SIGNATURE PARITY rule: wherever one party
+//      signed/initialed on a document, every other required party must also
+//      sign/initial that document. A counter is itself an additional document
+//      requiring both parties' signatures, not a substitute for any
+//      signature elsewhere. The RPA Section 32D Buyer Signature and Section
+//      33D Seller Signature are ALWAYS required.
+//  (c) Known one-sided advisories (AD with the side facing only its party,
+//      BIA, BHIA, CCPA) are listed explicitly so the parity rule does not
+//      cause false flags on intentionally one-sided forms.
+//  (d) Two narrow form-state checks are added to the in-scope list: RPA
+//      Section 33A acceptance-box state (counter physically present but box
+//      unchecked, or vice versa) and Section 32B/33B entity-party-box state
+//      (entity name filled but box unchecked). These are NOT a re-opening of
+//      QC scope; they are the specific defects that change what is legally
+//      operative on the packet. No other form-state checks are added.
 // ============================================================================
 function buildAuditPrompt(params) {
   const { buyerCount, sellerCount, sellerEntity, buyerEntity } = params;
@@ -179,20 +217,37 @@ The packet may contain a Residential Purchase Agreement (RPA) plus counter offer
 
 This is a signature and initials audit ONLY. Audit whether every required signature and initial is present. Do not report blank data fields, form-choice issues, or other quality-control observations -- those are out of scope for this audit.
 
-YOUR TASK -- audit every required signature and initial:
-- Per-page initials on the RPA. Do this as an explicit PAGE-BY-PAGE pass: go through every page of the RPA in order, and for EACH page state what you see in the Buyer's Initials box and what you see in the Seller's Initials box on that page's footer. Name the page, then the buyer box, then the seller box -- one line per page. Do not summarize a range of pages in a single statement; each page is inspected and reported on its own.
-- The Liquidated Damages (paragraph 29) and Arbitration of Disputes (paragraph 31) initials.
-- Buyer and seller signature blocks (RPA paragraphs 32 and 33).
-- Buyer's Agent and Listing Agent signatures (Real Estate Brokers Section).
-- All signatures and initials on every counter offer and addendum in the packet.
-- For entity/trust sellers or buyers, confirm the authorized signers signed.
+YOUR TASK -- audit every required signature and initial across the WHOLE packet.
+
+The core rule of this audit: SIGNATURE PARITY. On every document in the packet, wherever one party has signed, every other required party must also sign that document. Wherever one party has initialed, every other required party must also initial. The buyer side and the seller side mirror each other. A counter offer is an ADDITIONAL document in its own right and is itself subject to the same parity rule (both parties sign it) -- a signed counter does NOT replace or excuse any signature elsewhere in the packet.
+
+Concretely:
+- Per-page footer initials on the RPA. Do this as an explicit PAGE-BY-PAGE pass: go through every page of the RPA in order, and for EACH page state what you see in the Buyer's Initials box and what you see in the Seller's Initials box. Name the page, then the buyer box, then the seller box -- one line per page. Do not summarize a range of pages in a single statement; each page is inspected and reported on its own. If buyer initialed and seller did not (or the reverse), that is a missing initial -- flag it.
+- The Liquidated Damages (paragraph 29) and Arbitration of Disputes (paragraph 31) initials -- both parties.
+- The RPA Section 32D Buyer Signature block AND the RPA Section 33D Seller Signature block. The RPA seller signature on Section 33D is ALWAYS required regardless of counter offers, addenda, or anything else in the packet; counter offers are additional documents, not substitutes. Same for the buyer side on Section 32D.
+- Buyer's Agent and Listing Agent signatures in the Real Estate Brokers Section (each agent signs their own block; agents do not mirror each other or the parties).
+- Every signature and initial on every counter offer in the packet -- both parties sign every counter.
+- Every signature and initial on every advisory and addendum in the packet -- by default both parties sign, with the limited exceptions listed below.
+- For entity/trust sellers or buyers, confirm the authorized signer(s) signed.
+
+KNOWN ONE-SIDED ADVISORIES (the parity rule does NOT apply to these; they are intentionally one-sided by form design):
+- Agency Disclosure (AD) -- the buyer-side AD is signed by the buyer and the buyer's agent only; the seller line on a buyer-side AD is correctly unused. The seller-side AD is the mirror.
+- Buyer's Investigation Advisory (BIA) -- buyer-only.
+- Buyer Homeowners' Insurance Advisory (BHIA) -- buyer-only.
+- California Consumer Privacy Act Advisory (CCPA) -- buyer-only (seller line is not used).
+For these forms, do not flag the absent opposite-party signature.
+
+ALSO AUDIT THESE FORM-STATE CHECKS ON THE RPA (not signatures themselves, but defects that change what is legally operative):
+- RPA Section 33A acceptance state. If a Counter Offer (SCO/SMCO) or Back-Up Offer (BUO) is physically present in the packet, the corresponding box in 33A must be checked. If a counter is present but neither 33A box is checked, flag it (severity "missing") -- without the box checked the counter does not legally apply to the RPA, and the RPA on its face shows direct acceptance. Likewise, if a 33A box IS checked but no counter of that type is in the packet, flag it (severity "missing") -- the packet is incomplete.
+- RPA Section 33B entity-seller box state. If an entity name is filled in on the entity-seller line (the "Full entity name" field in 33B) but the entity-seller box itself is unchecked, flag it (severity "missing"). Same parallel check for Section 32B on the buyer side.
+- These two checks (33A and 33B/32B box states) ARE in scope for this audit even though they are not signatures, because they directly determine which signatures are legally required and operative. Do not extend this license to other form-state checks -- only 33A acceptance boxes and 32B/33B entity-party boxes.
 
 IMPORTANT REASONING GUIDANCE:
-- A counter offer chain matters: the LAST accepted document governs. If a counter offer was accepted, that is where the binding signatures are. A blank signature line on an earlier document may be CORRECT if the form instructs parties to sign the attached counter instead -- reason about this, do not blindly flag every blank line.
 - The Escrow Holder Acknowledgment is normally blank at file-open -- that is expected, not a missing signature.
-- Distinguish a genuine MISSING required signature/initial from something that is blank by design.
-- Do NOT assume. An electronic-signature envelope ID stamped on the pages (e.g. a DocuSign Envelope ID) only proves the packet went through an e-sign platform -- it does NOT prove every initial tab was completed. Check every page on its own merits regardless of any envelope ID.
-- You are reading rendered scanned pages; CAR forms scan messily. Hedging is a last resort, permitted ONLY after you have genuinely completed the page-by-page pass above, and ONLY for the specific individual page where a mark truly will not resolve. If you find yourself wanting to hedge a range of pages, that means you have not done the page-by-page pass -- go back and inspect each page. Never flag a range of pages as collectively unclear.
+- Distinguish a genuine MISSING required signature/initial from something that is blank by design (known one-sided advisories above, unused second-signer lines when only one buyer or seller exists, Escrow Holder block at file-open).
+- Do NOT use counter-offer existence to excuse any missing signature anywhere in the packet. Counter offers do not replace signatures on the RPA or on any other document; they are themselves additional documents that must be signed. If the RPA seller signature on Section 33D is blank, that is a missing signature -- period -- regardless of whether a signed counter is in the packet.
+- Do NOT assume. An electronic-signature envelope ID stamped on the pages (e.g. a DocuSign Envelope ID) only proves the packet went through an e-sign platform -- it does NOT prove every initial tab or signature was completed. Check every page and every signature block on its own merits regardless of any envelope ID.
+- You are reading rendered scanned pages; CAR forms scan messily. Hedging is a last resort, permitted ONLY after you have genuinely completed the page-by-page pass and signature-by-signature inspection, and ONLY for the specific individual page or signature line where a mark truly will not resolve. If you find yourself wanting to hedge a range of pages or a whole document, that means you have not done the inspection -- go back and inspect each one. Never flag a range of pages or a document as collectively unclear.
 
 OUTPUT FORMAT -- two parts, in this order:
 
