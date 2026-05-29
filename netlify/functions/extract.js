@@ -574,7 +574,7 @@ If no Property Profile is provided, fall back to MLS or RPA paragraph 33 signatu
       buyer_agent_phone: { type: "string", description: "Buyer agent phone from subsection A, on the SAME line as buyer_agent_email, after 'Phone #'. DO NOT pull from subsection B — that is the seller agent's phone. Example: '(562) 431-2011'." },
 
       // ─── SELLER AGENT ──────────────────────────────────────────────────────
-      seller_agent_name: { type: "string", description: "Seller agent name. Priority: (1) MLS Listing Agent (LA) — combine with CoLA as 'LA Name / CoLA Name' if both present; (2) RPA page 1 paragraph 2 'Seller's Agent' line; (3) RPA last page subsection B. NEVER use property profile for seller agent (that's historical listing data and may be from a previous sale)." },
+      seller_agent_name: { type: "string", description: "Seller agent name. Priority: (1) MLS Listing Agent (LA) — combine with CoLA as 'LA Name / CoLA Name' if both present; (2) RPA last page subsection B 'Seller's Brokerage Firm' — the first 'By' line. Do NOT use the RPA page 1 paragraph 2 'Seller's Agent' line: in dual-agency deals its agency checkboxes muddy which agent is on which side, so the page-17 brokers section is the authoritative source. NEVER use property profile for seller agent (that's historical listing data and may be from a previous sale)." },
       seller_agent_dre: { type: "string", description: "Seller agent individual DRE. Combine as 'DRE1 / DRE2' if two listing agents. Same priority as seller_agent_name." },
       seller_agent_brokerage_name: { type: "string", description: "Seller's brokerage/listing office name. Priority: (1) MLS LO (Listing Office) — if a CoLO (Co-Listing Office) is also present AND it's a DIFFERENT brokerage than LO, combine as 'LO Name / CoLO Name'. If LO and CoLO are the same brokerage, just return the single name. (2) RPA fallback. Example with two different brokerages: LO='Berkshire Hathaway' and CoLO='Compass' → return 'Berkshire Hathaway / Compass'. Example with same brokerage on both: just 'Berkshire Hathaway'." },
       seller_agent_brokerage_dre: { type: "string", description: "Seller brokerage DRE. Priority: (1) MLS LO State License — if a CoLO State License is also present AND from a DIFFERENT brokerage, combine as 'LO_DRE / CoLO_DRE' matching the order used in seller_agent_brokerage_name. If LO and CoLO are the same brokerage, just return the single DRE. (2) RPA last page subsection B same-line-as-firm-name DRE. Example: '01317331 / 01991628'. NOT the agent's individual DRE." },
@@ -638,10 +638,19 @@ If no Property Profile is provided, fall back to MLS or RPA paragraph 33 signatu
       'buyer_agent_brokerage_dre',
       'buyer_agent_address',
       'buyer_agent_email',
-      'buyer_agent_phone'
+      'buyer_agent_phone',
       // buyer_agent_name_2 and _dre_2 intentionally NOT in the trigger list —
       // they're legitimately empty when only one agent signs, so an empty
       // value here doesn't mean the main call failed.
+      'seller_agent_name',
+      'seller_agent_dre',
+      'seller_agent_brokerage_name',
+      'seller_agent_brokerage_dre',
+      'seller_agent_address',
+      'seller_agent_email',
+      'seller_agent_phone'
+      // seller_agent_email_2 (co-listing agent) is an MLS-only concept — the
+      // targeted call only sees the 2-page RPA trim, so it never sources it.
     ];
 
     const TARGETED_FIELDS = {
@@ -654,12 +663,23 @@ If no Property Profile is provided, fall back to MLS or RPA paragraph 33 signatu
       buyer_agent_brokerage_dre: FIELDS.buyer_agent_brokerage_dre,
       buyer_agent_address: FIELDS.buyer_agent_address,
       buyer_agent_email: FIELDS.buyer_agent_email,
-      buyer_agent_phone: FIELDS.buyer_agent_phone
+      buyer_agent_phone: FIELDS.buyer_agent_phone,
+      // Seller agent — sourced ONLY from subsection B "Seller's Brokerage Firm"
+      // on the last page of the RPA. The targeted call sees only the 2-page RPA
+      // trim (no MLS), so these descriptions point exclusively at subsection B.
+      // The merge step decides whether these win over the main call.
+      seller_agent_name: { type: "string", description: "Seller's agent name from the FIRST 'By' line in subsection B 'Seller's Brokerage Firm' on the LAST PAGE of the RPA. CRITICAL: subsection A 'Buyer's Brokerage Firm' sits directly ABOVE subsection B on the same page with an identical layout — DO NOT pull this name from subsection A, that is the buyer's agent, a completely different person. The seller agent name is on the line directly under 'B. Seller's Brokerage Firm'. The name may be a faint cursive DocuSign signature with the printed name beside or below it — read the printed name. If the name is illegible, return empty string (do not guess). Example: 'By Lauren Reichenberg   DRE Lic. # 01415570' → return 'Lauren Reichenberg'." },
+      seller_agent_dre: { type: "string", description: "Seller agent INDIVIDUAL DRE license number from the FIRST 'By' line in subsection B on the LAST PAGE of the RPA. This is the individual agent's DRE, NOT the brokerage's DRE (which sits on the firm-name line). DO NOT pull from subsection A — that is the buyer agent's DRE, a different number. Example: 'By Lauren Reichenberg   DRE Lic. # 01415570' → return '01415570'." },
+      seller_agent_brokerage_name: { type: "string", description: "Seller's brokerage/listing firm name from the 'B. Seller's Brokerage Firm' line in subsection B on the LAST PAGE of the RPA. DO NOT pull from subsection A (that is the buyer's brokerage). Example: 'B. Seller's Brokerage Firm Compass' → return 'Compass'." },
+      seller_agent_brokerage_dre: { type: "string", description: "Seller brokerage DRE on the SAME LINE as the seller brokerage firm name in subsection B (NOT the agent's individual DRE line). DO NOT pull from subsection A. Example: 'B. Seller's Brokerage Firm Compass   DRE Lic. # 01991628' → return '01991628'." },
+      seller_agent_address: { type: "string", description: "Seller agent OFFICE STREET ADDRESS from subsection B on the LAST PAGE of the RPA — the Address line between the 'By' lines and the Email line. Combine Address + City + State + Zip into one string. This is a STREET ADDRESS, never a phone number. Subsection B's contact lines are frequently BLANK — if the Address line after the label is empty, return empty string (do NOT borrow the address from subsection A). DO NOT pull from subsection A." },
+      seller_agent_email: { type: "string", description: "Seller agent email from subsection B on the LAST PAGE of the RPA — shares the line with 'Phone #'. Subsection B's email is frequently BLANK — if empty, return empty string (do NOT borrow the email from subsection A, that is the buyer agent's email). DO NOT pull from subsection A, CCPA pages, advisories, or the document footer." },
+      seller_agent_phone: { type: "string", description: "Seller agent phone from subsection B, on the SAME line as seller_agent_email, after 'Phone #'. Frequently BLANK in subsection B — if empty, return empty string (do NOT borrow from subsection A). DO NOT pull from subsection A." }
     };
 
     const targetedTool = {
       name: "extract_targeted_fields",
-      description: "Extract a small set of fields from a California real estate purchase agreement package. You have ONE job: locate two specific pages and extract from them. (1) Find page 1 of the original RPA/VLPA/RIPA/CPA — identifiable by the literal label 'Date Prepared:' at the top-left and the footer 'PAGE 1 OF 17' or similar — and extract the date next to that label. (2) Find the LAST PAGE of the same RPA — identifiable by the 'REAL ESTATE BROKERS SECTION' header and the footer 'PAGE 17 OF 17' or similar — and extract everything from subsection A 'Buyer's Brokerage Firm'. Both pages exist in the package. The RPA is always present. Read each field description carefully and return values directly from those two pages.",
+      description: "Extract a small set of fields from a California real estate purchase agreement package. You have ONE job: locate two specific pages and extract from them. (1) Find page 1 of the original RPA/VLPA/RIPA/CPA — identifiable by the literal label 'Date Prepared:' at the top-left and the footer 'PAGE 1 OF 17' or similar — and extract the date next to that label. (2) Find the LAST PAGE of the same RPA — identifiable by the 'REAL ESTATE BROKERS SECTION' header and the footer 'PAGE 17 OF 17' or similar. From subsection A 'Buyer's Brokerage Firm' extract every buyer_agent_* field; from subsection B 'Seller's Brokerage Firm' extract every seller_agent_* field. Keep the two subsections strictly separate. Both pages exist in the package. The RPA is always present. Read each field description carefully and return values directly from those two pages.",
       input_schema: {
         type: "object",
         properties: TARGETED_FIELDS,
@@ -671,39 +691,47 @@ If no Property Profile is provided, fall back to MLS or RPA paragraph 33 signatu
 
 • Page 1 of the RPA — top-left contains the literal text "Date Prepared:" followed by a date. The footer on this page reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant. Extract the date for date_rpa_prepared.
 
-• Last page of the RPA (typically PAGE 17 OF 17) — titled "REAL ESTATE BROKERS SECTION". This page contains TWO subsections that look almost identical:
+• Last page of the RPA (typically PAGE 17 OF 17) — titled "REAL ESTATE BROKERS SECTION". This page contains TWO subsections that look almost identical. Buyer fields come from subsection A; seller fields come from subsection B:
 
   ┌─────────────────────────────────────────────────────────┐
-  │ A. Buyer's Brokerage Firm  [BUYER firm]    DRE # [...]  │  ← extract from HERE
-  │    By [BUYER agent 1]                      DRE # [...]  │  ← extract from HERE
-  │    By [BUYER agent 2 if any]               DRE # [...]  │  ← extract from HERE
-  │    Address [BUYER office addr]  City  State  Zip        │  ← extract from HERE
-  │    Email [BUYER agent email]    Phone # [BUYER phone]   │  ← extract from HERE
+  │ A. Buyer's Brokerage Firm  [BUYER firm]    DRE # [...]  │  ← buyer_agent_* fields
+  │    By [BUYER agent 1]                      DRE # [...]  │  ← buyer_agent_* fields
+  │    By [BUYER agent 2 if any]               DRE # [...]  │  ← buyer_agent_* fields
+  │    Address [BUYER office addr]  City  State  Zip        │  ← buyer_agent_* fields
+  │    Email [BUYER agent email]    Phone # [BUYER phone]   │  ← buyer_agent_* fields
   │    ☐ More than one agent from the same firm...          │
   ├─────────────────────────────────────────────────────────┤
-  │ B. Seller's Brokerage Firm [SELLER firm]   DRE # [...]  │  ← DO NOT use this
-  │    By [SELLER agent 1]                     DRE # [...]  │  ← DO NOT use this
-  │    Address [SELLER office addr] City State Zip          │  ← DO NOT use this
-  │    Email [SELLER email]         Phone # [SELLER phone]  │  ← DO NOT use this
+  │ B. Seller's Brokerage Firm [SELLER firm]   DRE # [...]  │  ← seller_agent_* fields
+  │    By [SELLER agent 1]                     DRE # [...]  │  ← seller_agent_* fields
+  │    Address [SELLER office addr] City State Zip          │  ← seller_agent_* fields
+  │    Email [SELLER email]         Phone # [SELLER phone]  │  ← seller_agent_* fields
   └─────────────────────────────────────────────────────────┘
 
-EVERY buyer_agent_* field MUST come from subsection A only. Subsection B is the seller's information and is a trap — it has the same field labels (DRE, Address, Email, Phone) but the values are completely different people. A common failure mode is correctly identifying subsection A for the agent name, then drifting into subsection B for the remaining fields. Do not do this. Re-anchor on "A. Buyer's Brokerage Firm" before each field.
+The two subsections are mirror images with identical labels (firm, By, DRE, Address, Email, Phone) but completely different people. Keep them strictly separated:
+• EVERY buyer_agent_* field MUST come from subsection A only. Never pull a buyer field from subsection B.
+• EVERY seller_agent_* field MUST come from subsection B only. Never pull a seller field from subsection A.
+A common failure mode is locking onto the right subsection for the agent name, then drifting into the other subsection for the remaining fields. Re-anchor on the correct subsection header — "A. Buyer's Brokerage Firm" for buyer fields, "B. Seller's Brokerage Firm" for seller fields — before each field.
 
-The buyer_agent_address field is a STREET ADDRESS like "23046 Avenida De La Carlota, Ste 600, Laguna Hills, CA 92653" — never a phone number. If you are about to return digits like "949-707-4400" for an address, stop and re-read the Address line in subsection A.
+This matters most when the SAME brokerage represents both sides (dual agency) and/or the agency boxes are checked "both the Buyer's and Seller's Agent." Even then, the buyer agent is whoever signs under subsection A and the seller agent is whoever signs under subsection B — they are different people with different DRE numbers. Anchor on the subsection header and the DRE, never on the dual-agency wording.
+
+Subsection B's contact lines (Address, Email, Phone) are frequently BLANK even when the seller agent name and DRE are filled in. When a subsection B contact line is blank, return an EMPTY STRING for that field — do NOT borrow the buyer's address, email, or phone from subsection A to fill a seller field.
+
+Address fields are STREET ADDRESSES like "23046 Avenida De La Carlota, Ste 600, Laguna Hills, CA 92653" — never a phone number. If you are about to return digits like "949-707-4400" for an address, stop and re-read the Address line in the correct subsection.
 
 ANTI-HALLUCINATION RULES — read carefully:
 
-When you CAN clearly read the value on the page (text is sharp, label is visible, value is filled in), return it. The RPA is always present and these fields are usually filled in, so the common case is non-empty.
+When you CAN clearly read the value on the page (text is sharp, label is visible, value is filled in), return it. The RPA is always present and the agent name/DRE fields are usually filled in, so the common case is non-empty.
 
 But when you CANNOT clearly read a value — page is blurry, OCR text is garbled, label is visible but the line after it is blank or unreadable, or you genuinely cannot find the field — return an EMPTY STRING. An honest blank is always better than a guess.
 
 Specifically, NEVER do any of the following:
 
 • NEVER return "2025" or any year that comes from the form's copyright footer "© 2025 California Association of REALTORS®". The copyright year is NOT the Date Prepared.
-• NEVER return "<UNKNOWN>", "N/A", "TBD", "see addendum", or any placeholder string for a buyer agent field. If you can't find buyer agent info, return empty string for that field.
+• NEVER return "<UNKNOWN>", "N/A", "TBD", "see addendum", or any placeholder string for an agent field. If you can't find the info, return empty string for that field.
 • NEVER use a date from elsewhere in the package (counter offer date, signature date, DocuSign timestamp, property profile sale date, MLS list date) as a substitute for date_rpa_prepared.
-• NEVER infer buyer agent details from the MLS or property profile — those documents only contain seller agent info.
-• NEVER copy values from subsection B (Seller's Brokerage Firm) when subsection A is unreadable. If A is illegible, return empty — do not silently fall back to B.
+• NEVER invent an agent name. Only return a name that appears verbatim on the page. If a "By" line is an unreadable signature with no legible printed name, return empty string for that name.
+• NEVER infer buyer or seller agent details from the MLS or property profile — neither is included in this 2-page trim.
+• NEVER copy values across subsections. If subsection A is unreadable, return empty for the buyer fields; if subsection B is unreadable, return empty for the seller fields. Do not silently fall back to the other subsection.
 
 Empty strings are the correct answer when extraction is uncertain. The user can fill in missing data manually; they cannot easily detect a wrong-but-plausible-looking value that was hallucinated.`;
 
@@ -844,7 +872,19 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
         if (targetedToolBlock && targetedToolBlock.input) {
           const filled = [];
           const empty = [];
+          const skippedForMls = [];
+          // Seller agent priority is MLS-first (see FIELDS.seller_agent_*). The
+          // targeted call reads subsection B of the RPA brokers section, which
+          // should only win for the seller when there is NO MLS in the package.
+          // If the main call found an MLS (mls_number non-empty), keep the main
+          // call's MLS-sourced seller agent and ignore the targeted B values.
+          const hasMls = !!(mergedFields.mls_number && mergedFields.mls_number.trim() !== '');
           for (const [key, value] of Object.entries(targetedToolBlock.input)) {
+            // Don't let subsection B override an MLS-sourced seller agent.
+            if (hasMls && key.indexOf('seller_agent_') === 0) {
+              skippedForMls.push(key);
+              continue;
+            }
             // Targeted call wins ONLY if it produced a non-empty value.
             // Never overwrite a main-call success with a targeted-call empty.
             if (value && value.trim() !== '') {
@@ -856,7 +896,8 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
           }
           console.log(
             'targeted call results (' + extractionStatus + '): filled [' + filled.join(', ') + '], ' +
-            'still empty [' + empty.join(', ') + ']'
+            'still empty [' + empty.join(', ') + ']' +
+            (skippedForMls.length ? ', skipped (MLS present) [' + skippedForMls.join(', ') + ']' : '')
           );
           // If targeted call ran but returned 0 filled fields, mark as failed
           // so the status field accurately reflects the outcome.
