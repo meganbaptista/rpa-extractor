@@ -174,12 +174,52 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 //  (c) Known one-sided advisories (AD with the side facing only its party,
 //      BIA, BHIA, CCPA) are listed explicitly so the parity rule does not
 //      cause false flags on intentionally one-sided forms.
-//  (d) Two narrow form-state checks are added to the in-scope list: RPA
-//      Section 33A acceptance-box state (counter physically present but box
-//      unchecked, or vice versa) and Section 32B/33B entity-party-box state
-//      (entity name filled but box unchecked). These are NOT a re-opening of
-//      QC scope; they are the specific defects that change what is legally
-//      operative on the packet. No other form-state checks are added.
+// TEST 5 -- NAMED FORM-COMPLETENESS CHECKS + PACKET ORDERING CONVENTION
+// (current change, prompt only):
+// Production audits surfaced a category of misses the audit was not catching
+// because completeness QC was deliberately out of scope after Test 3. The
+// real-world misses included: RPA p1 with blank County/City/APN; counter
+// offer headers with blank Date or "dated" fields; intermediate counters in
+// a chain missing the "subject to attached counter offer #__" checkmark;
+// entity-seller cases where 33B(2) entity name was filled but 33B(4)
+// authorized-signer line was blank; and RPA Section 2B agency confirmation
+// blocks with missing license numbers, agent names, or "is the broker of"
+// checkboxes.
+//
+// These are not arbitrary QC. They are specific, recurring defects on real
+// CA TC packets that the TC must run down before COE. The Test 3 decision
+// to keep QC out of the audit ("structural QC is the extractor's job") was
+// right in principle, but in practice the extractor only reads field values
+// -- it does not flag MISSING field values, and it has no view of counter
+// offers at all (counter completeness is structurally impossible for the
+// extractor by design). So these checks were falling through the cracks.
+//
+// Fix (prompt only -- no architecture change):
+//  (a) Five named completeness checks added to the in-scope list (N1-N5),
+//      each tightly scoped to a specific named field or block. The model
+//      flags each blank field as its own finding, severity "missing" by
+//      default. License numbers are checked for PRESENCE only, not
+//      correctness -- DRE-number validation is done elsewhere.
+//  (b) PACKET ORDERING CONVENTION encoded in the prompt: packets are
+//      assembled final-accepted-counter-on-top, descending the chain. The
+//      first counter encountered in the packet is the operative/final one.
+//      This is a guarantee from the team's packet-assembly workflow, not an
+//      inference -- so the model can use packet order directly instead of
+//      inferring chain order from counter numbers and dates (which can be
+//      unreliable in cluttered packets).
+//  (c) The scope-guardrail sentence at the end of the form-state-checks
+//      block is widened to acknowledge the N1-N5 list and is even sharper
+//      about what remains OUT of scope: "blank data fields elsewhere in the
+//      packet (financing terms, contingency dates, dollar amounts, contact
+//      details, etc.) are NOT in scope for this audit -- they are the
+//      extractor's territory." This prevents N1-N5 from being a slippery
+//      slope back into generalized QC.
+//
+// The named exception list (33A box state, 32B/33B box states, N1-N5)
+// constitutes the entire form-state surface this audit covers. Adding new
+// completeness checks in the future should follow the same pattern: name
+// the check, give it a number, and update both this comment and the scope-
+// guardrail sentence.
 // ============================================================================
 function buildAuditPrompt(params) {
   const { buyerCount, sellerCount, sellerEntity, buyerEntity } = params;
@@ -240,7 +280,56 @@ For these forms, do not flag the absent opposite-party signature.
 ALSO AUDIT THESE FORM-STATE CHECKS ON THE RPA (not signatures themselves, but defects that change what is legally operative):
 - RPA Section 33A acceptance state. If a Counter Offer (SCO/SMCO) or Back-Up Offer (BUO) is physically present in the packet, the corresponding box in 33A must be checked. If a counter is present but neither 33A box is checked, flag it (severity "missing") -- without the box checked the counter does not legally apply to the RPA, and the RPA on its face shows direct acceptance. Likewise, if a 33A box IS checked but no counter of that type is in the packet, flag it (severity "missing") -- the packet is incomplete.
 - RPA Section 33B entity-seller box state. If an entity name is filled in on the entity-seller line (the "Full entity name" field in 33B) but the entity-seller box itself is unchecked, flag it (severity "missing"). Same parallel check for Section 32B on the buyer side.
-- These two checks (33A and 33B/32B box states) ARE in scope for this audit even though they are not signatures, because they directly determine which signatures are legally required and operative. Do not extend this license to other form-state checks -- only 33A acceptance boxes and 32B/33B entity-party boxes.
+
+ALSO AUDIT THESE FORM-COMPLETENESS CHECKS (named blank-field checks; flag every blank as a separate finding, severity "missing" unless noted):
+
+PACKET ORDERING CONVENTION (use this for chain reasoning below): packets are assembled with the FINAL ACCEPTED counter on top, descending through the chain. For example, a packet ordered [BCO-1, SCO-1, RPA, advisories] means BCO-1 was the final accepted counter, written in response to SCO-1, which was written in response to the original RPA. The FIRST counter you encounter in the packet is the operative/final one; counters below it are earlier links in the chain. Use this packet order rather than counter numbers or dates to determine chain order.
+
+(N1) RPA page 1 property identification fields. The top of RPA p1 must have ALL of:
+  - Date Prepared
+  - "THIS IS AN OFFER FROM" buyer name
+  - Buyer entity-type checkbox (exactly one of: Individual(s), Corporation, Partnership, LLC, Other -- one MUST be checked; none checked is always wrong, even for individual buyers)
+  - Property street address
+  - City
+  - County
+  - ZIP
+  - Assessor's Parcel Number (APN)
+Flag each individual blank field as its own finding so the TC sees exactly which fields need filling.
+
+(N2) Counter offer header completeness (every SCO, SMCO, BCO in the packet). On every counter offer in the packet, the form header must have ALL of:
+  - "Counter Offer No." field filled in (the number identifying which counter this is)
+  - Date field (top right) filled in
+  - The "This is a counter offer to..." reference: exactly one of the three checkboxes must be checked (Purchase Agreement / Buyer Counter Offer No. / Other). If "Buyer Counter Offer No." is the box checked, the number must also be filled in.
+  - The "dated [date]" field (the date the document being countered was dated) filled in
+  - Property identification line filled in
+  - Buyer name line filled in
+  - Seller name line filled in
+Flag each individual blank field as its own finding, naming the specific counter (e.g. "SCO #2 header: Date field blank").
+
+(N3) Counter-of-counters chain integrity (Section 5 ACCEPTANCE box on earlier counters). Using the packet ordering convention above, identify the chain order. For every counter EXCEPT the final accepted one (the one on top of the packet), the "SUBJECT TO THE ATTACHED [Buyer/Seller] COUNTER OFFER No. ___" box in its Section 5 ACCEPTANCE must be checked, with the counter offer number filled in. If a counter in the chain has subsequent counters above it in packet order but its Section 5 subject-to-attached box is unchecked OR the number is blank, flag it (severity "missing"). The final accepted counter on top of the packet should NOT have this box checked -- that one is the terminal link.
+
+(N4) Entity-party detail completeness when entity box is in play. If RPA Section 33B entity-seller box is checked OR an entity name appears on the 33B(2) full-entity-name line OR an authorized-signer name appears on the 33B(4) line (any one of these signals an entity seller is intended), then ALL of the following must be filled:
+  - 33B box itself: checked
+  - 33B(2) Full entity name
+  - 33B(4) Legally Authorized Signer name(s)
+Flag each blank as its own finding. Same parallel check on the buyer side for Section 32B / 32B(2) / 32B(4).
+
+(N5) RPA Section 2B Agency Confirmation completeness. The Section 2B block must have ALL of:
+  - Seller's Brokerage Firm name
+  - Seller's Brokerage License Number
+  - "Is the broker of" checkbox marked (one of: the Seller / both the Buyer and Seller)
+  - Seller's Agent name
+  - Seller's Agent License Number
+  - Seller's Agent "Is (check one)" checkbox marked (one of: the Seller's Agent / both the Buyer's and Seller's Agent)
+  - Buyer's Brokerage Firm name
+  - Buyer's Brokerage License Number
+  - "Is the broker of" checkbox marked (one of: the Buyer / both the Buyer and Seller)
+  - Buyer's Agent name
+  - Buyer's Agent License Number
+  - Buyer's Agent "Is (check one)" checkbox marked (one of: the Buyer's Agent / both the Buyer's and Seller's Agent)
+Flag each individual blank as its own finding. License numbers only need to be PRESENT, not validated for correctness -- numbers are verified separately against the DRE database, so do not attempt to judge whether a license number is real or correct, only whether the field is filled in.
+
+The form-state checks above (33A box state, 32B/33B box states, and N1-N5) ARE in scope for this audit even though they are not signatures, because they directly determine what is legally operative or correctly assembled. Do not extend this license to other form-state checks beyond this explicit list. Blank data fields elsewhere in the packet (financing terms, contingency dates, dollar amounts, contact details, etc.) are NOT in scope for this audit -- they are the extractor's territory.
 
 IMPORTANT REASONING GUIDANCE:
 - The Escrow Holder Acknowledgment is normally blank at file-open -- that is expected, not a missing signature.
