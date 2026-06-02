@@ -215,11 +215,42 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 //      extractor's territory." This prevents N1-N5 from being a slippery
 //      slope back into generalized QC.
 //
-// The named exception list (33A box state, 32B/33B box states, N1-N5)
-// constitutes the entire form-state surface this audit covers. Adding new
-// completeness checks in the future should follow the same pattern: name
-// the check, give it a number, and update both this comment and the scope-
-// guardrail sentence.
+// TEST 6 -- N2 ENUMERATED TRANSCRIPTION + DATE DISAMBIGUATION (current
+// change, prompt only):
+// The Santa Monica run (SCO #1 dated 5/31, property 1020 19th St #6) missed
+// a blank top-right Date field on SCO #1. The audit prose read "Header is
+// complete: Counter No. 1, dated 05/31/2026, property/buyer/seller lines
+// all filled" -- the model demonstrably ran the N2 check but got the
+// perception wrong by conflating two distinct date fields that share the
+// word "date" in their labels.
+//
+// The two fields on a counter offer header that both look like "date":
+//   (a) Top-right Date field on the form's first page -- when THIS counter
+//       offer was issued. A separate labeled line in the top-right corner.
+//   (b) The "dated [date]" reference inside the body sentence "This is a
+//       counter offer to [the Offer], dated _______" -- when the document
+//       being countered was dated.
+// Conflating these two is exactly the Test 3 problem at smaller scale:
+// open-ended checks ("verify the header is complete") get glance-summarized,
+// the model says "looks complete" and moves on. The fix is the same trick
+// that worked for the per-page initials pass: force ENUMERATED
+// TRANSCRIPTION -- the model must write what it literally sees in each
+// field, or write BLANK. A summary judgment is not allowed.
+//
+// Fix (prompt only -- no architecture change):
+//  (a) N2 rewritten to require per-counter enumerated transcription. Each
+//      field is named, the model transcribes its literal contents or writes
+//      BLANK. Glance-summary ("header is complete") is explicitly
+//      forbidden.
+//  (b) The two date fields are disambiguated by their semantic role, not
+//      just their physical location: the top-right Date captures when this
+//      counter was issued; the in-sentence "dated" captures when the
+//      countered document was dated. Both are required; one does NOT
+//      satisfy the other.
+// Scope of this change: N2 only. N1 (RPA p1) and N5 (Section 2B) have
+// similar long named-field-list shapes but have not produced a miss yet --
+// if and when they do, the same enumerated-transcription treatment can be
+// applied to them in a future test iteration.
 // ============================================================================
 function buildAuditPrompt(params) {
   const { buyerCount, sellerCount, sellerEntity, buyerEntity } = params;
@@ -296,15 +327,20 @@ PACKET ORDERING CONVENTION (use this for chain reasoning below): packets are ass
   - Assessor's Parcel Number (APN)
 Flag each individual blank field as its own finding so the TC sees exactly which fields need filling.
 
-(N2) Counter offer header completeness (every SCO, SMCO, BCO in the packet). On every counter offer in the packet, the form header must have ALL of:
-  - "Counter Offer No." field filled in (the number identifying which counter this is)
-  - Date field (top right) filled in
-  - The "This is a counter offer to..." reference: exactly one of the three checkboxes must be checked (Purchase Agreement / Buyer Counter Offer No. / Other). If "Buyer Counter Offer No." is the box checked, the number must also be filled in.
-  - The "dated [date]" field (the date the document being countered was dated) filled in
-  - Property identification line filled in
-  - Buyer name line filled in
-  - Seller name line filled in
-Flag each individual blank field as its own finding, naming the specific counter (e.g. "SCO #2 header: Date field blank").
+(N2) Counter offer header completeness (every SCO, SMCO, BCO in the packet). Every counter offer in the packet has a header section that must be filled out completely. CRITICAL: do this as an explicit ENUMERATED TRANSCRIPTION PASS, one counter at a time, the same way you do the per-page initials pass. For each counter in the packet, write a labeled list and transcribe LITERALLY what you see in each field, OR write the word BLANK if the field is empty. Do not write "header is complete" or any other glance-summary in place of the enumeration. The act of transcribing each field's contents is what the check requires; a summary judgment is not a substitute.
+
+For each counter offer in the packet, transcribe these fields:
+  - Counter Offer No.: the number identifying which counter this is (top of page, after "COUNTER OFFER No.")
+  - Date (top right corner of the first page): the date THIS counter offer itself was issued. This is a separate field in its own right, located at the top right of the page on its own line labeled "Date". Transcribe what you literally see in this top-right Date field, or write BLANK.
+  - "This is a counter offer to..." reference checkbox: state which of the three checkboxes is checked, if any. The three options are: Purchase Agreement (the default, indicated by neither alternative box being checked) / Buyer Counter Offer No. (if checked, also transcribe the number filled into the field next to it) / Other (if checked, also transcribe what was written in the field next to it). Write which option applies.
+  - "dated [date]" reference field: the date INSIDE the body sentence "This is a counter offer to the [Offer], dated _______". This date refers to WHEN THE DOCUMENT BEING COUNTERED WAS DATED -- it is NOT the same field as the top-right Date above. Transcribe what you literally see in this in-sentence "dated" field, or write BLANK.
+  - Property: the property address line in the body
+  - Buyer: the buyer name line in the body
+  - Seller: the seller name line in the body
+
+IMPORTANT -- the two dates are distinct: the top-right "Date" field captures when THIS counter offer was issued; the in-sentence "dated [date]" field captures the date of the document this counter is responding to. They are two separate required fields with similar labels. A filled "dated" reference does NOT satisfy the top-right Date, and vice versa. Both must be present. If the top-right Date is blank, that is a missing field even when the "dated" reference is filled (and vice versa).
+
+After transcribing the fields for a counter, flag every field whose transcription was BLANK as a finding (severity "missing"), naming the specific counter and the specific field (e.g. "SCO #1 header: top-right Date field is blank").
 
 (N3) Counter-of-counters chain integrity (Section 5 ACCEPTANCE box on earlier counters). Using the packet ordering convention above, identify the chain order. For every counter EXCEPT the final accepted one (the one on top of the packet), the "SUBJECT TO THE ATTACHED [Buyer/Seller] COUNTER OFFER No. ___" box in its Section 5 ACCEPTANCE must be checked, with the counter offer number filled in. If a counter in the chain has subsequent counters above it in packet order but its Section 5 subject-to-attached box is unchecked OR the number is blank, flag it (severity "missing"). The final accepted counter on top of the packet should NOT have this box checked -- that one is the terminal link.
 
