@@ -499,6 +499,20 @@ exports.handler = async function(event, context) {
       buyer_signer_2: { type: "string", description: "Second human signer on the buyer side. Empty if only one." },
       buyer_signer_3: { type: "string", description: "Third human signer on the buyer side. Empty if not applicable." },
       buyer_signer_4: { type: "string", description: "Fourth human signer on the buyer side. Empty if not applicable." },
+      buyer_1: {
+        type: "string",
+        description: `First buyer, split out for downstream systems that need one buyer per field. ONE HUMAN OR ONE ENTITY PER SLOT. Source: the RPA paragraph 1A "THIS IS AN OFFER FROM" line (and paragraph 32B for the full entity name). These names are already in natural First-Last order — do NOT rebuild them like the courthouse Last-First seller fields.
+
+SPLITTING RULES:
+• Individual buyers listed together like 'James Gann, Camila Gann' or 'James & Camila Gann' → one person per slot: buyer_1: 'James Gann', buyer_2: 'Camila Gann'. A ',' or '&' between names means SEPARATE PEOPLE.
+• Couple sharing a surname like 'Nick & Marina Avedissian' → buyer_1: 'Nick Avedissian', buyer_2: 'Marina Avedissian' (append the shared surname to each).
+
+ENTITY BUYERS: an entity (LLC, trust, estate, corporation) is ONE legal buyer that fills exactly ONE slot regardless of how many trustees or members it has. buyer_1 = the FULL entity name, and buyer_2..4 are empty. NEVER split an entity name on its internal commas — a trust name often contains a comma in its date. Example: 'Beckman Family Trust dated February 18, 1993' → buyer_1: 'Beckman Family Trust dated February 18, 1993', buyer_2..4 empty. The individual trustees/members who sign on the entity's behalf are captured in buyer_signer_1 through buyer_signer_4, NOT here.
+
+buyer_1 must NEVER be blank — at minimum the primary buyer goes here.` },
+      buyer_2: { type: "string", description: "Second buyer, one human or entity per slot. See buyer_1 description for splitting rules. Empty string if there is only one buyer (including any single entity buyer)." },
+      buyer_3: { type: "string", description: "Third buyer, one human or entity per slot. See buyer_1 description for splitting rules. Empty string if there are fewer than three buyers." },
+      buyer_4: { type: "string", description: "Fourth buyer, one human or entity per slot. See buyer_1 description for splitting rules. Empty string if there are fewer than four buyers." },
 
       // ─── SELLER ───────────────────────────────────────────────────────────
       seller_names: {
