@@ -285,7 +285,7 @@ async function locateRpaPagesViaImages(documents, apiKey) {
       properties: {
         date_prepared_page: {
           type: 'integer',
-          description: 'The 1-indexed page number (matching the order of the images provided, image 1 = page 1) whose top-left shows the printed label "Date Prepared:" followed by a date. This is page 1 of the California Residential Purchase Agreement (RPA/VLPA/RIPA/CPA); footer reads "PAGE 1 OF 17" or similar. Return 0 if not found.'
+          description: 'The 1-indexed page number (image 1 = page 1) of the FIRST PAGE OF THE RPA: top-left shows the printed label "Date Prepared:" followed by a date, header "CALIFORNIA RESIDENTIAL PURCHASE AGREEMENT AND JOINT ESCROW INSTRUCTIONS", footer "PAGE 1 OF 17". CRITICAL: this is NOT necessarily the first physical page of the package — executed packages routinely stack Buyer/Seller Counter Offers (BCO/SCO) and addenda IN FRONT of the RPA. Those pages also show a date at the top, but they say a plain "Date" (not "Date Prepared:") under a "COUNTER OFFER" or addendum heading — do NOT return a counter-offer or addendum page. Return 0 if you cannot find the RPA page 1 bearing the "Date Prepared:" label.'
         },
         brokers_section_page: {
           type: 'integer',
@@ -310,7 +310,7 @@ async function locateRpaPagesViaImages(documents, apiKey) {
       role: 'user',
       content: [
         ...imageBlocks,
-        { type: 'text', text: 'The images above are the pages of a California real estate purchase agreement package, in order (image 1 = page 1, image 2 = page 2, and so on). Identify two pages and return their 1-indexed numbers via the locate_pages tool:\n\n• Page A is page 1 of the RPA: top-left printed label "Date Prepared:" followed by a date; header "CALIFORNIA RESIDENTIAL PURCHASE AGREEMENT AND JOINT ESCROW INSTRUCTIONS"; paragraph 1 "OFFER"; footer "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar.\n\n• Page B is the LAST page of the RPA: heading "REAL ESTATE BROKERS SECTION"; two subsections "A. Buyer\'s Brokerage Firm" and "B. Seller\'s Brokerage Firm"; footer "RPA REVISED 12/25 (PAGE 17 OF 17)" or similar.\n\nBoth pages are present. Return 0 for a page you cannot find — do not guess.' }
+        { type: 'text', text: 'The images above are the pages of a California real estate purchase agreement package, in order (image 1 = page 1, image 2 = page 2, and so on). Identify two pages and return their 1-indexed numbers via the locate_pages tool:\n\n• Page A is page 1 of the RPA: top-left printed label "Date Prepared:" followed by a date; header "CALIFORNIA RESIDENTIAL PURCHASE AGREEMENT AND JOINT ESCROW INSTRUCTIONS"; paragraph 1 "OFFER"; footer "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar. IMPORTANT: page 1 of the RPA is often NOT the first physical page of the package — Buyer/Seller Counter Offers and addenda are frequently stacked in front of it. Counter offers show a plain "Date" (NOT "Date Prepared:") under a "COUNTER OFFER" heading; do not mistake a counter offer or addendum for RPA page 1.\n\n• Page B is the LAST page of the RPA: heading "REAL ESTATE BROKERS SECTION"; two subsections "A. Buyer\'s Brokerage Firm" and "B. Seller\'s Brokerage Firm"; footer "RPA REVISED 12/25 (PAGE 17 OF 17)" or similar.\n\nBoth pages are present. Return 0 for a page you cannot find — do not guess.' }
       ]
     }]
   };
@@ -336,10 +336,35 @@ async function locateRpaPagesViaImages(documents, apiKey) {
     return result;
   }
 
-  const dp = toolUse.input.date_prepared_page;
+  let dp = toolUse.input.date_prepared_page;
   const br = toolUse.input.brokers_section_page;
-  // Rendered images are document-0 pages 1..N in order, so the returned
-  // 1-indexed image position maps directly onto the document page.
+
+  // Geometric guard against counter-offer confusion. The CAR RPA is a fixed
+  // 17-page form, so page 1 ("Date Prepared:") always sits exactly 16 pages
+  // before the brokers section ("PAGE 17 OF 17"). Executed packages routinely
+  // stack counter offers (BCO/SCO) and addenda IN FRONT of the RPA, and those
+  // pages also show a date at the top — the model sometimes locks onto a
+  // counter-offer page as "page 1", which yields the counter date instead of
+  // the RPA's Date Prepared. When the brokers section is located and the
+  // model's date page is geometrically inconsistent with it (not ~16 pages
+  // before), trust the brokers anchor and derive page 1 from it. If the form
+  // were not exactly 17 pages the derived page lands on RPA boilerplate with no
+  // "Date Prepared:" label, so the targeted call returns an empty date — a safe
+  // failure, never a counter-offer date.
+  const RPA_PAGE1_TO_LAST_OFFSET = 16;
+  if (typeof br === 'number' && br > 0) {
+    const derivedDp = br - RPA_PAGE1_TO_LAST_OFFSET;
+    const dpInconsistent = typeof dp !== 'number' || dp <= 0 || dp >= br ||
+      Math.abs((br - dp) - RPA_PAGE1_TO_LAST_OFFSET) > 2;
+    if (derivedDp >= 1 && dpInconsistent) {
+      console.warn('image-locate: date page (' + dp + ') inconsistent with brokers page (' + br +
+        '); deriving RPA page 1 = ' + derivedDp + ' from the brokers anchor (counter-offer guard)');
+      dp = derivedDp;
+    }
+  }
+
+  // Rendered images are document-0 pages 1..N in order, so the 1-indexed image
+  // position maps directly onto the document page.
   if (typeof dp === 'number' && dp > 0) { result.dpDoc = docIdx; result.dpPage = dp - 1; }
   if (typeof br === 'number' && br > 0) { result.brokersDoc = docIdx; result.brokersPage = br - 1; }
   return result;
