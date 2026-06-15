@@ -1029,6 +1029,33 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
         });
         if (mainHandledTargets) extractionStatus = 'main_call_only';
       }
+
+      // ── ANTI-FABRICATION SAFEGUARD (blind fallback path) ─────────────────
+      // In the blind image_fallback path the model reads low-res whole-package
+      // images and is prone to CONFABULATING a plausible-but-fake Date Prepared
+      // and buyer agent (e.g. a real-format DRE that belongs to someone else —
+      // exactly how "William Pinchuk / 02238896" once reached a record). A
+      // confident fake is far more dangerous than a blank, so blank the fields
+      // that come ONLY from the RPA pages (no MLS/profile fallback) and let
+      // _extraction_status flag the contract for manual review. Seller-agent
+      // fields are left alone — they can be MLS-sourced and reliable.
+      if (extractionStatus === 'image_fallback_sonnet') {
+        const BLIND_UNRELIABLE_FIELDS = [
+          'date_rpa_prepared',
+          'buyer_agent_name', 'buyer_agent_dre',
+          'buyer_agent_name_2', 'buyer_agent_dre_2',
+          'buyer_agent_brokerage_name', 'buyer_agent_brokerage_dre',
+          'buyer_agent_address', 'buyer_agent_email', 'buyer_agent_phone'
+        ];
+        const blanked = [];
+        for (const f of BLIND_UNRELIABLE_FIELDS) {
+          if (mergedFields[f] && mergedFields[f].trim() !== '') { blanked.push(f); mergedFields[f] = ''; }
+        }
+        if (blanked.length) {
+          console.warn('anti-fabrication: blanked blind-path values for manual review [' + blanked.join(', ') + ']');
+        }
+      }
+
       mergedFields._extraction_status = extractionStatus;
       console.log('final extraction status: ' + extractionStatus);
 
