@@ -167,6 +167,106 @@ async function locateRpaPagesViaVision(documents, apiKey) {
   return result;
 }
 
+// ── HELPER: IMAGE-RENDER page detection (for garbled/broken text-layer PDFs) ──
+// Some zipForm/DocuSign exports encode the CAR template font without a usable
+// ToUnicode map, so the text layer extracts as control-character garbage and
+// locateRpaPagesViaText can never match the markers — even though the PRINTED
+// page still looks correct (only the extracted text is broken). The PDF-native
+// vision pass (locateRpaPagesViaVision) can also miss on these. This locator
+// renders the pages server-side at a legible scale and asks Sonnet to read the
+// two page numbers off the rendered images; the visual labels ("Date Prepared:",
+// "REAL ESTATE BROKERS SECTION") are intact even when the text layer is not.
+//
+// On success the caller still builds the reliable 2-page trim + targeted call —
+// this is strictly a better-located input than the blind whole-package image
+// fallback (which renders everything and asks the model to find AND extract in
+// one overloaded call). Single-document assumption (renders document 0),
+// matching locateRpaPagesViaVision.
+async function locateRpaPagesViaImages(documents, apiKey) {
+  const result = { dpDoc: -1, dpPage: -1, brokersDoc: -1, brokersPage: -1 };
+  if (!documents.length) return result;
+  const docIdx = 0;
+
+  const buffer = Buffer.from(documents[docIdx].data, 'base64');
+  // Scale 1.0 (vs the 0.5 used for blind extraction) renders letter pages at
+  // ~612x792 — the page HEADINGS we locate by ("Date Prepared:", "REAL ESTATE
+  // BROKERS SECTION") are clearly legible, while ~30 pages stay comfortably
+  // under the request size limit (~10MB). We are locating pages here, not
+  // reading fine print, so we don't need a higher scale.
+  const renderedPages = await renderAllPagesAsImages(buffer, MAX_FALLBACK_PAGES, 1.0);
+  if (!renderedPages.length) {
+    console.warn('image-locate page-detection: no pages rendered');
+    return result;
+  }
+
+  const locateTool = {
+    name: 'locate_pages',
+    description: 'Report the 1-indexed page numbers where two markers appear in the rendered document images.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        date_prepared_page: {
+          type: 'integer',
+          description: 'The 1-indexed page number (matching the order of the images provided, image 1 = page 1) whose top-left shows the printed label "Date Prepared:" followed by a date. This is page 1 of the California Residential Purchase Agreement (RPA/VLPA/RIPA/CPA); footer reads "PAGE 1 OF 17" or similar. Return 0 if not found.'
+        },
+        brokers_section_page: {
+          type: 'integer',
+          description: 'The 1-indexed page number (matching the order of the images provided) whose heading reads "REAL ESTATE BROKERS SECTION", with subsections "A. Buyer\'s Brokerage Firm" and "B. Seller\'s Brokerage Firm". This is the LAST page of the RPA; footer reads "PAGE 17 OF 17" or similar. Return 0 if not found.'
+        }
+      },
+      required: ['date_prepared_page', 'brokers_section_page']
+    }
+  };
+
+  const imageBlocks = renderedPages.map((p) => ({
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: p.base64 }
+  }));
+
+  const body = {
+    model: 'claude-sonnet-4-5',
+    max_tokens: 200,
+    tools: [locateTool],
+    tool_choice: { type: 'tool', name: 'locate_pages' },
+    messages: [{
+      role: 'user',
+      content: [
+        ...imageBlocks,
+        { type: 'text', text: 'The images above are the pages of a California real estate purchase agreement package, in order (image 1 = page 1, image 2 = page 2, and so on). Identify two pages and return their 1-indexed numbers via the locate_pages tool:\n\n• Page A is page 1 of the RPA: top-left printed label "Date Prepared:" followed by a date; header "CALIFORNIA RESIDENTIAL PURCHASE AGREEMENT AND JOINT ESCROW INSTRUCTIONS"; paragraph 1 "OFFER"; footer "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar.\n\n• Page B is the LAST page of the RPA: heading "REAL ESTATE BROKERS SECTION"; two subsections "A. Buyer\'s Brokerage Firm" and "B. Seller\'s Brokerage Firm"; footer "RPA REVISED 12/25 (PAGE 17 OF 17)" or similar.\n\nBoth pages are present. Return 0 for a page you cannot find — do not guess.' }
+      ]
+    }]
+  };
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json();
+
+  if (!Array.isArray(data.content)) {
+    console.warn('image-locate page-detection: unexpected response shape, no content array');
+    return result;
+  }
+  const toolUse = data.content.find((b) => b.type === 'tool_use');
+  if (!toolUse || !toolUse.input) {
+    console.warn('image-locate page-detection: no tool_use block in response');
+    return result;
+  }
+
+  const dp = toolUse.input.date_prepared_page;
+  const br = toolUse.input.brokers_section_page;
+  // Rendered images are document-0 pages 1..N in order, so the returned
+  // 1-indexed image position maps directly onto the document page.
+  if (typeof dp === 'number' && dp > 0) { result.dpDoc = docIdx; result.dpPage = dp - 1; }
+  if (typeof br === 'number' && br > 0) { result.brokersDoc = docIdx; result.brokersPage = br - 1; }
+  return result;
+}
+
 // ── HELPER: orchestrate text-first, vision-fallback page detection ─────────
 // This is the hybrid: try free text extraction first. Only pay for a vision
 // call if text fails. Born-digital PDFs cost nothing extra; print/rescan PDFs
@@ -185,8 +285,9 @@ async function locateRpaPagesWithFallback(documents, apiKey) {
     'trying vision fallback'
   );
 
+  let visionResult = null;
   try {
-    const visionResult = await locateRpaPagesViaVision(documents, apiKey);
+    visionResult = await locateRpaPagesViaVision(documents, apiKey);
     if (visionResult.dpDoc !== -1 && visionResult.brokersDoc !== -1) {
       console.log('page detection: vision fallback succeeded ' +
         '(date_prepared=page' + (visionResult.dpPage + 1) +
@@ -196,12 +297,35 @@ async function locateRpaPagesWithFallback(documents, apiKey) {
     console.warn(
       'page detection: vision fallback also missed ' +
       '(date_prepared_found=' + (visionResult.dpDoc !== -1) +
-      ', brokers_section_found=' + (visionResult.brokersDoc !== -1) + ')'
+      ', brokers_section_found=' + (visionResult.brokersDoc !== -1) + '), ' +
+      'trying image-render locator'
     );
-    return { located: visionResult, method: 'vision-failed' };
   } catch (visionErr) {
-    console.warn('page detection: vision fallback errored: ' + visionErr.message);
-    return { located: textResult, method: 'vision-errored' };
+    console.warn('page detection: vision fallback errored (' + visionErr.message + '), trying image-render locator');
+  }
+
+  // Final locator: render pages server-side and read the page numbers off the
+  // images. Handles PDFs whose text layer is garbled (zipForm/DocuSign font
+  // encoding) AND that the PDF-native vision pass missed. If this finds both
+  // pages we still get the reliable 2-page trim + targeted call, NOT the blind
+  // whole-package image fallback.
+  try {
+    const imageResult = await locateRpaPagesViaImages(documents, apiKey);
+    if (imageResult.dpDoc !== -1 && imageResult.brokersDoc !== -1) {
+      console.log('page detection: image-render locator succeeded ' +
+        '(date_prepared=page' + (imageResult.dpPage + 1) +
+        ', brokers_section=page' + (imageResult.brokersPage + 1) + ')');
+      return { located: imageResult, method: 'image_locate' };
+    }
+    console.warn(
+      'page detection: image-render locator also missed ' +
+      '(date_prepared_found=' + (imageResult.dpDoc !== -1) +
+      ', brokers_section_found=' + (imageResult.brokersDoc !== -1) + ')'
+    );
+    return { located: imageResult, method: 'image_locate-failed' };
+  } catch (imageErr) {
+    console.warn('page detection: image-render locator errored: ' + imageErr.message);
+    return { located: (visionResult || textResult), method: 'image_locate-errored' };
   }
 }
 
@@ -303,7 +427,7 @@ async function buildTrimmedMainPdf(documents, located) {
 // `first: N` option. This skips rendering work entirely for pages beyond the
 // cap, not just truncating output. Important for packages with 50+ pages
 // where rendering all of them would blow the function timeout.
-async function renderAllPagesAsImages(buffer, maxPages) {
+async function renderAllPagesAsImages(buffer, maxPages, scale) {
   // Peek at total page count so we can log when we're truncating.
   // getInfo is lightweight — doesn't render anything.
   let totalPages = null;
@@ -326,7 +450,10 @@ async function renderAllPagesAsImages(buffer, maxPages) {
 
   const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
   try {
-    const options = { scale: 0.5 };
+    // Default scale 0.5 keeps the blind extraction fallback cheap; callers that
+    // need legible page images (the image-render page LOCATOR below) pass a
+    // higher scale so headings/footers are readable.
+    const options = { scale: (typeof scale === 'number' && scale > 0) ? scale : 0.5 };
     if (maxPages) options.first = maxPages;
     const result = await parser.getScreenshot(options);
     return result.pages
@@ -681,7 +808,10 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
           title: 'RPA page 1 and brokers section (trimmed)'
         }];
         targetedCallPromise = callApi(buildTargetedContent(targetedDocs), targetedTool);
-        extractionStatus = detection.method === 'text' ? 'text_trim' : 'vision_trim_sonnet';
+        extractionStatus =
+          detection.method === 'text' ? 'text_trim' :
+          detection.method === 'image_locate' ? 'image_locate_trim' :
+          'vision_trim_sonnet';
         console.log(
           'targeted call: started in parallel with main, trimmed to 2 pages via ' + detection.method + ' ' +
           '(date_prepared=doc' + located.dpDoc + '/page' + (located.dpPage + 1) +
