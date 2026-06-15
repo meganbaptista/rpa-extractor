@@ -258,35 +258,12 @@ async function locateRpaPagesViaImages(documents, apiKey) {
     return result;
   }
 
-  let dp = toolUse.input.date_prepared_page;
+  const dp = toolUse.input.date_prepared_page;
   const br = toolUse.input.brokers_section_page;
-
-  // Geometric guard against counter-offer confusion. The CAR RPA is a fixed
-  // 17-page form, so page 1 ("Date Prepared:") always sits exactly 16 pages
-  // before the brokers section ("PAGE 17 OF 17"). Executed packages routinely
-  // stack counter offers (BCO/SCO) and addenda IN FRONT of the RPA, and those
-  // pages also show a date at the top — the model sometimes locks onto a
-  // counter-offer page as "page 1", which yields the counter date instead of
-  // the RPA's Date Prepared. When the brokers section is located and the
-  // model's date page is geometrically inconsistent with it (not ~16 pages
-  // before), trust the brokers anchor and derive page 1 from it. If the form
-  // were not exactly 17 pages the derived page lands on RPA boilerplate with no
-  // "Date Prepared:" label, so the targeted call returns an empty date — a safe
-  // failure, never a counter-offer date.
-  const RPA_PAGE1_TO_LAST_OFFSET = 16;
-  if (typeof br === 'number' && br > 0) {
-    const derivedDp = br - RPA_PAGE1_TO_LAST_OFFSET;
-    const dpInconsistent = typeof dp !== 'number' || dp <= 0 || dp >= br ||
-      Math.abs((br - dp) - RPA_PAGE1_TO_LAST_OFFSET) > 2;
-    if (derivedDp >= 1 && dpInconsistent) {
-      console.warn('image-locate: date page (' + dp + ') inconsistent with brokers page (' + br +
-        '); deriving RPA page 1 = ' + derivedDp + ' from the brokers anchor (counter-offer guard)');
-      dp = derivedDp;
-    }
-  }
-
   // Rendered images are document-0 pages 1..N in order, so the 1-indexed image
-  // position maps directly onto the document page.
+  // position maps directly onto the document page. The counter-offer geometric
+  // guard is applied centrally in the handler (right after detection) so it
+  // covers EVERY detector path (text/vision/image), not just this one.
   if (typeof dp === 'number' && dp > 0) { result.dpDoc = docIdx; result.dpPage = dp - 1; }
   if (typeof br === 'number' && br > 0) { result.brokersDoc = docIdx; result.brokersPage = br - 1; }
   return result;
@@ -776,6 +753,40 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
       console.warn('detection errored (' + detectErr.message + '), falling through to image fallback');
     }
     const located = detection ? detection.located : null;
+
+    // ── COUNTER-OFFER GUARD (applies to whatever detector ran) ──────────────
+    // The CAR RPA is a fixed 17-page form, so page 1 ("Date Prepared:") sits
+    // exactly 16 pages before the brokers section ("PAGE 17 OF 17"). Executed
+    // packages stack Buyer/Seller Counter Offers and addenda IN FRONT of the
+    // RPA; because counters also show a date at the top, the vision/image
+    // detectors can lock onto a counter-offer page as "page 1", surfacing a
+    // counter date as date_rpa_prepared. The brokers section has a unique
+    // heading and is located reliably, so when the date page is missing — or is
+    // in the SAME document but geometrically wrong (off the 16-page offset by
+    // more than a small tolerance) — derive page 1 from the brokers anchor. A
+    // legitimately cross-document page 1 (RPA split across uploaded files) is
+    // left untouched. If a form ever isn't exactly 17 pages the derived page
+    // lands on RPA boilerplate with no "Date Prepared:" label, so the targeted
+    // call returns an empty date — a safe failure, never a counter-offer date.
+    if (located && located.brokersDoc !== -1 && located.brokersPage >= 0) {
+      const RPA_PAGE1_TO_LAST_OFFSET = 16;
+      const derivedDpPage = located.brokersPage - RPA_PAGE1_TO_LAST_OFFSET;
+      if (derivedDpPage >= 0) {
+        const dpFound = located.dpDoc !== -1 && located.dpPage >= 0;
+        const sameDoc = located.dpDoc === located.brokersDoc;
+        const offsetOk = sameDoc && dpFound &&
+          Math.abs((located.brokersPage - located.dpPage) - RPA_PAGE1_TO_LAST_OFFSET) <= 2;
+        if (!dpFound || (sameDoc && !offsetOk)) {
+          console.warn('counter-offer guard: date page (' +
+            (dpFound ? ('doc' + located.dpDoc + '/page' + (located.dpPage + 1)) : 'not found') +
+            ') inconsistent with brokers page (doc' + located.brokersDoc + '/page' + (located.brokersPage + 1) +
+            '); deriving RPA page 1 = page' + (derivedDpPage + 1) + ' from the brokers anchor');
+          located.dpDoc = located.brokersDoc;
+          located.dpPage = derivedDpPage;
+        }
+      }
+    }
+
     const haveDetection = located && located.dpDoc !== -1 && located.brokersDoc !== -1;
 
     let mainCallPromise;
