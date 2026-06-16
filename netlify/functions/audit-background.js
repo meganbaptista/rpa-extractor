@@ -437,6 +437,9 @@ followed by a single JSON object (no markdown fences) with this shape:
       "severity": "missing" | "review",
       "detail": "one sentence of specifics"
     }
+  ],
+  "action_items": [
+    "one clean, send-ready line per issue, plain English, phrased as a notice or request to the other side -- no severity tags, no S1/N codes, no internal jargon"
   ]
 }
 Rules for PART 2:
@@ -445,6 +448,7 @@ Rules for PART 2:
 - Each finding is ONE tight sentence in "detail". Do not write a paragraph.
 - Per-page initials appear in "findings" ONLY as a specific named page that is genuinely missing or unreadable -- never as a page range, and never at all if the page-by-page pass found them present.
 - This audit does not produce QC findings. Do not add findings for blank data fields, form-choice issues, or other non-signature observations.
+- "action_items": a client-ready restatement of the findings for the transaction coordinator to copy and send to the OTHER side of the deal. Write ONE line per issue in plain English, phrased as a clear notice or courteous request (e.g. "Seller's signature on the SCO and RPA (Section 33D) shows the trust name only -- please have the trustee re-execute signing with capacity, e.g. 'Jane Doe, Trustee'."). NO severity tags, NO S1/S2/N codes, NO internal jargon -- it must read like a message a coordinator would send to the other agent. Combine closely related findings into a single line where that reads more naturally. Order from most to least important. If there are no findings, use an empty array. The action_items must correspond to the findings -- do not introduce issues not in "findings".
 - The JSON must be valid and parseable. PART 1 prose is the audit; PART 2 JSON is the machine-readable summary of it -- they must agree.`;
 }
 
@@ -497,6 +501,21 @@ function buildZapierPayload(jobId, auditPart, completedAtMs, propertyAddress, ap
       })
       .join('\n');
 
+    // Client-ready bullet list for copy/paste to the other side of the deal.
+    // Sourced from the model's action_items array (plain English, no severity
+    // tags or internal codes). Defensive: if the model omitted action_items,
+    // fall back to the findings' issue/detail text so the field is never empty
+    // when issues exist.
+    const actionItems = Array.isArray(structured.action_items) ? structured.action_items : [];
+    const actionList = (actionItems.length
+      ? actionItems.map((a) => `• ${typeof a === 'string' ? a : (a && (a.text || a.item)) || ''}`.trim())
+      : findings.map((f) => {
+          const iss = (f && f.issue) || 'unspecified issue';
+          const det = f && f.detail ? ` ${f.detail}` : '';
+          return `• ${iss}.${det}`;
+        })
+    ).join('\n');
+
     return {
       jobId: jobId,
       completedAt: new Date(completedAtMs).toISOString(),
@@ -506,6 +525,7 @@ function buildZapierPayload(jobId, auditPart, completedAtMs, propertyAddress, ap
       summary: structured.summary || '',
       findings_count: findings.length,
       findings_text: findingsText,
+      action_list: actionList,
       prose: prose,
     };
   }
@@ -521,6 +541,7 @@ function buildZapierPayload(jobId, auditPart, completedAtMs, propertyAddress, ap
     summary: 'Audit completed but structured summary could not be parsed -- see prose.',
     findings_count: 0,
     findings_text: '',
+    action_list: '',
     prose: prose,
   };
 }
