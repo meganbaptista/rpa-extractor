@@ -30,6 +30,19 @@ const BROKERS_SECTION_MARKER = 'REAL ESTATE BROKERS SECTION';
 // If a real package exceeds this cap, the call truncates and logs a warning.
 const MAX_FALLBACK_PAGES = 30;
 
+// ── TARGETED-CALL HI-RES RENDER SCALE ───────────────────────────────────────
+// When the packet's text layer is destroyed (vision/image detection path), the
+// model can only read the rendered pixels of the brokers page + RPA p1. The
+// Anthropic-side rasterization of a flattened/scanned page is low-legibility —
+// that is where digit misreads (e.g. "June 7" read as 6/10) and subsection
+// A/B column drift happen. So instead of handing the targeted call the 2-page
+// PDF trim, we render those 2 pages ourselves at this scale and send crisp
+// PNGs. ~2.75 renders a letter page near 1680x2180 — sharp enough to resolve a
+// single handwritten digit and to keep the Buyer/Seller brokerage rows apart —
+// while 2 pages stay well under the request size limit. Text-layer-intact
+// packets keep the PDF block (the model gets text + image there and is reliable).
+const TARGETED_IMAGE_SCALE = 2.75;
+
 // ── HELPER: extract text from each page of a PDF buffer ─────────────────────
 // Returns an array of strings, one per page (page 1 at index 0).
 async function getPageTexts(buffer) {
@@ -119,7 +132,7 @@ async function locateRpaPagesViaVision(documents, apiKey) {
     // returning 0/0 (page-not-found) too often on print/rescan PDFs because
     // OCR'ing tiny footer text is at the edge of its vision capability.
     // Sonnet is more reliable here. Adds ~$0.10 per vision-path contract.
-    model: 'claude-sonnet-4-5',
+    model: 'claude-sonnet-4-6',
     max_tokens: 200,
     tools: [locateTool],
     tool_choice: { type: 'tool', name: 'locate_pages' },
@@ -224,7 +237,7 @@ async function locateRpaPagesViaImages(documents, apiKey) {
   }));
 
   const body = {
-    model: 'claude-sonnet-4-5',
+    model: 'claude-sonnet-4-6',
     max_tokens: 200,
     tools: [locateTool],
     tool_choice: { type: 'tool', name: 'locate_pages' },
@@ -550,7 +563,7 @@ exports.handler = async function(event, context) {
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-5',
+          model: 'claude-sonnet-4-6',
           max_tokens: 2500,
           messages: [{ role: 'user', content }]
         })
@@ -592,7 +605,7 @@ exports.handler = async function(event, context) {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
+        model: 'claude-sonnet-4-6',
         max_tokens: 4096,
         tools: [tool],
         tool_choice: { type: "tool", name: tool.name },
@@ -666,7 +679,7 @@ exports.handler = async function(event, context) {
 
     const TARGETED_PROMPT = `Your task is narrow and specific. The attached package contains a California real estate purchase agreement (RPA / VLPA / RIPA / CPA). Find these two pages in the document set and extract from them by calling the extract_targeted_fields tool:
 
-• Page 1 of the RPA — top-left contains the literal text "Date Prepared:" followed by a date. The footer on this page reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant. Extract the date for date_rpa_prepared.
+• Page 1 of the RPA — top-left contains the literal text "Date Prepared:" followed by a date. The footer on this page reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant. Extract the date for date_rpa_prepared. Transcribe the characters that literally appear after the "Date Prepared:" label exactly as written, then convert to ISO — e.g. "June 7, 2026" → "2026-06-07". Read each digit; do NOT round, infer, or approximate the day (do not turn a 7 into a 10, etc.).
 
 • Last page of the RPA (typically PAGE 17 OF 17) — titled "REAL ESTATE BROKERS SECTION". This page contains TWO subsections that look almost identical. Buyer fields come from subsection A; seller fields come from subsection B:
 
@@ -690,6 +703,12 @@ The two subsections are mirror images with identical labels (firm, By, DRE, Addr
 A common failure mode is locking onto the right subsection for the agent name, then drifting into the other subsection for the remaining fields. Re-anchor on the correct subsection header — "A. Buyer's Brokerage Firm" for buyer fields, "B. Seller's Brokerage Firm" for seller fields — before each field.
 
 This matters most when the SAME brokerage represents both sides (dual agency) and/or the agency boxes are checked "both the Buyer's and Seller's Agent." Even then, the buyer agent is whoever signs under subsection A and the seller agent is whoever signs under subsection B — they are different people with different DRE numbers. Anchor on the subsection header and the DRE, never on the dual-agency wording.
+
+DIFFERENT BROKERAGES ARE THE COMMON CASE. The buyer's brokerage (subsection A) and the seller's brokerage (subsection B) are usually DIFFERENT firms — e.g. subsection A is "KW Beverly Hills" and subsection B is "Compass" — each with its own office address, email, and phone. Do NOT assume the two sides share a firm name, brokerage DRE, office address, email, or phone. Read each subsection's firm / address / email / phone from its OWN block. If the buyer agent's phone line in subsection A is blank, return empty for buyer_agent_phone — do NOT copy the seller agent's phone from subsection B.
+
+DRE ANCHORING. Each "By" line carries the INDIVIDUAL agent's DRE on that same line, next to that agent's printed name. The BROKERAGE's DRE is a different number on the firm-name line (the "A. Buyer's Brokerage Firm" / "B. Seller's Brokerage Firm" line above the "By" lines). Put the individual agent's DRE in buyer_agent_dre / seller_agent_dre, and the brokerage's DRE in buyer_agent_brokerage_dre / seller_agent_brokerage_dre. Never read an agent's DRE off the firm line, and never put a brokerage DRE into an agent_dre field.
+
+SECOND BUYER AGENT — only when there genuinely are two. Populate buyer_agent_name_2 and buyer_agent_dre_2 ONLY when BOTH are true: (a) the "More than one agent from the same firm represents Buyer" checkbox in subsection A is marked, AND (b) a SECOND "By" line in subsection A has a real printed name. If only one agent signed under subsection A, leave buyer_agent_name_2 and buyer_agent_dre_2 EMPTY. NEVER place the seller's agent (subsection B) into the second buyer slot — the seller's agent is never a buyer's second agent.
 
 Subsection B's contact lines (Address, Email, Phone) are frequently BLANK even when the seller agent name and DRE are filled in. When a subsection B contact line is blank, return an EMPTY STRING for that field — do NOT borrow the buyer's address, email, or phone from subsection A to fill a seller field.
 
@@ -838,12 +857,40 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
 
       // Fire targeted call on the 2-page trim, in parallel with main.
       if (trimmedTargetedB64) {
-        const targetedDocs = [{
-          type: 'document',
-          source: { type: 'base64', media_type: 'application/pdf', data: trimmedTargetedB64 },
-          title: 'RPA page 1 and brokers section (trimmed)'
-        }];
-        targetedCallPromise = callApi(buildTargetedContent(targetedDocs), targetedTool);
+        // On a broken-text-layer packet (vision / image_locate detection) the
+        // model has no text to read -- only pixels. Render the 2-page trim to
+        // hi-res PNGs ourselves and send those instead of the PDF document
+        // block; that is where the date-digit misreads and the Buyer/Seller
+        // (subsection A vs B) column drift come from. Text-layer-intact packets
+        // (text_trim) keep the PDF block -- the model gets text + image there
+        // and is already reliable.
+        const brokenTextLayer =
+          detection.method === 'vision' || detection.method === 'image_locate';
+        targetedCallPromise = (async () => {
+          let targetedContent = null;
+          if (brokenTextLayer) {
+            try {
+              const trimBuffer = Buffer.from(trimmedTargetedB64, 'base64');
+              const hiResPages = await renderAllPagesAsImages(trimBuffer, 2, TARGETED_IMAGE_SCALE);
+              if (hiResPages.length) {
+                targetedContent = buildImageFallbackContent(hiResPages);
+                console.log('targeted call: rendered 2-page trim to hi-res images (scale ' +
+                  TARGETED_IMAGE_SCALE + ') for broken-text-layer packet (' + detection.method + ')');
+              }
+            } catch (renderErr) {
+              console.warn('targeted hi-res render failed (' + renderErr.message + '), using PDF trim instead');
+            }
+          }
+          if (!targetedContent) {
+            const targetedDocs = [{
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: trimmedTargetedB64 },
+              title: 'RPA page 1 and brokers section (trimmed)'
+            }];
+            targetedContent = buildTargetedContent(targetedDocs);
+          }
+          return callApi(targetedContent, targetedTool);
+        })();
         extractionStatus =
           detection.method === 'text' ? 'text_trim' :
           detection.method === 'image_locate' ? 'image_locate_trim' :
