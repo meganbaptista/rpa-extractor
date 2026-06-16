@@ -322,6 +322,8 @@ function buildAuditPrompt(params) {
 
 ${partyContext}
 
+IMPORTANT -- the party counts above come from an automated extraction and are a GUIDE, not gospel; they can UNDERCOUNT the buyers. When there are three or more buyers, the "THIS IS AN OFFER FROM" buyer name on RPA paragraph 1A wraps onto a second/continuation line, and the extractor sometimes captures only the first line. Independently confirm the actual BUYER ROSTER yourself: read the FULL offer-from entry on RPA paragraph 1A (both the first line AND any continuation line just below it), and cross-check it against the buyer signature block (Section 32D) and the per-page buyer initials. Treat EVERY distinct buyer you find that way as required -- each must have signed Section 32D and initialed every RPA page. If someone appears on the 1A continuation line, or signed/initialed as a Buyer, but is not reflected in the stated count, audit them too and flag any missing signature or initial for them. The same applies if the seller count looks low.
+
 The packet may contain a Residential Purchase Agreement (RPA) plus counter offers (SCO, SMCO, BCO) and addenda. Read the ENTIRE packet and reason about it as a whole.
 
 This is a signature and initials audit ONLY. Audit whether every required signature and initial is present AND valid (a real, proper signature -- see the SIGNATURE VALIDITY checks below). Do not report blank data fields, form-choice issues, or other quality-control observations -- those are out of scope for this audit.

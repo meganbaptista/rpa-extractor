@@ -102,14 +102,22 @@ function deriveSellerCount(extraction) {
   return { count, confidence: 'high', reason: `counted ${count} non-empty seller_N slot(s)` };
 }
 
-// --- Job 2b: Buyer count (best-effort — the soft spot) ----------------------
-// There are no numbered buyer_N slots in the extraction output, only the
-// buyer_names string. We parse it, stripping known real-estate boilerplate
-// that must NOT be counted as a party.
-//
-// This is the value most likely to be wrong — the manual override on the test
-// page exists primarily to correct THIS. Confidence is never 'high'.
+// --- Job 2b: Buyer count ----------------------------------------------------
+// Prefer the deterministic numbered slots buyer_1..4 (same approach deriveSeller-
+// Count uses for sellers). These now capture continuation-line buyers — when
+// there are 3+ buyers the "THIS IS AN OFFER FROM" name wraps onto a second line
+// on RPA 1A and the extractor now reads both lines — so counting non-empty slots
+// is far more reliable than parsing the buyer_names string. Fall back to
+// name-string parsing only for older extractions with no buyer_N slots.
 function deriveBuyerCount(extraction) {
+  let slots = 0;
+  for (let i = 1; i <= 4; i++) {
+    const v = extraction['buyer_' + i];
+    if (v && String(v).trim()) slots++;
+  }
+  if (slots > 0) {
+    return { count: slots, confidence: 'high', reason: `counted ${slots} non-empty buyer_N slot(s)` };
+  }
   const parsed = parseNameCount(extraction.buyer_names);
   return {
     count: parsed.count || 1,
