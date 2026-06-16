@@ -251,6 +251,44 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // similar long named-field-list shapes but have not produced a miss yet --
 // if and when they do, the same enumerated-transcription treatment can be
 // applied to them in a future test iteration.
+//
+// TEST 7 -- SIGNATURE VALIDITY (entity-signed-as-entity + assignment language)
+// (current change, prompt only):
+// Until now the audit only checked signature PARITY -- whether a required
+// signature is PRESENT. It never inspected what the signature actually SAYS.
+// Two recurring real-world defects pass parity cleanly and have to be caught
+// by hand on the backend:
+//   (1) Entity/trust signed in its own name. When a buyer or seller is an
+//       entity (trust, LLC, corporation, partnership, estate), a natural
+//       person must sign on its behalf -- the entity itself cannot sign. But
+//       DocuSign frequently AUTO-FILLS the adopted signature with the entity's
+//       own name when a human signer's name was never set. Real example: a
+//       Seller Counter Offer where both the cursive signature and the printed
+//       name read "Marilyn Y. Ball Williams Trust" -- no human trustee named.
+//       Parity sees "the seller signed" and passes it. Agents routinely miss
+//       this; it surfaces only on backend review.
+//   (2) Assignment/nominee language baked into the signature. The signature
+//       must be a clean signer name. Real example: a buyer line whose adopted
+//       signature and printed name both read "Cade Hudson and/or Assignee".
+//       "and/or assignee" (and variants) in the signature is a defect title
+//       and many lenders/title companies reject it -- but parity sees a buyer
+//       signature and passes it.
+//
+// Fix (prompt only -- no architecture change):
+//  (a) The opening scope line is widened from "present" to "present AND valid",
+//      so the model does not suppress these as out of scope.
+//  (b) A new in-scope SIGNATURE VALIDITY section adds two named checks: S1
+//      (entity signed in its own name with no human signer) and S2
+//      (assignment/nominee language in the signature). Applied to every
+//      signature block in the packet (RPA 32D/33D, every counter, every
+//      addendum/advisory).
+//  (c) These are genuine defects, not unreadable marks -- a hit uses severity
+//      "review" (per the existing two-value enum) but drives overall_status to
+//      "issues_found", NOT "needs_review". The structured shape is unchanged,
+//      so no downstream Zapier/PS remapping is needed.
+//  (d) Scope guardrail: S1/S2 inspect the CONTENT of signatures that are
+//      already present. They do not widen the audit into general QC -- the
+//      out-of-scope list (blank data fields elsewhere) is unchanged.
 // ============================================================================
 function buildAuditPrompt(params) {
   const { buyerCount, sellerCount, sellerEntity, buyerEntity } = params;
@@ -286,7 +324,7 @@ ${partyContext}
 
 The packet may contain a Residential Purchase Agreement (RPA) plus counter offers (SCO, SMCO, BCO) and addenda. Read the ENTIRE packet and reason about it as a whole.
 
-This is a signature and initials audit ONLY. Audit whether every required signature and initial is present. Do not report blank data fields, form-choice issues, or other quality-control observations -- those are out of scope for this audit.
+This is a signature and initials audit ONLY. Audit whether every required signature and initial is present AND valid (a real, proper signature -- see the SIGNATURE VALIDITY checks below). Do not report blank data fields, form-choice issues, or other quality-control observations -- those are out of scope for this audit.
 
 YOUR TASK -- audit every required signature and initial across the WHOLE packet.
 
@@ -307,6 +345,14 @@ KNOWN ONE-SIDED ADVISORIES (the parity rule does NOT apply to these; they are in
 - Buyer Homeowners' Insurance Advisory (BHIA) -- buyer-only.
 - California Consumer Privacy Act Advisory (CCPA) -- buyer-only (seller line is not used).
 For these forms, do not flag the absent opposite-party signature.
+
+SIGNATURE VALIDITY -- a signature must not only be PRESENT, it must be a proper signature. For every signature you have confirmed is present, also inspect WHAT it says. Two defects to catch, on every signature block in the packet (RPA Section 32D Buyer and 33D Seller, every counter offer signature line, and every addendum/advisory signature line):
+
+(S1) Entity or trust signed in its OWN name instead of by a human authorized signer. An entity -- a trust, LLC, corporation, partnership, or estate -- cannot physically sign; a natural person signs on its behalf (a trustee, manager, member, officer, etc.). Wherever the signing party is an entity -- i.e. the buyer or seller side is an entity (Section 32B/33B entity line is in play), OR the party name on the signature line carries an entity indicator ("Trust", "Living Trust", "Family Trust", "Revocable Trust", "LLC", "L.L.C.", "Inc", "Incorporated", "Corporation", "Corp", "Company", "Co.", "LP", "L.P.", "LLP", "Partnership", "Estate", "Estate of") -- the signature mark itself must be a natural person's name, optionally with a representative capacity (e.g. ", Trustee", ", as Trustee", ", Manager", ", Member"). If the cursive/adopted signature OR its adjacent printed signer name reads as ONLY the entity's name, with no natural person named anywhere in the signature, flag it (severity "review"). This is a known DocuSign auto-fill defect: the platform stamps the entity's own name as the adopted signature when a human signer's name was never set. Example defect: a seller signature line where both the cursive signature and the printed name read "Marilyn Y. Ball Williams Trust" and no human trustee is named.
+
+(S2) Assignment or nominee language baked INTO the signature. A signature must be a clean signer name. If a signature mark OR its adjacent printed signer name contains assignment/nominee language -- "and/or assignee", "and/or assigns", "or assignee", "or assigns", "and/or nominee", "or nominee" -- flag it (severity "review"). The party-NAME field elsewhere on the form may legitimately carry such language by design; this check is about the SIGNATURE itself, which must be the clean signer name. Example defect: a buyer signature line whose adopted signature and printed name both read "Cade Hudson and/or Assignee".
+
+S1 and S2 are genuine defects on a signature that is present, NOT marks you could not read. When you flag an S1 or S2 finding, set overall_status to "issues_found" (not "needs_review"). Inspect only the content of signatures already present -- S1/S2 do not add any new field-completeness or QC checks beyond the signature blocks.
 
 ALSO AUDIT THESE FORM-STATE CHECKS ON THE RPA (not signatures themselves, but defects that change what is legally operative):
 - RPA Section 33A acceptance state. If a Counter Offer (SCO/SMCO) or Back-Up Offer (BUO) is physically present in the packet, the corresponding box in 33A must be checked. If a counter is present but neither 33A box is checked, flag it (severity "missing") -- without the box checked the counter does not legally apply to the RPA, and the RPA on its face shows direct acceptance. Likewise, if a 33A box IS checked but no counter of that type is in the packet, flag it (severity "missing") -- the packet is incomplete.
@@ -376,7 +422,7 @@ IMPORTANT REASONING GUIDANCE:
 
 OUTPUT FORMAT -- two parts, in this order:
 
-PART 1 -- Your full audit as prose. Write it the way you would explain it to the transaction coordinator: bottom line first, then a walk through each document in the packet. Include the explicit page-by-page initials pass. Be thorough and specific (cite paragraphs and pages).
+PART 1 -- Your full audit as prose. Write it the way you would explain it to the transaction coordinator: bottom line first, then a walk through each document in the packet. Include the explicit page-by-page initials pass, and call out any SIGNATURE VALIDITY defects (S1 entity-signed-in-its-own-name, S2 assignment/nominee language). Be thorough and specific (cite paragraphs and pages).
 
 PART 2 -- After the prose, on a new line, output exactly this marker:
 ===STRUCTURED===
@@ -394,8 +440,8 @@ followed by a single JSON object (no markdown fences) with this shape:
   ]
 }
 Rules for PART 2:
-- "overall_status": "complete" if every required signature/initial is present and only normal-at-this-stage blanks remain; "issues_found" if a required signature/initial is genuinely missing; "needs_review" if you could not clearly determine something and a human must check.
-- "findings": include every genuine missing signature/initial (severity "missing") and every spot you genuinely could not read after a real page-by-page inspection (severity "review"). If there are none, use an empty array.
+- "overall_status": "complete" if every required signature/initial is present, valid, and only normal-at-this-stage blanks remain; "issues_found" if a required signature/initial is genuinely missing OR a present signature is invalid (an S1 entity-signed-in-its-own-name or S2 assignment/nominee-language defect); "needs_review" if you could not clearly determine something and a human must check.
+- "findings": include every genuine missing signature/initial (severity "missing"), every signature-validity defect (S1/S2, severity "review"), and every spot you genuinely could not read after a real page-by-page inspection (severity "review"). If there are none, use an empty array.
 - Each finding is ONE tight sentence in "detail". Do not write a paragraph.
 - Per-page initials appear in "findings" ONLY as a specific named page that is genuinely missing or unreadable -- never as a page range, and never at all if the page-by-page pass found them present.
 - This audit does not produce QC findings. Do not add findings for blank data fields, form-choice issues, or other non-signature observations.
