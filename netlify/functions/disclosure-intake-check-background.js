@@ -41,6 +41,7 @@
 
 console.log('[disclosure-intake] module loading');
 
+const zlib = require('zlib');
 const { getStore } = require('@netlify/blobs');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
@@ -148,7 +149,76 @@ async function fetchAuditListByAddress(address) {
 }
 
 // ----------------------------------------------------------------------------
+// ZIP support. Zapier's "Upload File" step bundles all the email's attachments
+// into ONE .zip on Drive, so a single document URL can actually be 22 PDFs. We
+// detect the zip, extract the PDFs, drop blocked/non-PDF entries, and feed the
+// real PDFs downstream. Pure Node built-ins (zlib) — no extra dependency.
+// ----------------------------------------------------------------------------
+const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04"
+const PDF_MAGIC = Buffer.from('%PDF');
+
+// Filenames inside the zip we never want to send to the model (big non-disclosure
+// reports + invoices). Mirrors the Zapier Code-step BLOCK list, plus invoice.
+const BLOCK_NAME = /(previous\s*home\s*inspection|home\s*inspection|inspection\s*report|\binspection\b|termite|wood\s*destroying|sewer|\broof\b|chimney|\bpool\b|\bspa\b|hvac|geolog|\bsoils?\b|\bsurvey\b|appraisal|invoice|\bphotos?\b)/i;
+
+function looksZip(buf, name, contentType) {
+  if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(ZIP_MAGIC)) return true;
+  if (/\.zip$/i.test(name || '')) return true;
+  if (/zip/i.test(contentType || '')) return true;
+  return false;
+}
+function looksPdf(buf, name) {
+  if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC)) return true;
+  return /\.pdf$/i.test(name || '');
+}
+
+// Minimal ZIP reader: walk the central directory and inflate each entry. Handles
+// stored (method 0) and deflate (method 8) — i.e. every normal zip. Skips
+// directories, zip64-only entries, and anything it can't inflate.
+function unzipEntries(buf) {
+  const out = [];
+  const EOCD_SIG = 0x06054b50;
+  let eocd = -1;
+  const minStart = Math.max(0, buf.length - 22 - 65536);
+  for (let i = buf.length - 22; i >= minStart; i--) {
+    if (buf.readUInt32LE(i) === EOCD_SIG) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('no end-of-central-directory record');
+  const cdCount = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+
+  for (let n = 0; n < cdCount; n++) {
+    if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) break;
+    const method = buf.readUInt16LE(p + 10);
+    const compSize = buf.readUInt32LE(p + 20);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const extraLen = buf.readUInt16LE(p + 30);
+    const commentLen = buf.readUInt16LE(p + 32);
+    const localOffset = buf.readUInt32LE(p + 42);
+    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+    p += 46 + nameLen + extraLen + commentLen;
+
+    if (name.endsWith('/')) continue; // directory entry
+    if (compSize === 0xffffffff || localOffset === 0xffffffff) continue; // zip64, skip
+    if (localOffset + 30 > buf.length || buf.readUInt32LE(localOffset) !== 0x04034b50) continue;
+    const lNameLen = buf.readUInt16LE(localOffset + 26);
+    const lExtraLen = buf.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + lNameLen + lExtraLen;
+    const comp = buf.subarray(dataStart, dataStart + compSize);
+    let data;
+    try {
+      if (method === 0) data = comp;
+      else if (method === 8) data = zlib.inflateRawSync(comp);
+      else continue;
+    } catch (e) { continue; }
+    out.push({ name: name.split('/').pop(), data });
+  }
+  return out;
+}
+
+// ----------------------------------------------------------------------------
 // Load each document as base64. Accepts { base64 } directly, or { url } to fetch.
+// A .zip is expanded into the disclosure PDFs inside it.
 // ----------------------------------------------------------------------------
 async function loadDocuments(documents) {
   const out = [];
@@ -156,18 +226,40 @@ async function loadDocuments(documents) {
     if (!d) continue;
     const name = d.name || d.filename || 'document.pdf';
     try {
+      let buf = null;
+      let contentType = '';
       if (d.base64) {
-        out.push({ name, base64: d.base64 });
-        continue;
-      }
-      if (d.url) {
+        buf = Buffer.from(d.base64, 'base64');
+      } else if (d.url) {
         const res = await fetch(d.url);
         if (!res.ok) { console.warn(`[disclosure-intake] could not fetch ${name} (${res.status})`); continue; }
-        const buf = Buffer.from(await res.arrayBuffer());
-        if (buf.length > MAX_DOC_BYTES) { console.warn(`[disclosure-intake] ${name} too large (${buf.length}B), skipping`); continue; }
-        out.push({ name, base64: buf.toString('base64') });
+        contentType = res.headers.get('content-type') || '';
+        buf = Buffer.from(await res.arrayBuffer());
+      } else {
         continue;
       }
+
+      // ZIP: expand into the PDFs inside, filtering blocked/non-PDF entries.
+      if (looksZip(buf, name, contentType)) {
+        let entries;
+        try { entries = unzipEntries(buf); }
+        catch (e) { console.warn(`[disclosure-intake] could not unzip ${name}: ${e.message}`); continue; }
+        let kept = 0;
+        const skippedNames = [];
+        for (const e of entries) {
+          if (!looksPdf(e.data, e.name)) { skippedNames.push(e.name + ' [not pdf]'); continue; }
+          if (BLOCK_NAME.test(e.name)) { skippedNames.push(e.name + ' [blocked]'); continue; }
+          if (e.data.length > MAX_DOC_BYTES) { skippedNames.push(e.name + ' [too large]'); continue; }
+          out.push({ name: e.name, base64: e.data.toString('base64') });
+          kept++;
+        }
+        console.log(`[disclosure-intake] unzipped ${name}: kept ${kept} PDF(s)` + (skippedNames.length ? `, skipped ${skippedNames.length} (${skippedNames.join(', ')})` : ''));
+        continue;
+      }
+
+      // Single document (PDF).
+      if (buf.length > MAX_DOC_BYTES) { console.warn(`[disclosure-intake] ${name} too large (${buf.length}B), skipping`); continue; }
+      out.push({ name, base64: buf.toString('base64') });
     } catch (err) {
       console.warn(`[disclosure-intake] failed to load ${name}: ${err.message}`);
     }
@@ -280,6 +372,36 @@ function mergeForms(a, b) {
     out.push(f);
   }
   return out;
+}
+
+// Identify across MANY docs (e.g. 22 PDFs from one unzipped attachment bundle) by
+// batching them under Claude's request-size limit, identifying each batch, and
+// merging the forms. The first non-empty address wins. One unzipped bundle can
+// easily exceed 32MB of base64 in a single request, so batching is required.
+async function identifyFormsChunked(docs) {
+  if (docs.length <= 1) return identifyForms(docs);
+  const MAX_BATCH_B64 = 18 * 1024 * 1024; // keep each request well under the 32MB cap
+  const MAX_BATCH_DOCS = 10;              // and bounded on page/doc count
+  const batches = [];
+  let cur = [], curSize = 0;
+  for (const d of docs) {
+    const sz = (d.base64 || '').length;
+    if (cur.length && (cur.length >= MAX_BATCH_DOCS || curSize + sz > MAX_BATCH_B64)) {
+      batches.push(cur); cur = []; curSize = 0;
+    }
+    cur.push(d); curSize += sz;
+  }
+  if (cur.length) batches.push(cur);
+
+  let allForms = [], address = '', dropped = [];
+  for (let i = 0; i < batches.length; i++) {
+    const r = await identifyForms(batches[i]);
+    allForms = mergeForms(allForms, r.forms);
+    if (!address && r.propertyAddress) address = r.propertyAddress;
+    if (r.dropped && r.dropped.length) dropped = dropped.concat(r.dropped);
+    console.log(`[disclosure-intake] identify batch ${i + 1}/${batches.length} (${batches[i].length} doc[s]): ${r.forms.length} form(s)`);
+  }
+  return { propertyAddress: address, forms: allForms, dropped };
 }
 
 // ----------------------------------------------------------------------------
@@ -458,7 +580,7 @@ exports.handler = async function (event) {
       throw new Error('No documents could be loaded (need fetchable url or base64)');
     }
 
-    const { propertyAddress: detectedAddr, forms: newForms, dropped } = await identifyForms(docs);
+    const { propertyAddress: detectedAddr, forms: newForms, dropped } = await identifyFormsChunked(docs);
     if (dropped && dropped.length) console.warn(`[disclosure-intake] dropped oversized doc(s) to fit the model: ${dropped.join(', ')}`);
     const address = (detectedAddr || propertyAddress || '').trim();
     if (!address) throw new Error('Could not read a property address from the documents');
