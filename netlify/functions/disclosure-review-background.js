@@ -152,10 +152,21 @@ async function fetchRunFormFields(workflowId, runId, apiKey) {
       throw new Error(`Process Street API ${res.status} on form fields (${url}): ${body.slice(0, 200)}`);
     }
     const data = await res.json();
-    const items = Array.isArray(data) ? data : (data.fields || data.data || data.formFieldValues || data.items || []);
     if (guard === 1) {
-      // One-time shape log so the exact field names are easy to confirm in logs.
-      console.log('[disclosure-review] PS first item raw shape:', JSON.stringify(items[0] || {}).slice(0, 600));
+      // Log the raw top-level response so the real array location is visible.
+      console.log('[disclosure-review] PS raw response:', JSON.stringify(data).slice(0, 1500));
+    }
+    let items = Array.isArray(data)
+      ? data
+      : (data.fields || data.formFieldValues || data.formFields || data.items ||
+         (Array.isArray(data.data) ? data.data : null));
+    if (!Array.isArray(items)) {
+      // Fallback: grab the first top-level array-of-objects, wherever it sits.
+      items = [];
+      for (const k of Object.keys(data || {})) {
+        const v = data[k];
+        if (Array.isArray(v) && v.length && v[0] && typeof v[0] === 'object') { items = v; break; }
+      }
     }
     for (const it of items) {
       const f = normalizeField(it);
