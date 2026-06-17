@@ -340,6 +340,21 @@ exports.handler = async function (event) {
       (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
       (na.length ? `NOT APPLICABLE / LATER:\n${bullets(na, (x) => `${x.item}: ${x.note}`)}\n` : '');
 
+    // Ready-to-send chase email for the outstanding items. Zap B drops this into a
+    // Gmail draft when still_needed_count > 0. No em dashes (Megan's standing
+    // preference); it's a draft she reviews, so greeting/recipient are finalized then.
+    const signer = process.env.DISCLOSURE_SIGNER_NAME || 'Megan';
+    const chaseEmailSubject = `Outstanding disclosures for ${address}`;
+    const chaseEmailBody = stillNeeded.length
+      ? 'Hi,\n\n' +
+        `Thank you for sending over the disclosures for ${address}. ` +
+        'After reviewing the package against our file, the following items are still outstanding:\n\n' +
+        stillNeeded.map((x) => `- ${x}`).join('\n') +
+        '\n\nWhen you have a moment, please send these over so we can wrap up our review. ' +
+        'If any have already been provided or do not apply, just let me know.\n\n' +
+        `Thanks!\n${signer}`
+      : '';
+
     const payload = {
       property_address: address,
       overall_status: result.overall || 'outstanding',
@@ -352,6 +367,8 @@ exports.handler = async function (event) {
       still_needed_text: stillNeeded.join(', '),
       summary: result.summary || '',
       ps_comment: psComment,
+      chase_email_subject: chaseEmailSubject,
+      chase_email_body: chaseEmailBody,
       result: { present, still_needed: stillNeeded, verify, not_applicable: na },
     };
 
