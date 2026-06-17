@@ -334,7 +334,7 @@ exports.handler = async function (event) {
 
     const psComment =
       `Disclosure intake — ${address}\n` +
-      `Status: ${result.overall || 'outstanding'} | received ${received.length} form(s); ${stillNeeded.length} still needed\n\n` +
+      `Status: ${result.overall || 'outstanding'} | ${present.length} of the required disclosures received; ${stillNeeded.length} still needed\n\n` +
       `STILL NEEDED:\n${bullets(stillNeeded, (x) => x)}\n\n` +
       `RECEIVED:\n${bullets(present, (x) => x)}\n\n` +
       (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
@@ -344,7 +344,11 @@ exports.handler = async function (event) {
       property_address: address,
       overall_status: result.overall || 'outstanding',
       still_needed_count: stillNeeded.length,
-      received_count: received.length,
+      // Received Count = how many of THIS deal's required disclosures are in hand
+      // (meaningful for a TC). The raw count of distinct forms parsed across all
+      // deliveries is kept separately as received_forms_total for diagnostics.
+      received_count: present.length,
+      received_forms_total: received.length,
       still_needed_text: stillNeeded.join(', '),
       summary: result.summary || '',
       ps_comment: psComment,
