@@ -366,8 +366,9 @@ async function reconcileCompliance(listText, docsPresent) {
     'Housing, BHIA, WFA, CCPA, AAA, POF, BCA, counter offers, etc.).\n' +
     '- "COUNTER OFFERS" counts as present only if the package indicates counters exist; if there are none, mark it ' +
     'not_applicable.\n' +
-    '- Items typically signed/held OUTSIDE this contract package (e.g. BRBC, POF, BCA "check BRBC package") should be ' +
-    'marked missing only if genuinely required here; otherwise note in not_applicable that they live elsewhere.\n' +
+    '- Items typically signed/held OUTSIDE this contract package, or DRAFTED LATER (after opening), should be ' +
+    'marked missing only if genuinely required to be in this package now; otherwise put them in not_applicable with ' +
+    'a short note. These include: BRBC, POF, BCA ("check BRBC package"), and AAA (usually drafted after opening).\n' +
     '- Only count a document as present if it is truly in the package, not merely referenced.\n\n' +
     'Respond with ONLY this JSON (no prose, no fences):\n' +
     '{"present":["..names.."],"missing":["..names.."],"not_applicable":[{"item":"..","note":".."}],"summary":"one sentence"}';
