@@ -206,7 +206,7 @@ Tier EVERY finding into exactly one of:
 
 Be calibrated: most answers are fine. Only call something "material" if a careful buyer's agent would genuinely push on it. It is normal for a packet to have just one to three material items, sometimes zero.
 
-Then write a short, friendly clarification email to the seller that includes ONLY the material items, phrased as easy questions grouped by topic. Plain and warm. CRITICAL STYLE RULE: do NOT use em dashes (the "—" character) anywhere in the email or your output; use periods, commas, or parentheses instead.
+Then write a short, friendly clarification email to the seller that includes ONLY the material items, phrased as easy questions grouped by topic. Plain and warm. CRITICAL STYLE RULE: do NOT use em dashes (the "—" character) anywhere in the email or your output; use periods, commas, or parentheses instead. SIGN-OFF: close the email with exactly "Thanks!" on its own line and nothing after it. Do NOT use "Warm regards", "Best", a team name, or any signature block.
 
 SELLER'S DISCLOSURE ANSWERS:
 ${qa}
