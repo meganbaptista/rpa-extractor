@@ -42,9 +42,9 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 // callClaude.
 const MODEL = 'claude-opus-4-8';
 
-// Process Street public API. Auth is the X-API-KEY header. The form-field-values
-// endpoint is paged. PS_API_KEY is a site env var (Megan's key).
-const PS_API_BASE = 'https://public-api.process.st/api/v1.1';
+// Process Street public API. Base path is /power-automate/v1.1 (NOT /api/v1.1 —
+// that path 404s). Auth is the X-API-KEY header. PS_API_KEY is a site env var.
+const PS_API_BASE = 'https://public-api.process.st/power-automate/v1.1';
 
 // Where the finished review is delivered. This is the 2nd Zapier catch hook
 // (Zap B) that creates the Gmail draft + PS comment. Set as a site env var so it
@@ -78,28 +78,40 @@ function isDisclosureField(label) {
 // against the live API (see the README note delivered with this file): we try
 // the common variants for both the field's label and its value.
 // ----------------------------------------------------------------------------
+// Process Street SimplifiedFormFieldValue puts the value inside a `data` object
+// whose shape varies by field type. Pull a readable string out of it defensively.
+function valueFromData(d) {
+  if (d == null) return '';
+  if (typeof d === 'string') return d;
+  if (Array.isArray(d)) return d.map(valueFromData).filter(Boolean).join(', ');
+  if (typeof d === 'object') {
+    if (typeof d.value === 'string') return d.value;
+    if (typeof d.content === 'string') return d.content;
+    if (typeof d.plainText === 'string') return d.plainText;
+    if (typeof d.text === 'string') return d.text;
+    if (d.label) return String(d.label);
+    if (Array.isArray(d.items)) return d.items.map((i) => i.label || i.value || '').filter(Boolean).join(', ');
+    if (Array.isArray(d.selectedItems)) return d.selectedItems.map((i) => i.label || i.value || '').filter(Boolean).join(', ');
+    if (d.selectedItem) return d.selectedItem.label || d.selectedItem.value || '';
+    if (d.value && typeof d.value === 'object') return valueFromData(d.value);
+    return '';
+  }
+  return String(d);
+}
+
 function normalizeField(item) {
   if (!item || typeof item !== 'object') return null;
-  const ff = item.formField || item.field || {};
+  // PS item: { label, key, data, ... } (value in `data`). Also tolerate a simple
+  // { label, value } shape for fields passed straight into the webhook body.
   const label =
-    ff.label || ff.name || ff.title ||
-    item.label || item.name || item.fieldName || item.key || '';
-
-  let raw = item.value;
-  if (raw == null) raw = item.formFieldValue != null ? item.formFieldValue : item.answer;
-
-  let value = '';
-  if (Array.isArray(raw)) {
-    value = raw
-      .map((v) => (v && typeof v === 'object' ? (v.label || v.name || v.value || '') : v))
-      .filter(Boolean)
-      .join(', ');
-  } else if (raw && typeof raw === 'object') {
-    value = raw.label || raw.name || raw.value || raw.text || '';
-  } else if (raw != null) {
-    value = String(raw);
+    item.label || item.key ||
+    (item.formField && (item.formField.label || item.formField.name)) ||
+    item.name || '';
+  let value = valueFromData(item.data);
+  if (!value) {
+    const raw = item.value != null ? item.value : (item.formFieldValue != null ? item.formFieldValue : item.answer);
+    value = valueFromData(raw);
   }
-
   return { label: String(label).trim(), value: String(value).trim() };
 }
 
@@ -107,14 +119,18 @@ function normalizeField(item) {
 // Fetch all form-field values for a Process Street checklist (workflow) run.
 // Follows paging via links.next until exhausted. Returns [{ label, value }].
 //
-// ⚠️ VERIFY-ONCE: the endpoint path and the item shape below reflect the v1.1
-// public API (GET /checklists/{id}/form-field-values, X-API-KEY, paged). Confirm
-// against a real response with your key — see the delivered curl one-liner — and
-// adjust normalizeField()/the data path if the property names differ.
-// ----------------------------------------------------------------------------
-async function fetchChecklistFormFields(runId, apiKey) {
+// GET /workflow-runs/{workflowRunId}/form-fields?workflowId=...  (operationId
+// ListFormFieldValues, verified against the official Process Street connector
+// swagger). workflowRunId is the path param; workflowId is a REQUIRED query
+// param. Returns { fields: [SimplifiedFormFieldValue], links: [...] }, each field
+// carrying a label/key and a `data` object holding the value.
+function psFormFieldsUrl(workflowId, runId) {
+  return `${PS_API_BASE}/workflow-runs/${encodeURIComponent(runId)}/form-fields?workflowId=${encodeURIComponent(workflowId)}`;
+}
+
+async function fetchRunFormFields(workflowId, runId, apiKey) {
   const out = [];
-  let url = `${PS_API_BASE}/checklists/${encodeURIComponent(runId)}/form-field-values`;
+  let url = psFormFieldsUrl(workflowId, runId);
   let guard = 0;
   while (url && guard < 50) {
     guard++;
@@ -124,19 +140,27 @@ async function fetchChecklistFormFields(runId, apiKey) {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`Process Street API ${res.status} on form-field-values: ${body.slice(0, 300)}`);
+      throw new Error(`Process Street API ${res.status} on form fields (${url}): ${body.slice(0, 200)}`);
     }
     const data = await res.json();
-    const items = Array.isArray(data) ? data : (data.data || data.items || data.formFieldValues || []);
+    const items = Array.isArray(data) ? data : (data.fields || data.data || data.formFieldValues || data.items || []);
     if (guard === 1) {
-      // One-time shape log so the exact field names are easy to confirm/adjust.
-      console.log('[disclosure-review] PS first item raw shape:', JSON.stringify(items[0] || {}).slice(0, 500));
+      // One-time shape log so the exact field names are easy to confirm in logs.
+      console.log('[disclosure-review] PS first item raw shape:', JSON.stringify(items[0] || {}).slice(0, 600));
     }
     for (const it of items) {
       const f = normalizeField(it);
       if (f && f.label) out.push(f);
     }
-    const next = data && data.links && (data.links.next || data.links.nextPage);
+    // Paging: links may be an array of {rel, href} or an object with next.
+    let next = null;
+    const links = data && data.links;
+    if (Array.isArray(links)) {
+      const n = links.find((l) => l && l.rel === 'next');
+      next = n && n.href;
+    } else if (links) {
+      next = links.next || links.nextPage;
+    }
     url = next || null;
   }
   return out;
@@ -278,13 +302,16 @@ exports.handler = async function (event) {
   }
 
   const {
-    checklistRunId,
+    workflowId,
+    workflowRunId,
+    checklistRunId, // alias for workflowRunId (older Zap config)
     callbackUrl,
     propertyAddress = '',
     sellerEmail = '',
     formFields, // optional: if Zapier passes the fields directly, we skip the PS fetch
   } = body;
 
+  const runId = workflowRunId || checklistRunId;
   const callback = callbackUrl || CALLBACK_URL_ENV;
 
   try {
@@ -293,13 +320,14 @@ exports.handler = async function (event) {
     if (Array.isArray(formFields) && formFields.length) {
       fields = formFields.map(normalizeField).filter((f) => f && f.label);
       console.log(`[disclosure-review] using ${fields.length} fields passed in body`);
-    } else if (checklistRunId) {
+    } else if (runId) {
       const psKey = process.env.PS_API_KEY;
       if (!psKey) throw new Error('PS_API_KEY env var not set (needed to fetch form fields)');
-      fields = await fetchChecklistFormFields(checklistRunId, psKey);
-      console.log(`[disclosure-review] fetched ${fields.length} fields from PS run ${checklistRunId}`);
+      if (!workflowId) throw new Error('workflowId is required alongside the run id to fetch PS form fields');
+      fields = await fetchRunFormFields(workflowId, runId, psKey);
+      console.log(`[disclosure-review] fetched ${fields.length} fields from PS workflow ${workflowId} run ${runId}`);
     } else {
-      throw new Error('Request had neither formFields nor checklistRunId');
+      throw new Error('Request had neither formFields nor a workflowRunId');
     }
 
     const disclosureFields = fields.filter((f) => isDisclosureField(f.label));
@@ -325,7 +353,7 @@ exports.handler = async function (event) {
       (internal.length ? `INTERNAL (team only):\n${bullets(internal, (x) => `${x.topic}: ${x.note}`)}\n` : '');
 
     const payload = {
-      checklistRunId: checklistRunId || '',
+      checklistRunId: runId || '',
       property_address: propertyAddress,
       seller_email: sellerEmail,
       overall_status: review.overall_status || 'reviewed',
@@ -343,7 +371,7 @@ exports.handler = async function (event) {
     console.error('[disclosure-review] ERROR:', err.message);
     // Surface the failure to the callback so a run never silently disappears.
     await sendToCallback(callback, {
-      checklistRunId: checklistRunId || '',
+      checklistRunId: runId || '',
       property_address: propertyAddress,
       seller_email: sellerEmail,
       overall_status: 'error',
