@@ -161,6 +161,15 @@ const PDF_MAGIC = Buffer.from('%PDF');
 // reports + invoices). Mirrors the Zapier Code-step BLOCK list, plus invoice.
 const BLOCK_NAME = /(previous\s*home\s*inspection|home\s*inspection|inspection\s*report|\binspection\b|termite|wood\s*destroying|sewer|\broof\b|chimney|\bpool\b|\bspa\b|hvac|geolog|\bsoils?\b|\bsurvey\b|appraisal|invoice|\bphotos?\b)/i;
 
+// Disclosure/advisory forms whose names legitimately contain "inspection" — these
+// must NEVER be blocked. AVID = Agent Visual Inspection Disclosure; BIA/BIW = Buyer's
+// Inspection Advisory/Waiver. The override wins over BLOCK_NAME.
+const NEVER_BLOCK = /(\bavid\b|agent\s*visual\s*inspection|buyer'?s?\s*inspection\s*(advisory|waiver)|inspection\s*(advisory|waiver)|\bbia\b|\bbiw\b)/i;
+
+function isBlockedName(name) {
+  return BLOCK_NAME.test(name || '') && !NEVER_BLOCK.test(name || '');
+}
+
 function looksZip(buf, name, contentType) {
   if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(ZIP_MAGIC)) return true;
   if (/\.zip$/i.test(name || '')) return true;
@@ -297,7 +306,7 @@ async function loadDocuments(documents) {
         const skippedNames = [];
         for (const e of entries) {
           if (!looksPdf(e.data, e.name)) { skippedNames.push(e.name + ' [not pdf]'); continue; }
-          if (BLOCK_NAME.test(e.name)) { skippedNames.push(e.name + ' [blocked]'); continue; }
+          if (isBlockedName(e.name)) { skippedNames.push(e.name + ' [blocked]'); continue; }
           if (e.data.length > MAX_DOC_BYTES) { skippedNames.push(e.name + ' [too large]'); continue; }
           out.push({ name: e.name, base64: e.data.toString('base64') });
           kept++;
