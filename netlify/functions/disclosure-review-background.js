@@ -66,6 +66,15 @@ const NON_DISCLOSURE_LABEL_HINTS = [
   'seller name', 'date prepared', 'signature', 'initials', 'sqft', 'square',
 ];
 
+// Process Street trigger tokens append a trailing "-<timestamp>" revision suffix
+// to the IDs (e.g. "v1QEev6Pi8MoNwcBTFxKFg-1777325806506"). The public API wants
+// the bare id, and rejects the suffixed form with "Invalid value for: path
+// parameter workflowRunId". Strip a trailing dash + long run of digits. Real PS
+// ids can contain dashes (e.g. "...VM-Q"), but never a trailing 10+ digit block.
+function bareId(id) {
+  return String(id || '').trim().replace(/-\d{10,}$/, '');
+}
+
 function isDisclosureField(label) {
   const l = String(label || '').toLowerCase();
   if (!l) return false;
@@ -311,7 +320,8 @@ exports.handler = async function (event) {
     formFields, // optional: if Zapier passes the fields directly, we skip the PS fetch
   } = body;
 
-  const runId = workflowRunId || checklistRunId;
+  const runId = bareId(workflowRunId || checklistRunId);
+  const wfId = bareId(workflowId);
   const callback = callbackUrl || CALLBACK_URL_ENV;
 
   try {
@@ -323,9 +333,9 @@ exports.handler = async function (event) {
     } else if (runId) {
       const psKey = process.env.PS_API_KEY;
       if (!psKey) throw new Error('PS_API_KEY env var not set (needed to fetch form fields)');
-      if (!workflowId) throw new Error('workflowId is required alongside the run id to fetch PS form fields');
-      fields = await fetchRunFormFields(workflowId, runId, psKey);
-      console.log(`[disclosure-review] fetched ${fields.length} fields from PS workflow ${workflowId} run ${runId}`);
+      if (!wfId) throw new Error('workflowId is required alongside the run id to fetch PS form fields');
+      fields = await fetchRunFormFields(wfId, runId, psKey);
+      console.log(`[disclosure-review] fetched ${fields.length} fields from PS workflow ${wfId} run ${runId}`);
     } else {
       throw new Error('Request had neither formFields nor a workflowRunId');
     }
