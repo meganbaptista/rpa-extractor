@@ -216,9 +216,56 @@ function unzipEntries(buf) {
   return out;
 }
 
+// Diagnostic: short, log-safe description of what we actually fetched.
+function describeBuffer(buf, contentType) {
+  const head = buf.subarray(0, 16);
+  const ascii = head.toString('latin1').replace(/[^\x20-\x7e]/g, '.');
+  return `content-type=${contentType || 'n/a'} len=${buf.length} head="${ascii}" hex=${head.toString('hex')}`;
+}
+
+function isHtml(buf, contentType) {
+  if (/text\/html/i.test(contentType || '')) return true;
+  const head = buf.subarray(0, 256).toString('latin1').trimStart().toLowerCase();
+  return head.startsWith('<!doctype html') || head.startsWith('<html') || head.startsWith('<?xml') || head.startsWith('<');
+}
+
+// Google Drive "uc?export=download" returns an HTML interstitial (instead of the
+// file) for anything it can't virus-scan, typically > ~25MB. The real file lives
+// behind a confirm token on drive.usercontent.google.com. Build that URL so we can
+// refetch the actual bytes.
+function driveConfirmUrl(html, originalUrl) {
+  const id = (originalUrl.match(/[?&]id=([A-Za-z0-9_-]+)/) || [])[1];
+  if (!id) return '';
+  const confirm = (html.match(/name="confirm"\s+value="([^"]+)"/i) || html.match(/[?&]confirm=([0-9A-Za-z_-]+)/) || [, 't'])[1];
+  const uuid = (html.match(/name="uuid"\s+value="([^"]+)"/i) || [])[1];
+  let u = `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=${confirm || 't'}`;
+  if (uuid) u += `&uuid=${uuid}`;
+  return u;
+}
+
+// Fetch a URL to a Buffer, transparently resolving the Google Drive scan-warning
+// interstitial. Returns { buf, contentType } or null.
+async function fetchToBuffer(url, name) {
+  let res = await fetch(url);
+  if (!res.ok) { console.warn(`[disclosure-intake] could not fetch ${name} (${res.status})`); return null; }
+  let contentType = res.headers.get('content-type') || '';
+  let buf = Buffer.from(await res.arrayBuffer());
+  if (/google\.com/i.test(url) && isHtml(buf, contentType)) {
+    const real = driveConfirmUrl(buf.toString('latin1'), url);
+    if (real) {
+      console.log(`[disclosure-intake] ${name}: got Drive interstitial, refetching via confirm URL`);
+      const res2 = await fetch(real);
+      if (res2.ok) { contentType = res2.headers.get('content-type') || ''; buf = Buffer.from(await res2.arrayBuffer()); }
+      else console.warn(`[disclosure-intake] ${name}: confirm refetch failed (${res2.status})`);
+    }
+  }
+  return { buf, contentType };
+}
+
 // ----------------------------------------------------------------------------
 // Load each document as base64. Accepts { base64 } directly, or { url } to fetch.
-// A .zip is expanded into the disclosure PDFs inside it.
+// A .zip is expanded into the disclosure PDFs inside it. Anything that is neither
+// a valid zip nor a valid PDF is logged and skipped — never handed to Claude.
 // ----------------------------------------------------------------------------
 async function loadDocuments(documents) {
   const out = [];
@@ -231,10 +278,9 @@ async function loadDocuments(documents) {
       if (d.base64) {
         buf = Buffer.from(d.base64, 'base64');
       } else if (d.url) {
-        const res = await fetch(d.url);
-        if (!res.ok) { console.warn(`[disclosure-intake] could not fetch ${name} (${res.status})`); continue; }
-        contentType = res.headers.get('content-type') || '';
-        buf = Buffer.from(await res.arrayBuffer());
+        const fetched = await fetchToBuffer(d.url, name);
+        if (!fetched) continue;
+        buf = fetched.buf; contentType = fetched.contentType;
       } else {
         continue;
       }
@@ -243,7 +289,10 @@ async function loadDocuments(documents) {
       if (looksZip(buf, name, contentType)) {
         let entries;
         try { entries = unzipEntries(buf); }
-        catch (e) { console.warn(`[disclosure-intake] could not unzip ${name}: ${e.message}`); continue; }
+        catch (e) {
+          console.warn(`[disclosure-intake] could not unzip ${name}: ${e.message} | ${describeBuffer(buf, contentType)}`);
+          continue; // not a real zip (likely an HTML interstitial / permission page) — skip
+        }
         let kept = 0;
         const skippedNames = [];
         for (const e of entries) {
@@ -257,7 +306,12 @@ async function loadDocuments(documents) {
         continue;
       }
 
-      // Single document (PDF).
+      // Single document: only forward it if the BYTES are actually a PDF (don't trust
+      // the filename — a fetched HTML error/interstitial page would slip through).
+      if (!(buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC))) {
+        console.warn(`[disclosure-intake] ${name} is not a PDF or zip, skipping | ${describeBuffer(buf, contentType)}`);
+        continue;
+      }
       if (buf.length > MAX_DOC_BYTES) { console.warn(`[disclosure-intake] ${name} too large (${buf.length}B), skipping`); continue; }
       out.push({ name, base64: buf.toString('base64') });
     } catch (err) {
