@@ -391,8 +391,16 @@ const IDENTIFY_PROMPT =
   'referenced, cross-mentioned, or described inside another form. Examples of what NOT to count: the TDS Section III ' +
   '"Agent Inspection Disclosure" is part of the TDS, not a separate AVID; SBSA discussing wildfire/natural hazards is ' +
   'not a separate Wildfire or NHD form; the DIA describing the ESD is not an ESD. Also read the property street ' +
-  'address from the forms. Respond with ONLY this JSON (no prose, no fences): ' +
-  '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement"}]}';
+  'address from the forms.\n\n' +
+  'ALSO do a LIGHT buyer-side response check on the forms that actually have questions/answers (SPQ, TDS, SBSA, ' +
+  'and similar Q&A disclosures). Be lenient. Flag ONLY: (a) a question or section left BLANK / unanswered; (b) an ' +
+  'item the seller marked YES where there is NO written explanation, the explanation is ILLEGIBLE, or it is present ' +
+  'but TOO VAGUE to understand. Do NOT judge whether a disclosed issue is concerning, do NOT flag NO answers, and ' +
+  'do NOT review forms that have no questions (receipts, booklets, profiles, AVID, certifications). ' +
+  'For each flag give the form code, the question/section reference, the issue, and a short note.\n\n' +
+  'Respond with ONLY this JSON (no prose, no fences): ' +
+  '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement"}],' +
+  '"response_flags":[{"form":"SPQ","item":"<question/section>","issue":"unanswered|yes_no_explanation|explanation_unclear","note":"<short reason>"}]}';
 
 async function identifyForms(docs) {
   // Backstop: Claude caps a request at ~32MB / 100 pages. If a large file (e.g. an
@@ -411,12 +419,15 @@ async function identifyForms(docs) {
     try {
       // Ceiling is generous: adaptive thinking + effort:high count toward max_tokens,
       // and a multi-form packet can require a lot of reasoning before the small JSON.
-      const raw = await callClaude(content, 10000);
+      const raw = await callClaude(content, 12000);
       const parsed = parseJson(raw);
       const forms = Array.isArray(parsed.forms) ? parsed.forms
         .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim() }))
         .filter((f) => f.code || f.name) : [];
-      return { propertyAddress: String(parsed.property_address || '').trim(), forms, dropped };
+      const responseFlags = Array.isArray(parsed.response_flags) ? parsed.response_flags
+        .map((r) => ({ form: String(r.form || '').trim(), item: String(r.item || '').trim(), issue: String(r.issue || '').trim(), note: String(r.note || '').trim() }))
+        .filter((r) => r.form || r.item || r.note) : [];
+      return { propertyAddress: String(parsed.property_address || '').trim(), forms, responseFlags, dropped };
     } catch (err) {
       const tooLarge = /\b413\b|request_too_large|too\s*large/i.test(err.message || '');
       if (tooLarge && working.length > 1) {
@@ -428,7 +439,7 @@ async function identifyForms(docs) {
       throw err;
     }
   }
-  return { propertyAddress: '', forms: [], dropped };
+  return { propertyAddress: '', forms: [], responseFlags: [], dropped };
 }
 
 // Merge two form lists, de-duping on code (case-insensitive), then name.
@@ -463,15 +474,16 @@ async function identifyFormsChunked(docs) {
   }
   if (cur.length) batches.push(cur);
 
-  let allForms = [], address = '', dropped = [];
+  let allForms = [], address = '', dropped = [], responseFlags = [];
   for (let i = 0; i < batches.length; i++) {
     const r = await identifyForms(batches[i]);
     allForms = mergeForms(allForms, r.forms);
+    if (r.responseFlags && r.responseFlags.length) responseFlags = responseFlags.concat(r.responseFlags);
     if (!address && r.propertyAddress) address = r.propertyAddress;
     if (r.dropped && r.dropped.length) dropped = dropped.concat(r.dropped);
-    console.log(`[disclosure-intake] identify batch ${i + 1}/${batches.length} (${batches[i].length} doc[s]): ${r.forms.length} form(s)`);
+    console.log(`[disclosure-intake] identify batch ${i + 1}/${batches.length} (${batches[i].length} doc[s]): ${r.forms.length} form(s), ${(r.responseFlags || []).length} response flag(s)`);
   }
-  return { propertyAddress: address, forms: allForms, dropped };
+  return { propertyAddress: address, forms: allForms, responseFlags, dropped };
 }
 
 // ----------------------------------------------------------------------------
@@ -522,7 +534,7 @@ async function sendCallback(callbackUrl, payload) {
 // Reconcile the accumulated received set for a deal against its audit list and
 // POST the result to the callback. Shared by single-delivery mode and finalize.
 // ----------------------------------------------------------------------------
-async function reconcileAndCallback(address, received, auditList, callback) {
+async function reconcileAndCallback(address, received, auditList, callback, responseFlags = []) {
   let listText = (auditList && String(auditList).trim()) || '';
   if (!listText) listText = await fetchAuditListByAddress(address);
   if (!listText) throw new Error(`No audit list for "${address}" — pass auditList in the body, or add a matching row to the AUDIT_LIST_CSV_URL sheet.`);
@@ -531,6 +543,7 @@ async function reconcileAndCallback(address, received, auditList, callback) {
   const present = Array.isArray(result.present) ? result.present : [];
   const verify = Array.isArray(result.verify) ? result.verify : [];
   const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
+  const flags = Array.isArray(responseFlags) ? responseFlags : [];
 
   // Split the reconciled "still needed" into what we must REQUEST from the listing
   // side vs what our team prepares in-house. Only the listing-side items drive the
@@ -539,36 +552,50 @@ async function reconcileAndCallback(address, received, auditList, callback) {
   const stillNeededAll = Array.isArray(result.still_needed) ? result.still_needed : [];
   const preparedByUs = stillNeededAll.filter(isPreparedByUs);
   const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x));
-  const overall = stillNeeded.length ? (result.overall || 'outstanding') : 'complete';
+  // Anything to follow up on with the listing side = missing docs OR response flags.
+  const followupCount = stillNeeded.length + flags.length;
+  const overall = followupCount ? (result.overall === 'complete' ? 'outstanding' : (result.overall || 'outstanding')) : 'complete';
+
+  // Human-readable response issue: "SPQ 7E — marked Yes, no explanation written".
+  const flagLine = (f) => `${[f.form, f.item].filter(Boolean).join(' ')}${f.note ? ` — ${f.note}` : ` — ${f.issue}`}`;
 
   const psComment =
     `Disclosure intake — ${address}\n` +
-    `Status: ${overall} | ${present.length} of the required disclosures received; ${stillNeeded.length} to request from listing side\n\n` +
+    `Status: ${overall} | ${present.length} of the required disclosures received; ${stillNeeded.length} to request, ${flags.length} response(s) to clarify\n\n` +
     `TO REQUEST FROM LISTING SIDE:\n${bullets(stillNeeded, (x) => x)}\n\n` +
+    (flags.length ? `RESPONSES TO VERIFY:\n${bullets(flags, flagLine)}\n\n` : '') +
     `RECEIVED:\n${bullets(present, (x) => x)}\n\n` +
     (preparedByUs.length ? `PREPARED BY US (do not request):\n${bullets(preparedByUs, (x) => x)}\n\n` : '') +
     (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
     (na.length ? `NOT APPLICABLE / LATER:\n${bullets(na, (x) => `${x.item}: ${x.note}`)}\n` : '');
 
-  // Ready-to-send chase email for the outstanding items. Zap B drops this into a
-  // Gmail draft when still_needed_count > 0. No em dashes (Megan's standing
+  // Ready-to-send chase email. Zap B drops this into a Gmail draft when followup_count
+  // > 0 (missing docs and/or responses to clarify). No em dashes (Megan's standing
   // preference); it's a draft she reviews, so greeting/recipient are finalized then.
   const signer = process.env.DISCLOSURE_SIGNER_NAME || 'Megan';
   const chaseEmailSubject = `Outstanding disclosures for ${address}`;
-  const chaseEmailBody = stillNeeded.length
-    ? 'Hi,\n\n' +
-      `Thank you for sending over the disclosures for ${address}. ` +
-      'After reviewing the package against our file, the following items are still outstanding:\n\n' +
-      stillNeeded.map((x) => `- ${x}`).join('\n') +
-      '\n\nWhen you have a moment, please send these over so we can wrap up our review. ' +
+  let chaseEmailBody = '';
+  if (followupCount) {
+    chaseEmailBody =
+      'Hi,\n\n' +
+      `Thank you for sending over the disclosures for ${address}. After reviewing the package against our file, a few items still need attention.\n` +
+      (stillNeeded.length
+        ? '\nStill outstanding:\n' + stillNeeded.map((x) => `- ${x}`).join('\n') + '\n'
+        : '') +
+      (flags.length
+        ? '\nResponses we would appreciate clarification on:\n' + flags.map((f) => `- ${[f.form, f.item].filter(Boolean).join(' ')}${f.note ? `: ${f.note}` : ''}`).join('\n') + '\n'
+        : '') +
+      '\nWhen you have a moment, please send these over so we can wrap up our review. ' +
       'If any have already been provided or do not apply, just let me know.\n\n' +
-      `Thanks!\n${signer}`
-    : '';
+      `Thanks!\n${signer}`;
+  }
 
   const payload = {
     property_address: address,
     overall_status: overall,
     still_needed_count: stillNeeded.length,
+    response_flags_count: flags.length,
+    followup_count: followupCount,
     // Received Count = how many of THIS deal's required disclosures are in hand
     // (meaningful for a TC). The raw count of distinct forms parsed across all
     // deliveries is kept separately as received_forms_total for diagnostics.
@@ -576,14 +603,15 @@ async function reconcileAndCallback(address, received, auditList, callback) {
     received_forms_total: received.length,
     still_needed_text: stillNeeded.join(', '),
     prepared_by_us_text: preparedByUs.join(', '),
+    response_flags_text: flags.map(flagLine).join('; '),
     summary: result.summary || '',
     ps_comment: psComment,
     chase_email_subject: chaseEmailSubject,
     chase_email_body: chaseEmailBody,
-    result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, verify, not_applicable: na },
+    result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, verify, not_applicable: na, response_flags: flags },
   };
 
-  console.log(`[disclosure-intake] ${address}: ${overall} — ${stillNeeded.length} to request, ${preparedByUs.length} prepared by us`);
+  console.log(`[disclosure-intake] ${address}: ${overall} — ${stillNeeded.length} to request, ${flags.length} response flag(s), ${preparedByUs.length} prepared by us`);
   await sendCallback(callback, payload);
 }
 
@@ -624,12 +652,14 @@ exports.handler = async function (event) {
       const key = normalizeAddress(address);
       const slotKeys = [];
       let batchForms = [];
+      let batchFlags = [];
       if (batchId) {
         const listing = await store.list({ prefix: `recv:${batchId}:` });
         for (const b of (listing.blobs || [])) {
           slotKeys.push(b.key);
           const item = await store.get(b.key, { type: 'json' });
           if (item && Array.isArray(item.forms)) batchForms = mergeForms(batchForms, item.forms);
+          if (item && Array.isArray(item.responseFlags)) batchFlags = batchFlags.concat(item.responseFlags);
         }
       }
       const prior = (await store.get(key, { type: 'json' })) || { address, received: [] };
@@ -637,7 +667,7 @@ exports.handler = async function (event) {
       await store.setJSON(key, { address, received, updatedAt: Date.now() });
       console.log(`[disclosure-intake] finalize ${address}: merged ${batchForms.length} from ${slotKeys.length} slot(s) -> ${received.length} total`);
       for (const k of slotKeys) { try { await store.delete(k); } catch (e) { /* cleanup best-effort */ } }
-      await reconcileAndCallback(address, received, auditList, callback);
+      await reconcileAndCallback(address, received, auditList, callback, batchFlags);
       return { statusCode: 200 };
     }
 
@@ -650,7 +680,7 @@ exports.handler = async function (event) {
       throw new Error('No documents could be loaded (need fetchable url or base64)');
     }
 
-    const { propertyAddress: detectedAddr, forms: newForms, dropped } = await identifyFormsChunked(docs);
+    const { propertyAddress: detectedAddr, forms: newForms, responseFlags: newFlags = [], dropped } = await identifyFormsChunked(docs);
     if (dropped && dropped.length) console.warn(`[disclosure-intake] dropped oversized doc(s) to fit the model: ${dropped.join(', ')}`);
     const address = (detectedAddr || propertyAddress || '').trim();
     if (!address) throw new Error('Could not read a property address from the documents');
@@ -662,9 +692,9 @@ exports.handler = async function (event) {
     // background functions can't clobber each other). finalize merges the slots later.
     if (accumulateOnly) {
       const slot = `recv:${batchId || 'nobatch'}:${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-      await store.setJSON(slot, { address, forms: newForms });
+      await store.setJSON(slot, { address, forms: newForms, responseFlags: newFlags });
       if (batchId) await store.setJSON('batch:' + batchId, { address, updatedAt: Date.now() });
-      console.log(`[disclosure-intake] ${address}: accumulate-only, stored ${newForms.length} form(s) in slot (batch ${batchId || 'n/a'})`);
+      console.log(`[disclosure-intake] ${address}: accumulate-only, stored ${newForms.length} form(s), ${newFlags.length} flag(s) in slot (batch ${batchId || 'n/a'})`);
       return { statusCode: 200 };
     }
 
@@ -673,7 +703,7 @@ exports.handler = async function (event) {
     const received = mergeForms(prior.received, newForms);
     await store.setJSON(key, { address, received, updatedAt: Date.now() });
     console.log(`[disclosure-intake] ${address}: ${received.length} form(s) received so far (was ${prior.received.length})`);
-    await reconcileAndCallback(address, received, auditList, callback);
+    await reconcileAndCallback(address, received, auditList, callback, newFlags);
     return { statusCode: 200 };
   } catch (err) {
     console.error('[disclosure-intake] ERROR:', err.message);
