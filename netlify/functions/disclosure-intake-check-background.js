@@ -59,6 +59,19 @@ const STATE_STORE = 'disclosure-intake-state';
 // Safety cap on a single document we will pull into memory / send to the model.
 const MAX_DOC_BYTES = 28 * 1024 * 1024;
 
+// Items the BUYER side assembles in-house (title/MLS/AVID/receipts). Never request
+// these from the listing side and don't count them as "still needed" — they move to
+// a "prepared by us" bucket so the TC still sees them on our own to-do. Editable;
+// extend with the DISCLOSURE_PREPARED_BY_US env (comma-separated keywords).
+const PREPARED_BY_US_DEFAULTS = ['property profile', 'mls client', 'ba avid', 'receipt for reports', 'rfr'];
+function isPreparedByUs(name) {
+  const n = String(name || '').toLowerCase();
+  const keys = PREPARED_BY_US_DEFAULTS.concat(
+    (process.env.DISCLOSURE_PREPARED_BY_US || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+  );
+  return keys.some((k) => k && n.includes(k));
+}
+
 console.log('[disclosure-intake] module fully loaded, handler ready');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -328,15 +341,24 @@ exports.handler = async function (event) {
     const result = await reconcile(listText, received);
 
     const present = Array.isArray(result.present) ? result.present : [];
-    const stillNeeded = Array.isArray(result.still_needed) ? result.still_needed : [];
     const verify = Array.isArray(result.verify) ? result.verify : [];
     const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
 
+    // Split the reconciled "still needed" into what we must REQUEST from the listing
+    // side vs what our team prepares in-house. Only the listing-side items drive the
+    // count, the chase email, and the status; prepared-by-us items stay visible in
+    // the PS comment as our own to-do.
+    const stillNeededAll = Array.isArray(result.still_needed) ? result.still_needed : [];
+    const preparedByUs = stillNeededAll.filter(isPreparedByUs);
+    const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x));
+    const overall = stillNeeded.length ? (result.overall || 'outstanding') : 'complete';
+
     const psComment =
       `Disclosure intake — ${address}\n` +
-      `Status: ${result.overall || 'outstanding'} | ${present.length} of the required disclosures received; ${stillNeeded.length} still needed\n\n` +
-      `STILL NEEDED:\n${bullets(stillNeeded, (x) => x)}\n\n` +
+      `Status: ${overall} | ${present.length} of the required disclosures received; ${stillNeeded.length} to request from listing side\n\n` +
+      `TO REQUEST FROM LISTING SIDE:\n${bullets(stillNeeded, (x) => x)}\n\n` +
       `RECEIVED:\n${bullets(present, (x) => x)}\n\n` +
+      (preparedByUs.length ? `PREPARED BY US (do not request):\n${bullets(preparedByUs, (x) => x)}\n\n` : '') +
       (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
       (na.length ? `NOT APPLICABLE / LATER:\n${bullets(na, (x) => `${x.item}: ${x.note}`)}\n` : '');
 
@@ -357,7 +379,7 @@ exports.handler = async function (event) {
 
     const payload = {
       property_address: address,
-      overall_status: result.overall || 'outstanding',
+      overall_status: overall,
       still_needed_count: stillNeeded.length,
       // Received Count = how many of THIS deal's required disclosures are in hand
       // (meaningful for a TC). The raw count of distinct forms parsed across all
@@ -365,14 +387,15 @@ exports.handler = async function (event) {
       received_count: present.length,
       received_forms_total: received.length,
       still_needed_text: stillNeeded.join(', '),
+      prepared_by_us_text: preparedByUs.join(', '),
       summary: result.summary || '',
       ps_comment: psComment,
       chase_email_subject: chaseEmailSubject,
       chase_email_body: chaseEmailBody,
-      result: { present, still_needed: stillNeeded, verify, not_applicable: na },
+      result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, verify, not_applicable: na },
     };
 
-    console.log(`[disclosure-intake] ${address}: ${result.overall} — ${stillNeeded.length} still needed`);
+    console.log(`[disclosure-intake] ${address}: ${overall} — ${stillNeeded.length} to request, ${preparedByUs.length} prepared by us`);
     await sendCallback(callback, payload);
     return { statusCode: 200 };
   } catch (err) {
