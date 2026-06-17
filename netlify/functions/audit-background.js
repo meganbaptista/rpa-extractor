@@ -87,13 +87,6 @@ const MODEL = 'claude-opus-4-7';
 // redeploy.
 const AUDIT_ZAPIER_WEBHOOK_URL = 'https://hooks.zapier.com/hooks/catch/4252316/4bor90h/';
 
-// Published-CSV URL of the master "audit lists" Google Sheet. The audit reads the
-// deal's required purchase-agreement documents from the "Compliance Documents"
-// column, looked up by property address. Falls back to AUDIT_LIST_CSV_URL (same
-// published sheet the disclosure intake uses). If unset, the document-completeness
-// check is skipped and the signature audit is unaffected.
-const COMPLIANCE_LIST_CSV_URL = process.env.COMPLIANCE_LIST_CSV_URL || process.env.AUDIT_LIST_CSV_URL || '';
-
 console.log('[audit-background] module fully loaded, handler ready');
 
 function blobsConfig(name) {
@@ -477,163 +470,6 @@ function buildEnvelope(auditPart) {
   };
 }
 
-// ============================================================================
-// DOCUMENT-COMPLIANCE CHECK (isolated add-on)
-// ----------------------------------------------------------------------------
-// Verify the purchase-agreement packet contains every document on the deal's
-// "Compliance Documents" list (per-deal, looked up by address from the master
-// sheet). Fully decoupled from the signature audit: a separate identify pass +
-// a cheap text reconcile. Any failure here is caught by the caller and must
-// never affect the signature audit. Only documents physically present IN the
-// uploaded packet can be confirmed; items normally delivered separately (e.g.
-// BRBC/POF) will read as missing unless they are in the packet.
-// ============================================================================
-
-function parseCsv(text) {
-  const rows = []; let row = [], cell = '', q = false;
-  const s = String(text || '');
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (q) {
-      if (c === '"') { if (s[i + 1] === '"') { cell += '"'; i++; } else q = false; }
-      else cell += c;
-    } else if (c === '"') q = true;
-    else if (c === ',') { row.push(cell); cell = ''; }
-    else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
-    else if (c !== '\r') cell += c;
-  }
-  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
-  return rows;
-}
-
-function normalizeAddress(addr) {
-  return String(addr || '').toLowerCase().replace(/[.,#]/g, ' ').replace(/\s+/g, ' ').trim();
-}
-function addrTokens(addr) {
-  const n = normalizeAddress(addr);
-  return { n, num: (n.match(/^\d+/) || [''])[0], zip: (n.match(/\b(\d{5})\b/) || [, ''])[1] };
-}
-function addrMatch(a, b) {
-  const x = addrTokens(a), y = addrTokens(b);
-  if (x.n && x.n === y.n) return true;
-  if (x.num && x.zip && x.num === y.num && x.zip === y.zip) return true;
-  return false;
-}
-
-// Look up the deal's "Compliance Documents" list by address from the master sheet.
-async function fetchComplianceListByAddress(address) {
-  if (!COMPLIANCE_LIST_CSV_URL || !address) return '';
-  try {
-    const res = await fetch(COMPLIANCE_LIST_CSV_URL);
-    if (!res.ok) { console.warn(`[audit-background] compliance sheet fetch ${res.status}`); return ''; }
-    const rows = parseCsv(await res.text());
-    if (rows.length < 2) return '';
-    const header = rows[0].map((h) => String(h).toLowerCase().trim());
-    let addrCol = header.findIndex((h) => h.includes('address'));
-    // Prefer a column explicitly about compliance / purchase-agreement docs, so we
-    // don't accidentally read the "Required Disclosures" column.
-    let listCol = header.findIndex((h) => /compliance|purchase\s*agreement|\bpa\b documents|contract\s*docs/.test(h));
-    if (listCol < 0) listCol = header.findIndex((h) => h.includes('compliance'));
-    if (addrCol < 0) addrCol = 0;
-    if (listCol < 0) { console.warn('[audit-background] no Compliance Documents column found'); return ''; }
-    for (const r of rows.slice(1)) {
-      if (addrMatch(r[addrCol] || '', address)) return String(r[listCol] || '').trim();
-    }
-    console.warn(`[audit-background] no compliance row matched "${address}"`);
-    return '';
-  } catch (err) {
-    console.warn(`[audit-background] compliance lookup failed: ${err.message}`);
-    return '';
-  }
-}
-
-function parseJsonLoose(raw) {
-  let t = (raw || '').trim().replace(/```json|```/g, '').trim();
-  const m = t.match(/\{[\s\S]*\}/);
-  return JSON.parse(m ? m[0] : t);
-}
-
-// Text-only Anthropic call (no PDF) for the cheap reconcile step. Mirrors
-// callClaude's config but sends just the prompt. Isolated on purpose.
-async function callClaudeTextOnly(prompt, maxTokens = 8000, attempt = 0) {
-  const MAX_RETRIES = 3;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
-  const response = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens,
-      thinking: { type: 'adaptive', display: 'omitted' },
-      output_config: { effort: 'high' },
-      messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-    }),
-  });
-  if ((response.status === 429 || response.status === 529) && attempt < MAX_RETRIES) {
-    const retryAfter = response.headers.get('retry-after');
-    const delay = retryAfter ? Math.min(parseFloat(retryAfter) * 1000, 30000) : Math.min(1000 * Math.pow(2, attempt), 30000);
-    await sleep(delay);
-    return callClaudeTextOnly(prompt, maxTokens, attempt + 1);
-  }
-  if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
-  const data = await response.json();
-  if (data.stop_reason === 'max_tokens') throw new Error('compliance reconcile hit max_tokens');
-  return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-}
-
-// Identify the documents actually INCLUDED in the packet (own pages present),
-// using the same vision call the audit uses. Returns [{code,name}].
-async function identifyPackageDocuments(pdfBase64) {
-  const prompt =
-    'This PDF is an executed California residential purchase-agreement package (the offer/contract ' +
-    'package: RPA plus its agency disclosures, buyer advisories, counter offers, addenda, and related forms). ' +
-    'Identify every distinct document/form that is ACTUALLY INCLUDED as its own document (its own pages are ' +
-    'physically present). Use the standard CAR code and full name. CRITICAL: a document counts as present ONLY ' +
-    'if its own pages are here; do NOT list a form merely because it is referenced or mentioned inside another ' +
-    'document. Respond with ONLY this JSON (no prose, no fences): ' +
-    '{"documents":[{"code":"RPA","name":"Residential Purchase Agreement"}]}';
-  const raw = await callClaude(prompt, pdfBase64);
-  const parsed = parseJsonLoose(raw);
-  return Array.isArray(parsed.documents)
-    ? parsed.documents.map((d) => ({ code: String(d.code || '').trim(), name: String(d.name || '').trim() })).filter((d) => d.code || d.name)
-    : [];
-}
-
-// Reconcile the packet's documents against the required compliance list.
-async function reconcileCompliance(listText, docsPresent) {
-  const presentText = docsPresent.map((d) => `- ${d.code ? d.code + ' — ' : ''}${d.name}`).join('\n') || '(none identified)';
-  const prompt =
-    'You are a California transaction coordinator checking a purchase-agreement package against this deal\'s ' +
-    'REQUIRED COMPLIANCE DOCUMENTS list. Decide, for each required item, whether it is present in the package.\n\n' +
-    'REQUIRED COMPLIANCE DOCUMENTS:\n' + listText + '\n\n' +
-    'DOCUMENTS FOUND IN THE PACKAGE:\n' + presentText + '\n\n' +
-    'Rules:\n' +
-    '- Match shorthand to forms using your knowledge of CAR codes (BRBC, AD-2, RPA, FRR-PA, BIA, PRBS, FHDA/Fair ' +
-    'Housing, BHIA, WFA, CCPA, AAA, POF, BCA, counter offers, etc.).\n' +
-    '- "COUNTER OFFERS" is required as present only if the package indicates counters exist; if there are no counters, ' +
-    'mark it not_applicable.\n' +
-    '- Items that are typically signed/held OUTSIDE this contract package (e.g. BRBC, POF, BCA "check BRBC package") ' +
-    'should be marked missing only if genuinely required here; note in not_applicable when they live elsewhere.\n' +
-    '- Only count a document as present if it is truly in the package, not merely referenced.\n\n' +
-    'Respond with ONLY this JSON (no prose, no fences):\n' +
-    '{"present":["..names.."],"missing":["..names.."],"not_applicable":[{"item":"..","note":".."}],"summary":"one sentence"}';
-  return parseJsonLoose(await callClaudeTextOnly(prompt, 8000));
-}
-
-// Run the full document-compliance check for a deal. Returns a structured result
-// or a status flag; never throws (caller also guards).
-async function runComplianceCheck(pdfBase64, address) {
-  const listText = await fetchComplianceListByAddress(address);
-  if (!listText) return { status: 'no_list' };
-  const docsPresent = await identifyPackageDocuments(pdfBase64);
-  const rec = await reconcileCompliance(listText, docsPresent);
-  const present = Array.isArray(rec.present) ? rec.present : [];
-  const missing = Array.isArray(rec.missing) ? rec.missing : [];
-  const na = Array.isArray(rec.not_applicable) ? rec.not_applicable : [];
-  return { status: 'ok', present, missing, not_applicable: na, summary: rec.summary || '', requiredCount: present.length + missing.length };
-}
-
 // ----------------------------------------------------------------------------
 // Flatten the structured audit + prose into the flat key/value payload the
 // audit Zapier catch-hook receives. Each top-level key becomes its own Zap
@@ -650,42 +486,9 @@ async function runComplianceCheck(pdfBase64, address) {
 // the prose is still sent -- the audit is never lost -- with overall_status
 // downgraded to "needs_review" so Jill knows to lean on the prose.
 // ----------------------------------------------------------------------------
-// Flatten the document-compliance result into stable Zapier fields. Always
-// returns the same keys (empty/skipped when no list or the check errored), so
-// the payload shape never changes whether or not the check ran.
-function complianceFields(docCheck) {
-  const dc = docCheck || {};
-  if (dc.status !== 'ok') {
-    return {
-      documents_status: dc.status || 'skipped',
-      documents_required_count: 0,
-      documents_present_count: 0,
-      documents_missing_count: 0,
-      documents_missing_text: '',
-      documents_present_text: '',
-      documents_summary: dc.status === 'no_list' ? 'No compliance list found for this address.' : '',
-    };
-  }
-  const present = dc.present || [];
-  const missing = dc.missing || [];
-  return {
-    documents_status: missing.length ? 'incomplete' : 'complete',
-    documents_required_count: dc.requiredCount || (present.length + missing.length),
-    documents_present_count: present.length,
-    documents_missing_count: missing.length,
-    documents_missing_text: missing.join(', '),
-    documents_present_text: present.join(', '),
-    documents_summary: dc.summary || (missing.length ? `${missing.length} compliance document(s) missing: ${missing.join(', ')}.` : 'All required compliance documents present.'),
-  };
-}
-
-function buildZapierPayload(jobId, auditPart, completedAtMs, propertyAddress, apn, docCheck) {
+function buildZapierPayload(jobId, auditPart, completedAtMs, propertyAddress, apn) {
   const prose = (auditPart && auditPart.prose) || '';
   const structured = auditPart && auditPart.structured;
-  const cf = complianceFields(docCheck);
-  // Surface missing compliance docs in the headline summary too, so the reviewer
-  // sees document gaps alongside the signature summary at a glance.
-  const docNote = cf.documents_missing_count > 0 ? ` Compliance docs missing: ${cf.documents_missing_text}.` : '';
 
   // Normal path: structured parsed cleanly.
   if (structured && typeof structured === 'object') {
@@ -721,11 +524,10 @@ function buildZapierPayload(jobId, auditPart, completedAtMs, propertyAddress, ap
       property_address: propertyAddress || '',
       apn: apn || '',
       overall_status: structured.overall_status || 'needs_review',
-      summary: (structured.summary || '') + docNote,
+      summary: structured.summary || '',
       findings_count: findings.length,
       findings_text: findingsText,
       action_list: actionList,
-      ...cf,
       prose: prose,
     };
   }
@@ -738,11 +540,10 @@ function buildZapierPayload(jobId, auditPart, completedAtMs, propertyAddress, ap
     property_address: propertyAddress || '',
     apn: apn || '',
     overall_status: 'needs_review',
-    summary: 'Audit completed but structured summary could not be parsed -- see prose.' + docNote,
+    summary: 'Audit completed but structured summary could not be parsed -- see prose.',
     findings_count: 0,
     findings_text: '',
     action_list: '',
-    ...cf,
     prose: prose,
   };
 }
@@ -844,25 +645,11 @@ exports.handler = async function (event) {
     });
     console.log(`[audit-background] jobId=${jobId} complete -- overall_status=${auditPart.structured && auditPart.structured.overall_status}`);
 
-    // ----- DOCUMENT-COMPLIANCE CHECK (isolated; never breaks the audit) ------
-    // Verify the packet contains the deal's required compliance documents. Wrapped
-    // so any failure (sheet down, parse error, model hiccup) is logged and the
-    // signature audit still goes out unaffected.
-    let docCheck = null;
-    try {
-      docCheck = await runComplianceCheck(pdfBase64, propertyAddress);
-      console.log(`[audit-background] jobId=${jobId} compliance: ${docCheck.status}` +
-        (docCheck.status === 'ok' ? ` -- ${docCheck.missing.length} missing of ${docCheck.requiredCount}` : ''));
-    } catch (err) {
-      console.warn(`[audit-background] jobId=${jobId} compliance check failed (non-fatal): ${err.message}`);
-      docCheck = { status: 'error' };
-    }
-
     // ----- ZAPIER FAN-OUT (success path only; fully isolated) ---------------
     // Audit result is already persisted above. This is downstream notification.
     // sendToAuditZapier swallows all errors -- a webhook hiccup cannot fail
     // a completed audit.
-    const zapierPayload = buildZapierPayload(jobId, auditPart, completedAt, propertyAddress, apn, docCheck);
+    const zapierPayload = buildZapierPayload(jobId, auditPart, completedAt, propertyAddress, apn);
     await sendToAuditZapier(jobId, zapierPayload);
 
     return { statusCode: 200 };
