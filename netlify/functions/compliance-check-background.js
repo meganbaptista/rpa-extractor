@@ -394,8 +394,16 @@ exports.handler = async function (event) {
   try { body = JSON.parse(event.body || '{}'); }
   catch { console.error('[compliance-check] invalid JSON body'); return { statusCode: 400 }; }
 
-  const { documents, complianceList, propertyAddress = '', callbackUrl } = body;
+  const { complianceList, propertyAddress = '', callbackUrl } = body;
   const callback = callbackUrl || CALLBACK_URL_ENV;
+
+  // Accept `documents` as an array of {url|base64}, OR as a plain URL string, OR a
+  // single object, OR a `documentUrl` string — so a simple Zapier mapping (just the
+  // Drive download URL) works without building a nested array.
+  let documents = body.documents;
+  if (typeof documents === 'string') documents = documents.trim() ? [{ url: documents.trim() }] : [];
+  else if (documents && !Array.isArray(documents)) documents = (documents.url || documents.base64) ? [documents] : [];
+  if ((!documents || !documents.length) && body.documentUrl) documents = [{ url: String(body.documentUrl).trim() }];
 
   try {
     const docs = await loadDocuments(documents);
