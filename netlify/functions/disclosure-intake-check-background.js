@@ -414,7 +414,9 @@ exports.handler = async function (event) {
   try {
     const store = getStore(blobsConfig(STATE_STORE));
 
-    // FINALIZE: a batch of accumulate-only POSTs is done; reconcile + call back once.
+    // FINALIZE: a batch of accumulate-only POSTs is done. Gather every per-delivery
+    // slot written for this batch, merge them into the deal's persistent received set
+    // (done here, single-threaded, so it's race-free), reconcile, and call back once.
     if (finalize) {
       let address = (propertyAddress || '').trim();
       if (!address && batchId) {
@@ -427,14 +429,34 @@ exports.handler = async function (event) {
         console.warn(`[disclosure-intake] finalize: nothing accumulated for batch ${batchId || 'n/a'}, skipping`);
         return { statusCode: 200 };
       }
-      const state = (await store.get(normalizeAddress(address), { type: 'json' })) || { address, received: [] };
-      await reconcileAndCallback(address, state.received, auditList, callback);
+      const key = normalizeAddress(address);
+      const slotKeys = [];
+      let batchForms = [];
+      if (batchId) {
+        const listing = await store.list({ prefix: `recv:${batchId}:` });
+        for (const b of (listing.blobs || [])) {
+          slotKeys.push(b.key);
+          const item = await store.get(b.key, { type: 'json' });
+          if (item && Array.isArray(item.forms)) batchForms = mergeForms(batchForms, item.forms);
+        }
+      }
+      const prior = (await store.get(key, { type: 'json' })) || { address, received: [] };
+      const received = mergeForms(prior.received, batchForms);
+      await store.setJSON(key, { address, received, updatedAt: Date.now() });
+      console.log(`[disclosure-intake] finalize ${address}: merged ${batchForms.length} from ${slotKeys.length} slot(s) -> ${received.length} total`);
+      for (const k of slotKeys) { try { await store.delete(k); } catch (e) { /* cleanup best-effort */ } }
+      await reconcileAndCallback(address, received, auditList, callback);
       return { statusCode: 200 };
     }
 
-    // INGEST: load + identify + accumulate this delivery's documents.
+    // INGEST: load + identify this delivery's documents.
     const docs = await loadDocuments(documents);
-    if (!docs.length) throw new Error('No documents could be loaded (need fetchable url or base64)');
+    if (!docs.length) {
+      // An empty delivery is normal in a loop (e.g. the body-Drive-links POST when an
+      // email has only attachments). Skip quietly in accumulate mode.
+      if (accumulateOnly) { console.log('[disclosure-intake] accumulate-only with no documents, skipping'); return { statusCode: 200 }; }
+      throw new Error('No documents could be loaded (need fetchable url or base64)');
+    }
 
     const { propertyAddress: detectedAddr, forms: newForms, dropped } = await identifyForms(docs);
     if (dropped && dropped.length) console.warn(`[disclosure-intake] dropped oversized doc(s) to fit the model: ${dropped.join(', ')}`);
@@ -443,22 +465,22 @@ exports.handler = async function (event) {
     const key = normalizeAddress(address);
     console.log(`[disclosure-intake] ${address}: identified ${newForms.length} form(s) in this delivery`);
 
+    // ACCUMULATE-ONLY (per-attachment loop): write this delivery's forms to a UNIQUE
+    // per-delivery slot keyed by batch (no shared read-modify-write, so concurrent
+    // background functions can't clobber each other). finalize merges the slots later.
+    if (accumulateOnly) {
+      const slot = `recv:${batchId || 'nobatch'}:${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+      await store.setJSON(slot, { address, forms: newForms });
+      if (batchId) await store.setJSON('batch:' + batchId, { address, updatedAt: Date.now() });
+      console.log(`[disclosure-intake] ${address}: accumulate-only, stored ${newForms.length} form(s) in slot (batch ${batchId || 'n/a'})`);
+      return { statusCode: 200 };
+    }
+
+    // SINGLE DELIVERY: accumulate into the persistent set + reconcile + callback now.
     const prior = (await store.get(key, { type: 'json' })) || { address, received: [] };
     const received = mergeForms(prior.received, newForms);
     await store.setJSON(key, { address, received, updatedAt: Date.now() });
     console.log(`[disclosure-intake] ${address}: ${received.length} form(s) received so far (was ${prior.received.length})`);
-
-    // Map this batch -> address so a later finalize call (which carries no documents)
-    // can find the deal to reconcile.
-    if (batchId) await store.setJSON('batch:' + batchId, { address, updatedAt: Date.now() });
-
-    // Accumulate-only (per-attachment loop): stop here, defer the callback to finalize.
-    if (accumulateOnly) {
-      console.log(`[disclosure-intake] ${address}: accumulate-only, deferring reconcile (batch ${batchId || 'n/a'})`);
-      return { statusCode: 200 };
-    }
-
-    // Single delivery: reconcile + callback now.
     await reconcileAndCallback(address, received, auditList, callback);
     return { statusCode: 200 };
   } catch (err) {
