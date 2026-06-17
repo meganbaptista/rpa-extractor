@@ -421,7 +421,12 @@ exports.handler = async function (event) {
         const map = await store.get('batch:' + batchId, { type: 'json' });
         address = (map && map.address) || '';
       }
-      if (!address) throw new Error('finalize: no property address known yet for this batch (were any documents accumulated?)');
+      if (!address) {
+        // Nothing was accumulated for this batch (e.g. a non-disclosure email where
+        // everything got filtered out). Skip quietly rather than emit an error.
+        console.warn(`[disclosure-intake] finalize: nothing accumulated for batch ${batchId || 'n/a'}, skipping`);
+        return { statusCode: 200 };
+      }
       const state = (await store.get(normalizeAddress(address), { type: 'json' })) || { address, received: [] };
       await reconcileAndCallback(address, state.received, auditList, callback);
       return { statusCode: 200 };
