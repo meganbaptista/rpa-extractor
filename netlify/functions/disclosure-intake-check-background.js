@@ -176,7 +176,7 @@ async function callClaude(content, maxTokens, attempt = 0) {
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: maxTokens || 4000,
+      max_tokens: maxTokens || 8000,
       thinking: { type: 'adaptive', display: 'omitted' },
       output_config: { effort: 'high' },
       messages: [{ role: 'user', content }],
@@ -226,7 +226,9 @@ async function identifyForms(docs) {
     '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement"}]}',
   });
 
-  const raw = await callClaude(content, 3000);
+  // Ceiling is generous: adaptive thinking + effort:high count toward max_tokens,
+  // and a multi-form packet can require a lot of reasoning before the small JSON.
+  const raw = await callClaude(content, 10000);
   const parsed = parseJson(raw);
   const forms = Array.isArray(parsed.forms) ? parsed.forms
     .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim() }))
@@ -271,7 +273,9 @@ async function reconcile(auditList, received) {
     '{"overall":"complete|outstanding","present":["..names.."],"still_needed":["..names.."],' +
     '"verify":[{"item":"..","note":".."}],"not_applicable":[{"item":"..","note":".."}],"summary":"one sentence"}';
 
-  return parseJson(await callClaude([{ type: 'text', text: prompt }], 4000));
+  // Reconcile reasons item-by-item over the whole audit list before emitting JSON;
+  // give thinking + output ample room so it never truncates mid-answer.
+  return parseJson(await callClaude([{ type: 'text', text: prompt }], 16000));
 }
 
 function bullets(list, fmt) {
