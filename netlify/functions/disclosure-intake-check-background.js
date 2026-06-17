@@ -64,13 +64,20 @@ const MAX_DOC_BYTES = 28 * 1024 * 1024;
 // these from the listing side and don't count them as "still needed" — they move to
 // a "prepared by us" bucket so the TC still sees them on our own to-do. Editable;
 // extend with the DISCLOSURE_PREPARED_BY_US env (comma-separated keywords).
-const PREPARED_BY_US_DEFAULTS = ['property profile', 'mls client', 'ba avid', 'receipt for reports', 'rfr'];
+// DIA: we technically don't need it. "Los Angeles County Local Area Disclosures":
+// not a county requirement; we add our own per-brokerage version. Both are ours to
+// handle, so never request them from the listing side.
+const PREPARED_BY_US_DEFAULTS = [
+  'property profile', 'mls client', 'ba avid', 'receipt for reports', 'rfr',
+  'dia', 'los angeles county local area',
+];
 function isPreparedByUs(name) {
   const n = String(name || '').toLowerCase();
   const keys = PREPARED_BY_US_DEFAULTS.concat(
     (process.env.DISCLOSURE_PREPARED_BY_US || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
   );
-  return keys.some((k) => k && n.includes(k));
+  // Whole-word match so a short key like "dia" can't catch a substring of another item.
+  return keys.some((k) => k && new RegExp('\\b' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(n));
 }
 
 console.log('[disclosure-intake] module fully loaded, handler ready');
