@@ -326,19 +326,111 @@ async function sendCallback(callbackUrl, payload) {
   }
 }
 
+// ----------------------------------------------------------------------------
+// Reconcile the accumulated received set for a deal against its audit list and
+// POST the result to the callback. Shared by single-delivery mode and finalize.
+// ----------------------------------------------------------------------------
+async function reconcileAndCallback(address, received, auditList, callback) {
+  let listText = (auditList && String(auditList).trim()) || '';
+  if (!listText) listText = await fetchAuditListByAddress(address);
+  if (!listText) throw new Error(`No audit list for "${address}" — pass auditList in the body, or add a matching row to the AUDIT_LIST_CSV_URL sheet.`);
+  const result = await reconcile(listText, received);
+
+  const present = Array.isArray(result.present) ? result.present : [];
+  const verify = Array.isArray(result.verify) ? result.verify : [];
+  const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
+
+  // Split the reconciled "still needed" into what we must REQUEST from the listing
+  // side vs what our team prepares in-house. Only the listing-side items drive the
+  // count, the chase email, and the status; prepared-by-us items stay visible in
+  // the PS comment as our own to-do.
+  const stillNeededAll = Array.isArray(result.still_needed) ? result.still_needed : [];
+  const preparedByUs = stillNeededAll.filter(isPreparedByUs);
+  const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x));
+  const overall = stillNeeded.length ? (result.overall || 'outstanding') : 'complete';
+
+  const psComment =
+    `Disclosure intake — ${address}\n` +
+    `Status: ${overall} | ${present.length} of the required disclosures received; ${stillNeeded.length} to request from listing side\n\n` +
+    `TO REQUEST FROM LISTING SIDE:\n${bullets(stillNeeded, (x) => x)}\n\n` +
+    `RECEIVED:\n${bullets(present, (x) => x)}\n\n` +
+    (preparedByUs.length ? `PREPARED BY US (do not request):\n${bullets(preparedByUs, (x) => x)}\n\n` : '') +
+    (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
+    (na.length ? `NOT APPLICABLE / LATER:\n${bullets(na, (x) => `${x.item}: ${x.note}`)}\n` : '');
+
+  // Ready-to-send chase email for the outstanding items. Zap B drops this into a
+  // Gmail draft when still_needed_count > 0. No em dashes (Megan's standing
+  // preference); it's a draft she reviews, so greeting/recipient are finalized then.
+  const signer = process.env.DISCLOSURE_SIGNER_NAME || 'Megan';
+  const chaseEmailSubject = `Outstanding disclosures for ${address}`;
+  const chaseEmailBody = stillNeeded.length
+    ? 'Hi,\n\n' +
+      `Thank you for sending over the disclosures for ${address}. ` +
+      'After reviewing the package against our file, the following items are still outstanding:\n\n' +
+      stillNeeded.map((x) => `- ${x}`).join('\n') +
+      '\n\nWhen you have a moment, please send these over so we can wrap up our review. ' +
+      'If any have already been provided or do not apply, just let me know.\n\n' +
+      `Thanks!\n${signer}`
+    : '';
+
+  const payload = {
+    property_address: address,
+    overall_status: overall,
+    still_needed_count: stillNeeded.length,
+    // Received Count = how many of THIS deal's required disclosures are in hand
+    // (meaningful for a TC). The raw count of distinct forms parsed across all
+    // deliveries is kept separately as received_forms_total for diagnostics.
+    received_count: present.length,
+    received_forms_total: received.length,
+    still_needed_text: stillNeeded.join(', '),
+    prepared_by_us_text: preparedByUs.join(', '),
+    summary: result.summary || '',
+    ps_comment: psComment,
+    chase_email_subject: chaseEmailSubject,
+    chase_email_body: chaseEmailBody,
+    result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, verify, not_applicable: na },
+  };
+
+  console.log(`[disclosure-intake] ${address}: ${overall} — ${stillNeeded.length} to request, ${preparedByUs.length} prepared by us`);
+  await sendCallback(callback, payload);
+}
+
 exports.handler = async function (event) {
   let body;
   try { body = JSON.parse(event.body || '{}'); }
   catch { console.error('[disclosure-intake] invalid JSON body'); return { statusCode: 400 }; }
 
-  const { auditList, documents, propertyAddress = '', callbackUrl } = body;
+  // Modes:
+  //   default       — { documents, ... }            ingest + reconcile + callback (single delivery)
+  //   accumulate     — { documents, batchId,
+  //                      accumulate_only:true }       ingest only, NO callback (per-attachment loop)
+  //   finalize       — { batchId, finalize:true }     reconcile the batch's deal + callback once
+  const {
+    auditList, documents, propertyAddress = '', callbackUrl,
+    accumulate_only: accumulateOnly = false, finalize = false, batchId = '',
+  } = body;
   const callback = callbackUrl || CALLBACK_URL_ENV;
 
   try {
+    const store = getStore(blobsConfig(STATE_STORE));
+
+    // FINALIZE: a batch of accumulate-only POSTs is done; reconcile + call back once.
+    if (finalize) {
+      let address = (propertyAddress || '').trim();
+      if (!address && batchId) {
+        const map = await store.get('batch:' + batchId, { type: 'json' });
+        address = (map && map.address) || '';
+      }
+      if (!address) throw new Error('finalize: no property address known yet for this batch (were any documents accumulated?)');
+      const state = (await store.get(normalizeAddress(address), { type: 'json' })) || { address, received: [] };
+      await reconcileAndCallback(address, state.received, auditList, callback);
+      return { statusCode: 200 };
+    }
+
+    // INGEST: load + identify + accumulate this delivery's documents.
     const docs = await loadDocuments(documents);
     if (!docs.length) throw new Error('No documents could be loaded (need fetchable url or base64)');
 
-    // 1) Identify the real forms in this delivery + read the address.
     const { propertyAddress: detectedAddr, forms: newForms, dropped } = await identifyForms(docs);
     if (dropped && dropped.length) console.warn(`[disclosure-intake] dropped oversized doc(s) to fit the model: ${dropped.join(', ')}`);
     const address = (detectedAddr || propertyAddress || '').trim();
@@ -346,91 +438,40 @@ exports.handler = async function (event) {
     const key = normalizeAddress(address);
     console.log(`[disclosure-intake] ${address}: identified ${newForms.length} form(s) in this delivery`);
 
-    // 2) Accumulate into the per-deal received set.
-    const store = getStore(blobsConfig(STATE_STORE));
     const prior = (await store.get(key, { type: 'json' })) || { address, received: [] };
     const received = mergeForms(prior.received, newForms);
     await store.setJSON(key, { address, received, updatedAt: Date.now() });
     console.log(`[disclosure-intake] ${address}: ${received.length} form(s) received so far (was ${prior.received.length})`);
 
-    // 3) Resolve the deal's required-docs list (request body wins for testing;
-    //    otherwise look it up by the address we just read off the documents),
-    //    then reconcile the accumulated set against it.
-    let listText = (auditList && String(auditList).trim()) || '';
-    if (!listText) listText = await fetchAuditListByAddress(address);
-    if (!listText) throw new Error(`No audit list for "${address}" — pass auditList in the body, or add a matching row to the AUDIT_LIST_CSV_URL sheet.`);
-    const result = await reconcile(listText, received);
+    // Map this batch -> address so a later finalize call (which carries no documents)
+    // can find the deal to reconcile.
+    if (batchId) await store.setJSON('batch:' + batchId, { address, updatedAt: Date.now() });
 
-    const present = Array.isArray(result.present) ? result.present : [];
-    const verify = Array.isArray(result.verify) ? result.verify : [];
-    const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
+    // Accumulate-only (per-attachment loop): stop here, defer the callback to finalize.
+    if (accumulateOnly) {
+      console.log(`[disclosure-intake] ${address}: accumulate-only, deferring reconcile (batch ${batchId || 'n/a'})`);
+      return { statusCode: 200 };
+    }
 
-    // Split the reconciled "still needed" into what we must REQUEST from the listing
-    // side vs what our team prepares in-house. Only the listing-side items drive the
-    // count, the chase email, and the status; prepared-by-us items stay visible in
-    // the PS comment as our own to-do.
-    const stillNeededAll = Array.isArray(result.still_needed) ? result.still_needed : [];
-    const preparedByUs = stillNeededAll.filter(isPreparedByUs);
-    const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x));
-    const overall = stillNeeded.length ? (result.overall || 'outstanding') : 'complete';
-
-    const psComment =
-      `Disclosure intake — ${address}\n` +
-      `Status: ${overall} | ${present.length} of the required disclosures received; ${stillNeeded.length} to request from listing side\n\n` +
-      `TO REQUEST FROM LISTING SIDE:\n${bullets(stillNeeded, (x) => x)}\n\n` +
-      `RECEIVED:\n${bullets(present, (x) => x)}\n\n` +
-      (preparedByUs.length ? `PREPARED BY US (do not request):\n${bullets(preparedByUs, (x) => x)}\n\n` : '') +
-      (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
-      (na.length ? `NOT APPLICABLE / LATER:\n${bullets(na, (x) => `${x.item}: ${x.note}`)}\n` : '');
-
-    // Ready-to-send chase email for the outstanding items. Zap B drops this into a
-    // Gmail draft when still_needed_count > 0. No em dashes (Megan's standing
-    // preference); it's a draft she reviews, so greeting/recipient are finalized then.
-    const signer = process.env.DISCLOSURE_SIGNER_NAME || 'Megan';
-    const chaseEmailSubject = `Outstanding disclosures for ${address}`;
-    const chaseEmailBody = stillNeeded.length
-      ? 'Hi,\n\n' +
-        `Thank you for sending over the disclosures for ${address}. ` +
-        'After reviewing the package against our file, the following items are still outstanding:\n\n' +
-        stillNeeded.map((x) => `- ${x}`).join('\n') +
-        '\n\nWhen you have a moment, please send these over so we can wrap up our review. ' +
-        'If any have already been provided or do not apply, just let me know.\n\n' +
-        `Thanks!\n${signer}`
-      : '';
-
-    const payload = {
-      property_address: address,
-      overall_status: overall,
-      still_needed_count: stillNeeded.length,
-      // Received Count = how many of THIS deal's required disclosures are in hand
-      // (meaningful for a TC). The raw count of distinct forms parsed across all
-      // deliveries is kept separately as received_forms_total for diagnostics.
-      received_count: present.length,
-      received_forms_total: received.length,
-      still_needed_text: stillNeeded.join(', '),
-      prepared_by_us_text: preparedByUs.join(', '),
-      summary: result.summary || '',
-      ps_comment: psComment,
-      chase_email_subject: chaseEmailSubject,
-      chase_email_body: chaseEmailBody,
-      result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, verify, not_applicable: na },
-    };
-
-    console.log(`[disclosure-intake] ${address}: ${overall} — ${stillNeeded.length} to request, ${preparedByUs.length} prepared by us`);
-    await sendCallback(callback, payload);
+    // Single delivery: reconcile + callback now.
+    await reconcileAndCallback(address, received, auditList, callback);
     return { statusCode: 200 };
   } catch (err) {
     console.error('[disclosure-intake] ERROR:', err.message);
-    await sendCallback(callback, {
-      property_address: propertyAddress || '',
-      overall_status: 'error',
-      still_needed_count: 0,
-      received_count: 0,
-      still_needed_text: '',
-      summary: '',
-      ps_comment: `Disclosure intake check could not complete: ${err.message}`,
-      result: { present: [], still_needed: [], verify: [], not_applicable: [] },
-    });
+    // Stay quiet on accumulate-only ingest errors (finalize will surface real issues);
+    // only emit an error callback for visible single-delivery / finalize calls.
+    if (!accumulateOnly) {
+      await sendCallback(callback, {
+        property_address: propertyAddress || '',
+        overall_status: 'error',
+        still_needed_count: 0,
+        received_count: 0,
+        still_needed_text: '',
+        summary: '',
+        ps_comment: `Disclosure intake check could not complete: ${err.message}`,
+        result: { present: [], still_needed: [], verify: [], not_applicable: [] },
+      });
+    }
     return { statusCode: 500 };
   }
 };
