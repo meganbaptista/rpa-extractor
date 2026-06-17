@@ -128,60 +128,54 @@ function normalizeField(item) {
 // Fetch all form-field values for a Process Street checklist (workflow) run.
 // Follows paging via links.next until exhausted. Returns [{ label, value }].
 //
-// GET /workflow-runs/{workflowRunId}/form-fields?workflowId=...  (operationId
-// ListFormFieldValues, verified against the official Process Street connector
-// swagger). workflowRunId is the path param; workflowId is a REQUIRED query
-// param. Returns { fields: [SimplifiedFormFieldValue], links: [...] }, each field
-// carrying a label/key and a `data` object holding the value.
-function psFormFieldsUrl(workflowId, runId) {
-  return `${PS_API_BASE}/workflow-runs/${encodeURIComponent(runId)}/form-fields?workflowId=${encodeURIComponent(workflowId)}`;
+// Authenticated GET against the PS public API (X-API-KEY).
+async function psGet(url, apiKey) {
+  const res = await fetch(url, { method: 'GET', headers: { 'X-API-KEY': apiKey, 'Accept': 'application/json' } });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Process Street API ${res.status} (${url}): ${body.slice(0, 200)}`);
+  }
+  return res.json();
 }
 
-async function fetchRunFormFields(workflowId, runId, apiKey) {
+// Form field VALUES for a run. The response is a FLAT map { fieldId: value } —
+// answers keyed by opaque field id, with NO question text. (Verified from the
+// live response.) GET /workflow-runs/{runId}/form-fields?workflowId=...
+async function fetchRunValues(workflowId, runId, apiKey) {
+  const url = `${PS_API_BASE}/workflow-runs/${encodeURIComponent(runId)}/form-fields?workflowId=${encodeURIComponent(workflowId)}`;
+  const data = await psGet(url, apiKey);
+  const map = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+  console.log(`[disclosure-review] PS values: ${Object.keys(map).length} field ids`);
+  return map;
+}
+
+// Field LABELS for a workflow. The values endpoint only gives field ids; the
+// dynamic schema maps each id to its human question text (`title`). One call per
+// workflow (not per run). GET /dynamic-schemas/workflows/{workflowId}/form-fields
+//   -> { Schema: { properties: { <fieldId>: { title: "C12: Please explain..." } } } }
+async function fetchFieldLabels(workflowId, apiKey) {
+  const url = `${PS_API_BASE}/dynamic-schemas/workflows/${encodeURIComponent(workflowId)}/form-fields`;
+  const data = await psGet(url, apiKey);
+  console.log('[disclosure-review] PS schema raw:', JSON.stringify(data).slice(0, 1000));
+  const schema = (data && (data.Schema || data.schema)) || data || {};
+  const props = (schema && schema.properties) || {};
+  const labels = {};
+  for (const [id, def] of Object.entries(props)) {
+    if (def && typeof def === 'object') {
+      labels[id] = def.title || def['x-ms-summary'] || def.description || id;
+    }
+  }
+  console.log(`[disclosure-review] PS labels: ${Object.keys(labels).length} fields`);
+  return labels;
+}
+
+// Join the value map and the label map into [{ label, value }], dropping blanks.
+function joinFields(values, labels) {
   const out = [];
-  let url = psFormFieldsUrl(workflowId, runId);
-  let guard = 0;
-  while (url && guard < 50) {
-    guard++;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: { 'X-API-KEY': apiKey, 'Accept': 'application/json' },
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`Process Street API ${res.status} on form fields (${url}): ${body.slice(0, 200)}`);
-    }
-    const data = await res.json();
-    if (guard === 1) {
-      // Log the raw top-level response so the real array location is visible.
-      console.log('[disclosure-review] PS raw response:', JSON.stringify(data).slice(0, 1500));
-    }
-    let items = Array.isArray(data)
-      ? data
-      : (data.fields || data.formFieldValues || data.formFields || data.items ||
-         (Array.isArray(data.data) ? data.data : null));
-    if (!Array.isArray(items)) {
-      // Fallback: grab the first top-level array-of-objects, wherever it sits.
-      items = [];
-      for (const k of Object.keys(data || {})) {
-        const v = data[k];
-        if (Array.isArray(v) && v.length && v[0] && typeof v[0] === 'object') { items = v; break; }
-      }
-    }
-    for (const it of items) {
-      const f = normalizeField(it);
-      if (f && f.label) out.push(f);
-    }
-    // Paging: links may be an array of {rel, href} or an object with next.
-    let next = null;
-    const links = data && data.links;
-    if (Array.isArray(links)) {
-      const n = links.find((l) => l && l.rel === 'next');
-      next = n && n.href;
-    } else if (links) {
-      next = links.next || links.nextPage;
-    }
-    url = next || null;
+  for (const [id, raw] of Object.entries(values || {})) {
+    const value = valueFromData(raw);
+    if (!value) continue;
+    out.push({ label: labels[id] || id, value });
   }
   return out;
 }
@@ -345,8 +339,12 @@ exports.handler = async function (event) {
       const psKey = process.env.PS_API_KEY;
       if (!psKey) throw new Error('PS_API_KEY env var not set (needed to fetch form fields)');
       if (!wfId) throw new Error('workflowId is required alongside the run id to fetch PS form fields');
-      fields = await fetchRunFormFields(wfId, runId, psKey);
-      console.log(`[disclosure-review] fetched ${fields.length} fields from PS workflow ${wfId} run ${runId}`);
+      const [values, labels] = await Promise.all([
+        fetchRunValues(wfId, runId, psKey),
+        fetchFieldLabels(wfId, psKey),
+      ]);
+      fields = joinFields(values, labels);
+      console.log(`[disclosure-review] joined ${fields.length} answered fields from PS workflow ${wfId} run ${runId}`);
     } else {
       throw new Error('Request had neither formFields nor a workflowRunId');
     }
