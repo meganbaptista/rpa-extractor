@@ -8,6 +8,7 @@ const { PDFDocument } = require('pdf-lib');
 // installed. Import it and pass into every PDFParse constructor.
 const { CanvasFactory } = require('pdf-parse/worker');
 const { PDFParse } = require('pdf-parse');
+const { canonicalAddress } = require('./lib/address');
 
 // ── PAGE-DETECTION MARKERS ──────────────────────────────────────────────────
 // These two literal strings have been stable in CAR purchase agreement forms
@@ -1017,6 +1018,10 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
           console.warn('anti-fabrication: blanked blind-path values for manual review [' + blanked.join(', ') + ']');
         }
       }
+
+      // Canonicalize the property address to USPS shorthand suffixes so it joins
+      // cleanly with the sheet and the other functions (single source: lib/address).
+      if (mergedFields.property_address) mergedFields.property_address = canonicalAddress(mergedFields.property_address);
 
       mergedFields._extraction_status = extractionStatus;
       console.log('final extraction status: ' + extractionStatus);

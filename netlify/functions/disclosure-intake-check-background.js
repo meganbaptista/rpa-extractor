@@ -43,6 +43,7 @@ console.log('[disclosure-intake] module loading');
 
 const zlib = require('zlib');
 const { getStore } = require('@netlify/blobs');
+const { canonicalAddress } = require('./lib/address');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-opus-4-8';
@@ -638,7 +639,7 @@ exports.handler = async function (event) {
     // slot written for this batch, merge them into the deal's persistent received set
     // (done here, single-threaded, so it's race-free), reconcile, and call back once.
     if (finalize) {
-      let address = (propertyAddress || '').trim();
+      let address = canonicalAddress(propertyAddress || '');
       if (!address && batchId) {
         const map = await store.get('batch:' + batchId, { type: 'json' });
         address = (map && map.address) || '';
@@ -682,7 +683,7 @@ exports.handler = async function (event) {
 
     const { propertyAddress: detectedAddr, forms: newForms, responseFlags: newFlags = [], dropped } = await identifyFormsChunked(docs);
     if (dropped && dropped.length) console.warn(`[disclosure-intake] dropped oversized doc(s) to fit the model: ${dropped.join(', ')}`);
-    const address = (detectedAddr || propertyAddress || '').trim();
+    const address = canonicalAddress(detectedAddr || propertyAddress || '');
     if (!address) throw new Error('Could not read a property address from the documents');
     const key = normalizeAddress(address);
     console.log(`[disclosure-intake] ${address}: identified ${newForms.length} form(s) in this delivery`);

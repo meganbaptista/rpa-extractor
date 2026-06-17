@@ -42,6 +42,7 @@ console.log('[extract-background] pdf-parse worker (CanvasFactory) loaded');
 const { PDFParse } = require('pdf-parse');
 console.log('[extract-background] pdf-parse loaded');
 const { getStore } = require('@netlify/blobs');
+const { canonicalAddress } = require('./lib/address');
 console.log('[extract-background] @netlify/blobs loaded');
 
 // ── BLOB STORE ACCESS (explicit credentials) ────────────────────────────────
@@ -1102,6 +1103,11 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
           console.warn('anti-fabrication: blanked blind-path values for manual review [' + blanked.join(', ') + ']');
         }
       }
+
+      // Canonicalize the property address to USPS shorthand suffixes (Avenue -> Ave,
+      // etc.) so this — the source that flows to Zapier/Process Street — joins cleanly
+      // with the sheet and the other functions, which use the same canonical form.
+      if (mergedFields.property_address) mergedFields.property_address = canonicalAddress(mergedFields.property_address);
 
       mergedFields._extraction_status = extractionStatus;
       console.log('final extraction status: ' + extractionStatus);

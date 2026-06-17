@@ -35,6 +35,7 @@
 console.log('[compliance-check] module loading');
 
 const zlib = require('zlib');
+const { canonicalAddress } = require('./lib/address');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-opus-4-8';
@@ -412,7 +413,7 @@ exports.handler = async function (event) {
 
     // 1) Identify the documents physically present in the package + read address.
     const { propertyAddress: detectedAddr, documents: present } = await identifyChunked(docs);
-    const address = (detectedAddr || propertyAddress || '').trim();
+    const address = canonicalAddress(detectedAddr || propertyAddress || '');
     console.log(`[compliance-check] ${address || '(no address)'}: identified ${present.length} document(s) in the package`);
 
     // 2) Resolve the compliance list (body wins for the opening Zap that just built
