@@ -221,32 +221,52 @@ function parseJson(raw) {
 // property address. The "real vs referenced" rule is the key lesson from the
 // proof: a form counts only if its own pages are in the package.
 // ----------------------------------------------------------------------------
-async function identifyForms(docs) {
-  const content = docs.map((d) => ({
-    type: 'document',
-    source: { type: 'base64', media_type: 'application/pdf', data: d.base64 },
-    title: d.name,
-  }));
-  content.push({ type: 'text', text:
-    'These PDFs are a buyer-side disclosure delivery (one combined packet and/or several single-form PDFs). ' +
-    'Identify every distinct California real estate disclosure/report form that is ACTUALLY INCLUDED as its own form ' +
-    '(its own pages are physically in the package). Use the standard CAR code and full name. ' +
-    'CRITICAL: a form counts as present ONLY if its own form pages are here. Do NOT list a form merely because it is ' +
-    'referenced, cross-mentioned, or described inside another form. Examples of what NOT to count: the TDS Section III ' +
-    '"Agent Inspection Disclosure" is part of the TDS, not a separate AVID; SBSA discussing wildfire/natural hazards is ' +
-    'not a separate Wildfire or NHD form; the DIA describing the ESD is not an ESD. Also read the property street ' +
-    'address from the forms. Respond with ONLY this JSON (no prose, no fences): ' +
-    '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement"}]}',
-  });
+const IDENTIFY_PROMPT =
+  'These PDFs are a buyer-side disclosure delivery (one combined packet and/or several single-form PDFs). ' +
+  'Identify every distinct California real estate disclosure/report form that is ACTUALLY INCLUDED as its own form ' +
+  '(its own pages are physically in the package). Use the standard CAR code and full name. ' +
+  'CRITICAL: a form counts as present ONLY if its own form pages are here. Do NOT list a form merely because it is ' +
+  'referenced, cross-mentioned, or described inside another form. Examples of what NOT to count: the TDS Section III ' +
+  '"Agent Inspection Disclosure" is part of the TDS, not a separate AVID; SBSA discussing wildfire/natural hazards is ' +
+  'not a separate Wildfire or NHD form; the DIA describing the ESD is not an ESD. Also read the property street ' +
+  'address from the forms. Respond with ONLY this JSON (no prose, no fences): ' +
+  '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement"}]}';
 
-  // Ceiling is generous: adaptive thinking + effort:high count toward max_tokens,
-  // and a multi-form packet can require a lot of reasoning before the small JSON.
-  const raw = await callClaude(content, 10000);
-  const parsed = parseJson(raw);
-  const forms = Array.isArray(parsed.forms) ? parsed.forms
-    .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim() }))
-    .filter((f) => f.code || f.name) : [];
-  return { propertyAddress: String(parsed.property_address || '').trim(), forms };
+async function identifyForms(docs) {
+  // Backstop: Claude caps a request at ~32MB / 100 pages. If a large file (e.g. an
+  // inspection report that slipped past the Zapier filter) makes the combined request
+  // too large (413), drop the single biggest doc and retry, rather than failing the
+  // whole run. Disclosures are small; the big outlier is almost always the non-disclosure.
+  let working = docs.slice().sort((a, b) => (b.base64 || '').length - (a.base64 || '').length);
+  const dropped = [];
+  while (working.length) {
+    const content = working.map((d) => ({
+      type: 'document',
+      source: { type: 'base64', media_type: 'application/pdf', data: d.base64 },
+      title: d.name,
+    }));
+    content.push({ type: 'text', text: IDENTIFY_PROMPT });
+    try {
+      // Ceiling is generous: adaptive thinking + effort:high count toward max_tokens,
+      // and a multi-form packet can require a lot of reasoning before the small JSON.
+      const raw = await callClaude(content, 10000);
+      const parsed = parseJson(raw);
+      const forms = Array.isArray(parsed.forms) ? parsed.forms
+        .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim() }))
+        .filter((f) => f.code || f.name) : [];
+      return { propertyAddress: String(parsed.property_address || '').trim(), forms, dropped };
+    } catch (err) {
+      const tooLarge = /\b413\b|request_too_large|too\s*large/i.test(err.message || '');
+      if (tooLarge && working.length > 1) {
+        const big = working.shift(); // largest, list is size-sorted descending
+        dropped.push(big.name);
+        console.warn(`[disclosure-intake] request too large — dropping biggest doc "${big.name}" and retrying with ${working.length} doc(s)`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  return { propertyAddress: '', forms: [], dropped };
 }
 
 // Merge two form lists, de-duping on code (case-insensitive), then name.
@@ -319,7 +339,8 @@ exports.handler = async function (event) {
     if (!docs.length) throw new Error('No documents could be loaded (need fetchable url or base64)');
 
     // 1) Identify the real forms in this delivery + read the address.
-    const { propertyAddress: detectedAddr, forms: newForms } = await identifyForms(docs);
+    const { propertyAddress: detectedAddr, forms: newForms, dropped } = await identifyForms(docs);
+    if (dropped && dropped.length) console.warn(`[disclosure-intake] dropped oversized doc(s) to fit the model: ${dropped.join(', ')}`);
     const address = (detectedAddr || propertyAddress || '').trim();
     if (!address) throw new Error('Could not read a property address from the documents');
     const key = normalizeAddress(address);
