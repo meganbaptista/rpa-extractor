@@ -549,19 +549,27 @@ const IDENTIFY_PROMPT =
   'package, skip this check.\n' +
   'Do NOT moralize about whether a disclosed issue is concerning, and do NOT review forms with no questions ' +
   '(receipts, booklets, profiles, AVID, certifications).\n' +
-  'For EACH flag return: "form" (e.g. SPQ, TDS); "item" = the CONCISE question code ONLY (e.g. 6K, C14, 14C, 7E, ' +
-  '6G) with NO words like "Section" or "Item" and NO parentheticals such as "(common area)"; "issue"; "marked" = ' +
-  'the marked answer ("Yes", "No", or "blank"); "should_be" = the answer it should be ("Yes" or "No") for ' +
-  'contradiction flags (empty for blank/explanation flags); "reason" = a brief plain reason (e.g. "the property is ' +
-  'a condominium", "a WBSA is included in the package"). Do NOT use em dashes or en dashes in any field; use ' +
-  'commas, semicolons, or periods.\n' +
+  'For EACH flag return: "form" (e.g. SPQ, TDS); "item" = the CONCISE question code ONLY (e.g. 6K, C14, 14C, 7E) ' +
+  'with NO words like "Section" or "Item" and NO parentheticals such as "(common area)"; "issue"; "marked" = the ' +
+  'marked answer ("Yes", "No", or "blank"). For a CORRECTION (answer_contradicts_package), classify it into ONE ' +
+  '"discrepancy_type" and fill the matching fields, so each reads like a TC requesting revised disclosures:\n' +
+  '  - "incorrect" (the Yes/No answer is wrong on its face): set "should_be" (Yes/No) and "reason" = one concise ' +
+  'factual reason (e.g. "the property is a condominium").\n' +
+  '  - "inconsistent" (conflicts with another disclosure form): set "other_form" = the other form, concise (e.g. ' +
+  '"the TDS").\n' +
+  '  - "document" (a supporting document in the package contradicts it): set "document" = the doc (e.g. "a WBSA ' +
+  '(Wooden Balconies and Stairs Addendum)") and "should_be".\n' +
+  '  - "transaction" (information elsewhere in the transaction contradicts it): set "source" = one of MLS, title, ' +
+  'the HOA documents, the purchase agreement, the legal description, escrow instructions.\n' +
+  'Keep each reason to ONE concise sentence, state FACTS only, do NOT use "appears", "may", or "possibly", and do ' +
+  'NOT use em or en dashes in any field.\n' +
   'ALSO return key_answers for the facts we cross-check against our own records: "spq_7e" = the marked answer to ' +
   'SPQ question 7E (one of "yes" / "no" / "blank", or "na" if there is no SPQ in the package); "hoa_any_no" = ' +
   '"yes" if ANY HOA / common-interest question (TDS Section C items C12/C13/C14, SPQ 6G, SPQ Section 14) is marked ' +
   'No or left blank, "no" if they are all Yes, "na" if those forms are not present.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
   '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25"}],' +
-  '"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<brief reason, no dashes>"}],' +
+  '"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect>","other_form":"<for inconsistent>","document":"<for document>","source":"<for transaction>"}],' +
   '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na"}}';
 
 async function identifyForms(docs) {
@@ -594,11 +602,15 @@ async function identifyForms(docs) {
           form: String(r.form || '').trim(),
           item: String(r.item || '').trim(),
           issue: String(r.issue || '').trim(),
+          discrepancy_type: String(r.discrepancy_type || '').trim().toLowerCase(),
           marked: String(r.marked || '').trim(),
           should_be: String(r.should_be || '').trim(),
           reason: String(r.reason || r.note || '').trim(),
+          other_form: String(r.other_form || '').trim(),
+          document: String(r.document || '').trim(),
+          source: String(r.source || '').trim(),
         }))
-        .filter((r) => r.form || r.item || r.reason) : [];
+        .filter((r) => r.form || r.item || r.reason || r.other_form || r.document || r.source) : [];
       const ka = parsed.key_answers || {};
       const keyAnswers = { spq_7e: String(ka.spq_7e || 'na').toLowerCase().trim(), hoa_any_no: String(ka.hoa_any_no || 'na').toLowerCase().trim() };
       return { propertyAddress: String(parsed.property_address || '').trim(), forms, responseFlags, keyAnswers, dropped };
@@ -739,13 +751,13 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.note || ''}`));
   if (ctx.yearBuilt && (ka.spq_7e === 'yes' || ka.spq_7e === 'no') && !hasFlag(/7e/i)) {
     if (ctx.yearBuilt >= 1978 && ka.spq_7e === 'yes') {
-      ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', marked: 'Yes', should_be: 'No', reason: `the property was built ${ctx.yearBuilt}, after 1978` });
+      ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: 'Yes', should_be: 'No', reason: `the property was built in ${ctx.yearBuilt}` });
     } else if (ctx.yearBuilt < 1978 && ka.spq_7e === 'no') {
-      ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', marked: 'No', should_be: 'Yes', reason: `the property was built ${ctx.yearBuilt}, before 1978, and an LPD is required` });
+      ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: 'No', should_be: 'Yes', reason: `the property was built in ${ctx.yearBuilt}` });
     }
   }
   if (ctx.hasHoa === true && ka.hoa_any_no === 'yes' && !hasFlag(/hoa|common\s*interest|c1[234]|6g|section\s*14/i)) {
-    ctxFlags.push({ form: 'SPQ', item: '14', issue: 'answer_contradicts_package', marked: 'No', should_be: 'Yes', reason: 'the property is in an HOA per our records' });
+    ctxFlags.push({ form: 'SPQ', item: '14', issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: 'No', should_be: 'Yes', reason: 'the property is in an HOA' });
   }
   if (ctxFlags.length) responseFlags = (Array.isArray(responseFlags) ? responseFlags : []).concat(ctxFlags);
 
@@ -794,8 +806,24 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // standard wording; everything else is a confirm/clarify line. No em dashes.
   const stripDashes = (s) => String(s || '').replace(/\s*[—–]\s*/g, ', ');
   const flagRef = (f) => [f.form, f.item].filter(Boolean).join(' ');
-  const isRevise = (f) => !!f.should_be || f.issue === 'answer_contradicts_package';
-  const reviseLine = (f) => `${flagRef(f)}: Marked ${f.marked || 'No'}; however, ${stripDashes(f.reason)}. The response should be revised to ${f.should_be || 'Yes'}.`;
+  const isRevise = (f) => !!f.should_be || !!f.other_form || !!f.document || !!f.source || f.issue === 'answer_contradicts_package';
+  const sourceVerb = (src) => (/(documents|instructions)\b/i.test(src) ? 'indicate' : 'indicates');
+  // Type-specific wording so each correction reads like a TC, not a template.
+  const reviseLine = (f) => {
+    const ref = flagRef(f);
+    const marked = f.marked || 'No';
+    const t = f.discrepancy_type || (f.other_form ? 'inconsistent' : f.document ? 'document' : f.source ? 'transaction' : 'incorrect');
+    if (t === 'inconsistent' && f.other_form) {
+      return `${ref}: Marked ${marked}; however, this response is inconsistent with ${stripDashes(f.other_form)}. The response should be revised for consistency.`;
+    }
+    if (t === 'document' && f.document) {
+      return `${ref}: Marked ${marked}; however, ${stripDashes(f.document)} is included in the disclosure package. The response should be revised to ${f.should_be || 'Yes'}.`;
+    }
+    if (t === 'transaction' && f.source) {
+      return `${ref}: Marked ${marked}; however, ${stripDashes(f.source)} ${sourceVerb(f.source)} otherwise. The response should be revised accordingly.`;
+    }
+    return `${ref}: Marked ${marked}; however, ${stripDashes(f.reason)}. The response should be revised to ${f.should_be || 'Yes'}.`;
+  };
   const confirmLine = (f) => `${flagRef(f)}: ${stripDashes(f.reason || f.issue || '')}`;
   const flagLine = (f) => (isRevise(f) ? reviseLine(f) : confirmLine(f));
   const reviseFlags = flags.filter(isRevise);
