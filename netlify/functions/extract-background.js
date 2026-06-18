@@ -634,6 +634,24 @@ exports.handler = async function(event, context) {
       });
 
       const data = await response.json();
+
+      // Canonicalize property_address to USPS shorthand suffixes (Avenue -> Ave) so the
+      // RLA output matches the RPA + master sheet. The model returns the fields as a JSON
+      // string in the text block; rewrite that field in place. Best-effort, never fatal.
+      try {
+        const tb = (data.content || []).find((b) => b.type === 'text');
+        if (tb && tb.text) {
+          const m = tb.text.match(/\{[\s\S]*\}/);
+          if (m) {
+            const obj = JSON.parse(m[0]);
+            if (obj && obj.property_address) {
+              obj.property_address = canonicalAddress(obj.property_address);
+              tb.text = JSON.stringify(obj);
+            }
+          }
+        }
+      } catch (e) { console.warn('extract-background: RLA address canonicalization skipped: ' + e.message); }
+
       await store.setJSON(jobId, {
         ...existing,
         status: 'complete',
