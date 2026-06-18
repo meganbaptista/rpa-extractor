@@ -746,17 +746,22 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // package-only check can't catch (e.g. SPQ 7E when the build year isn't in the pack).
   const ctx = await fetchDealContext(address);
   const ka = keyAnswers || {};
-  console.log(`[disclosure-intake] context check ${address}: yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} | spq_7e=${ka.spq_7e} hoa_any_no=${ka.hoa_any_no}`);
+  // Tolerant parse: the model may answer "Yes" / "marked yes" / "y" etc., not exactly "yes".
+  const norm7e = String(ka.spq_7e || '').toLowerCase();
+  const sev = (/\bna\b|not\s*applicable/.test(norm7e)) ? '' : ((/\byes\b/.test(norm7e) || norm7e === 'y') ? 'yes' : ((/\bno\b/.test(norm7e) || norm7e === 'n') ? 'no' : ''));
+  const hoaNo = /\byes\b/.test(String(ka.hoa_any_no || '').toLowerCase());
+  const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no}`;
+  console.log(`[disclosure-intake] context check ${address}: ${debugContext}`);
   const ctxFlags = [];
-  const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.note || ''}`));
-  if (ctx.yearBuilt && (ka.spq_7e === 'yes' || ka.spq_7e === 'no') && !hasFlag(/7e/i)) {
-    if (ctx.yearBuilt >= 1978 && ka.spq_7e === 'yes') {
+  const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.reason || ''}`));
+  if (ctx.yearBuilt && sev && !hasFlag(/7e/i)) {
+    if (ctx.yearBuilt >= 1978 && sev === 'yes') {
       ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: 'Yes', should_be: 'No', reason: `the property was built in ${ctx.yearBuilt}` });
-    } else if (ctx.yearBuilt < 1978 && ka.spq_7e === 'no') {
+    } else if (ctx.yearBuilt < 1978 && sev === 'no') {
       ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: 'No', should_be: 'Yes', reason: `the property was built in ${ctx.yearBuilt}` });
     }
   }
-  if (ctx.hasHoa === true && ka.hoa_any_no === 'yes' && !hasFlag(/hoa|common\s*interest|c1[234]|6g|section\s*14/i)) {
+  if (ctx.hasHoa === true && hoaNo && !hasFlag(/hoa|common\s*interest|c1[234]|6g|section\s*14/i)) {
     ctxFlags.push({ form: 'SPQ', item: '14', issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: 'No', should_be: 'Yes', reason: 'the property is in an HOA' });
   }
   if (ctxFlags.length) responseFlags = (Array.isArray(responseFlags) ? responseFlags : []).concat(ctxFlags);
@@ -897,6 +902,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     outdated_versions_text: outdated.map(outdatedLine).join('; '),
     biw_found: biwFound ? 'yes' : 'no',
     biw_alert: biwAlert,
+    context_debug: debugContext,
     summary: result.summary || '',
     ps_comment: psComment,
     chase_email_subject: chaseEmailSubject,
