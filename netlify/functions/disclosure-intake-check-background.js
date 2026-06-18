@@ -55,6 +55,12 @@ const CALLBACK_URL_ENV = process.env.DISCLOSURE_INTAKE_CALLBACK_URL || '';
 // unset, the audit list must be passed in the request body instead.
 const AUDIT_LIST_CSV_URL = process.env.AUDIT_LIST_CSV_URL || '';
 
+// Published-CSV URL of the "Current Form Versions" Google Sheet (form code/name ->
+// current revision MM/YY). Maintained by the TC, updated ~1-2x/year as CAR releases
+// new versions. The intake flags any received form whose printed revision is OLDER
+// than the current. If unset, version checking is skipped.
+const FORM_VERSIONS_CSV_URL = process.env.FORM_VERSIONS_CSV_URL || '';
+
 // Per-deal accumulation lives here, keyed by normalized property address.
 const STATE_STORE = 'disclosure-intake-state';
 
@@ -154,6 +160,81 @@ async function fetchAuditListByAddress(address) {
     console.warn(`[disclosure-intake] audit-list lookup failed: ${err.message}`);
     return '';
   }
+}
+
+// ----------------------------------------------------------------------------
+// Form-version currency. CAR forms stamp a revision date ("Revised MM/YY"); the
+// listing side sometimes sends an outdated version. We read each received form's
+// printed revision and flag any that are OLDER than the current version listed in
+// the "Current Form Versions" sheet.
+// ----------------------------------------------------------------------------
+
+// Parse a revision like "6/26", "Revised 6/26", "10/2024" -> a comparable number
+// (year*12 + month). 2-digit years are read as 20YY. Returns null if unparseable.
+function revToNum(s) {
+  const m = String(s || '').match(/(\d{1,2})\s*\/\s*(\d{2,4})/);
+  if (!m) return null;
+  const month = parseInt(m[1], 10);
+  let year = parseInt(m[2], 10);
+  if (year < 100) year += 2000;
+  if (month < 1 || month > 12) return null;
+  return year * 12 + month;
+}
+function revLabel(s) {
+  const m = String(s || '').match(/(\d{1,2})\s*\/\s*(\d{2,4})/);
+  if (!m) return String(s || '').trim();
+  let year = m[2]; if (year.length === 4) year = year.slice(2);
+  return `${parseInt(m[1], 10)}/${year}`;
+}
+
+// Read the current-versions sheet into [{ key, version }] (key = a form code or a
+// distinctive name fragment, e.g. "SPQ" or "Orange County Local Area").
+async function fetchFormVersions() {
+  if (!FORM_VERSIONS_CSV_URL) return [];
+  try {
+    const res = await fetch(FORM_VERSIONS_CSV_URL);
+    if (!res.ok) { console.warn(`[disclosure-intake] form-versions sheet fetch ${res.status}`); return []; }
+    const rows = parseCsv(await res.text());
+    if (rows.length < 2) return [];
+    const header = rows[0].map((h) => String(h).toLowerCase().trim());
+    let keyCol = header.findIndex((h) => /form|code|name/.test(h));
+    let verCol = header.findIndex((h) => /version|revision|current|date/.test(h));
+    if (keyCol < 0) keyCol = 0;
+    if (verCol < 0) verCol = 1;
+    return rows.slice(1)
+      .map((r) => ({ key: String(r[keyCol] || '').trim(), version: String(r[verCol] || '').trim() }))
+      .filter((e) => e.key && e.version && revToNum(e.version) != null);
+  } catch (err) {
+    console.warn(`[disclosure-intake] form-versions lookup failed: ${err.message}`);
+    return [];
+  }
+}
+
+const vnorm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+// Does a received form match a versions-sheet key? Whole-key match against the
+// form's code+name (word-bounded), so short codes like "SA" don't match "SBSA".
+function formMatchesKey(form, key) {
+  const k = vnorm(key);
+  if (!k) return false;
+  const hay = vnorm(`${form.code || ''} ${form.name || ''}`);
+  return new RegExp('\\b' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(hay);
+}
+
+// Compare each received form's revision to the current versions; return outdated.
+function findOutdatedForms(received, versions) {
+  const out = [];
+  for (const f of (received || [])) {
+    const got = revToNum(f.revision);
+    if (got == null) continue; // no readable revision on the received form
+    const entry = (versions || []).find((v) => formMatchesKey(f, v.key));
+    if (!entry) continue; // no current-version reference for this form
+    const cur = revToNum(entry.version);
+    if (cur != null && got < cur) {
+      out.push({ name: f.name || f.code || entry.key, received: revLabel(f.revision), current: revLabel(entry.version) });
+    }
+  }
+  return out;
 }
 
 // ----------------------------------------------------------------------------
@@ -398,7 +479,11 @@ const IDENTIFY_PROMPT =
   '"Homeowner\'s Guide to Environmental Hazards and Earthquake Safety" booklet — both the standard CAR receipt and ' +
   'custom brokerage equivalents such as a "Receipt for Links to Booklets" page (a page acknowledging receipt of the ' +
   'environmental hazards / earthquake safety / HERS / lead booklets). Name that receipt clearly, e.g. ' +
-  '"Earthquake/Environmental Hazards Booklet Receipt".\n\n' +
+  '"Earthquake/Environmental Hazards Booklet Receipt".\n' +
+  'For EACH form, also read its printed REVISION DATE and return it as "revision" in M/YY form. CAR forms print it ' +
+  'under the title ("C.A.R. Form SPQ, Revised 12/25") and in the footer ("SPQ REVISED 12/25"). Local/county forms ' +
+  '(e.g. an Orange County Local Area Disclosure) print their own date. Return empty string for "revision" if no ' +
+  'revision date is printed on the form.\n\n' +
   'ALSO do a LIGHT buyer-side response check on the forms that actually have questions/answers (SPQ, TDS, SBSA, ' +
   'and similar Q&A disclosures). Be lenient. Flag ONLY: (a) a question or section left BLANK / unanswered; (b) an ' +
   'item the seller marked YES where there is NO written explanation, the explanation is ILLEGIBLE, or it is present ' +
@@ -406,7 +491,7 @@ const IDENTIFY_PROMPT =
   'do NOT review forms that have no questions (receipts, booklets, profiles, AVID, certifications). ' +
   'For each flag give the form code, the question/section reference, the issue, and a short note.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
-  '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement"}],' +
+  '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25"}],' +
   '"response_flags":[{"form":"SPQ","item":"<question/section>","issue":"unanswered|yes_no_explanation|explanation_unclear","note":"<short reason>"}]}';
 
 async function identifyForms(docs) {
@@ -429,7 +514,7 @@ async function identifyForms(docs) {
       const raw = await callClaude(content, 12000);
       const parsed = parseJson(raw);
       const forms = Array.isArray(parsed.forms) ? parsed.forms
-        .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim() }))
+        .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim() }))
         .filter((f) => f.code || f.name) : [];
       const responseFlags = Array.isArray(parsed.response_flags) ? parsed.response_flags
         .map((r) => ({ form: String(r.form || '').trim(), item: String(r.item || '').trim(), issue: String(r.issue || '').trim(), note: String(r.note || '').trim() }))
@@ -573,6 +658,13 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
   const flags = Array.isArray(responseFlags) ? responseFlags : [];
 
+  // Form-version currency: flag any received form whose printed revision is OLDER
+  // than the current version listed in the Current Form Versions sheet, so we can
+  // request the up-to-date version from the listing side.
+  const formVersions = await fetchFormVersions();
+  const outdated = findOutdatedForms(received, formVersions);
+  const outdatedLine = (o) => `${o.name}: received ${o.received}, current ${o.current}`;
+
   // Split the reconciled "still needed" into what we must REQUEST from the listing
   // side vs what our team prepares in-house. Only the listing-side items drive the
   // count, the chase email, and the status; prepared-by-us items stay visible in
@@ -580,8 +672,9 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const stillNeededAll = (Array.isArray(result.still_needed) ? result.still_needed : []).map((n) => fmtSfls(n, true));
   const preparedByUs = stillNeededAll.filter(isPreparedByUs);
   const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x));
-  // Anything to follow up on with the listing side = missing docs OR response flags.
-  const followupCount = stillNeeded.length + flags.length;
+  // Anything to follow up on with the listing side = missing docs OR response flags
+  // OR outdated form versions.
+  const followupCount = stillNeeded.length + flags.length + outdated.length;
   const overall = followupCount ? (result.overall === 'complete' ? 'outstanding' : (result.overall || 'outstanding')) : 'complete';
 
   // Human-readable response issue: "SPQ 7E — marked Yes, no explanation written".
@@ -600,6 +693,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     `Status: ${overall} | ${present.length} of the required disclosures received; ${stillNeeded.length} to request, ${flags.length} response(s) to clarify\n\n` +
     (biwAlert ? `** ${biwAlert} **\n\n` : '') +
     `TO REQUEST FROM LISTING SIDE:\n${bullets(stillNeeded, (x) => x)}\n\n` +
+    (outdated.length ? `OUTDATED VERSIONS (request current):\n${bullets(outdated, outdatedLine)}\n\n` : '') +
     (flags.length ? `RESPONSES TO VERIFY:\n${bullets(flags, flagLine)}\n\n` : '') +
     `RECEIVED:\n${bullets(present, (x) => x)}\n\n` +
     (preparedByUs.length ? `PREPARED BY US (do not request):\n${bullets(preparedByUs, (x) => x)}\n\n` : '') +
@@ -619,6 +713,9 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
       (stillNeeded.length
         ? '\nStill outstanding:\n' + stillNeeded.map((x) => `- ${x}`).join('\n') + '\n'
         : '') +
+      (outdated.length
+        ? '\nThe following were sent in an outdated version. Please send the current version:\n' + outdated.map((o) => `- ${o.name} (received ${o.received}; current ${o.current})`).join('\n') + '\n'
+        : '') +
       (flags.length
         ? '\nResponses we would appreciate clarification on:\n' + flags.map((f) => `- ${[f.form, f.item].filter(Boolean).join(' ')}${f.note ? `: ${f.note}` : ''}`).join('\n') + '\n'
         : '') +
@@ -632,6 +729,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     overall_status: overall,
     still_needed_count: stillNeeded.length,
     response_flags_count: flags.length,
+    outdated_count: outdated.length,
     followup_count: followupCount,
     // Received Count = how many of THIS deal's required disclosures are in hand
     // (meaningful for a TC). The raw count of distinct forms parsed across all
@@ -641,13 +739,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     still_needed_text: stillNeeded.join(', '),
     prepared_by_us_text: preparedByUs.join(', '),
     response_flags_text: flags.map(flagLine).join('; '),
+    outdated_versions_text: outdated.map(outdatedLine).join('; '),
     biw_found: biwFound ? 'yes' : 'no',
     biw_alert: biwAlert,
     summary: result.summary || '',
     ps_comment: psComment,
     chase_email_subject: chaseEmailSubject,
     chase_email_body: chaseEmailBody,
-    result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, verify, not_applicable: na, response_flags: flags },
+    result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, verify, not_applicable: na, response_flags: flags, outdated_versions: outdated },
   };
 
   console.log(`[disclosure-intake] ${address}: ${overall} — ${stillNeeded.length} to request, ${flags.length} response flag(s), ${preparedByUs.length} prepared by us`);
