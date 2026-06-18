@@ -484,15 +484,30 @@ const IDENTIFY_PROMPT =
   'under the title ("C.A.R. Form SPQ, Revised 12/25") and in the footer ("SPQ REVISED 12/25"). Local/county forms ' +
   '(e.g. an Orange County Local Area Disclosure) print their own date. Return empty string for "revision" if no ' +
   'revision date is printed on the form.\n\n' +
-  'ALSO do a LIGHT buyer-side response check on the forms that actually have questions/answers (SPQ, TDS, SBSA, ' +
-  'and similar Q&A disclosures). Be lenient. Flag ONLY: (a) a question or section left BLANK / unanswered; (b) an ' +
-  'item the seller marked YES where there is NO written explanation, the explanation is ILLEGIBLE, or it is present ' +
-  'but TOO VAGUE to understand. Do NOT judge whether a disclosed issue is concerning, do NOT flag NO answers, and ' +
-  'do NOT review forms that have no questions (receipts, booklets, profiles, AVID, certifications). ' +
-  'For each flag give the form code, the question/section reference, the issue, and a short note.\n\n' +
+  'ALSO do a buyer-side response check on the forms that have questions/answers (SPQ, TDS, SBSA, and similar Q&A ' +
+  'disclosures). READ the ACTUAL marked answers (Yes / No / blank), do not just note items to verify. Flag:\n' +
+  '(a) a question or section left BLANK / unanswered;\n' +
+  '(b) an item marked YES with NO written explanation, an ILLEGIBLE explanation, or one TOO VAGUE to understand;\n' +
+  '(c) an answer that CONTRADICTS a fact evident in this package (the seller likely marked it wrong) — read the ' +
+  'actual mark and report it. In particular:\n' +
+  '   - HOA / common interest: if anything in the package shows the property is in an HOA or common interest ' +
+  'development (an HOA or CC&R disclosure is present, HOA dues are referenced, or the forms otherwise indicate an ' +
+  'HOA), then the HOA questions MUST be YES — TDS Section C common-interest/HOA items (e.g. C12, C13, C14) and SPQ ' +
+  '6G and SPQ Section 14. If any of those is marked NO (or left blank), flag it, naming the exact item and that it ' +
+  'should be YES because the property is in an HOA.\n' +
+  '   - Provided documents: SPQ Section 6 asks whether specific reports/booklets/advisories were provided (e.g. 6K). ' +
+  'If that document is PHYSICALLY PRESENT in this package, the matching "provided?" box should be YES; flag it if it ' +
+  'is not marked YES.\n' +
+  '   - Year built / lead paint: if the property\'s year built is evident anywhere in the package, the pre-1978 ' +
+  'lead-based-paint question (SPQ 7E) must match it — built 1978 or later means 7E should be NO; built before 1978 ' +
+  'means 7E should be YES (and an LPD is required). Flag a contradicting answer. If the year built is NOT in the ' +
+  'package, skip this check.\n' +
+  'Do NOT moralize about whether a disclosed issue is concerning, and do NOT review forms with no questions ' +
+  '(receipts, booklets, profiles, AVID, certifications). For each flag give the form, the question/section, the ' +
+  'issue, and a short note stating the MARKED answer and what it should be.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
   '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25"}],' +
-  '"response_flags":[{"form":"SPQ","item":"<question/section>","issue":"unanswered|yes_no_explanation|explanation_unclear","note":"<short reason>"}]}';
+  '"response_flags":[{"form":"SPQ","item":"<question/section>","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","note":"<marked answer and what it should be>"}]}';
 
 async function identifyForms(docs) {
   // Backstop: Claude caps a request at ~32MB / 100 pages. If a large file (e.g. an
