@@ -151,9 +151,16 @@ async function fetchAuditListByAddress(address) {
     let listCol = header.findIndex((h) => /disclos|required|audit|docs|list/.test(h));
     if (addrCol < 0) addrCol = 0;
     if (listCol < 0) listCol = 1;
+    // If the same address appears more than once (e.g. a cancelled deal + a re-opened
+    // one), prefer the LAST non-empty match — rows are appended, so newest wins.
+    let match = '';
     for (const r of rows.slice(1)) {
-      if (addrMatch(r[addrCol] || '', address)) return String(r[listCol] || '').trim();
+      if (addrMatch(r[addrCol] || '', address)) {
+        const v = String(r[listCol] || '').trim();
+        if (v) match = v;
+      }
     }
+    if (match) return match;
     console.warn(`[disclosure-intake] no audit-list row matched "${address}"`);
     return '';
   } catch (err) {
@@ -177,16 +184,18 @@ async function fetchDealContext(address) {
     const yearCol = header.findIndex((h) => /year\s*built|yr\s*built|\byear\b/.test(h));
     const hoaCol = header.findIndex((h) => /\bhoa\b|common\s*interest/.test(h));
     if (addrCol < 0) addrCol = 0;
+    // Last matching row wins (newest after a re-open).
+    let ctx = empty;
     for (const r of rows.slice(1)) {
       if (!addrMatch(r[addrCol] || '', address)) continue;
       const ym = yearCol >= 0 ? String(r[yearCol] || '').match(/\b(1[89]\d{2}|20\d{2})\b/) : null;
       const hoaRaw = hoaCol >= 0 ? String(r[hoaCol] || '').trim().toLowerCase() : '';
-      return {
+      ctx = {
         yearBuilt: ym ? parseInt(ym[1], 10) : null,
         hasHoa: hoaRaw ? /^y|true|1/.test(hoaRaw) : null,
       };
     }
-    return empty;
+    return ctx;
   } catch (err) {
     console.warn(`[disclosure-intake] deal-context lookup failed: ${err.message}`);
     return empty;

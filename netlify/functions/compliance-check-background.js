@@ -99,9 +99,15 @@ async function fetchComplianceListByAddress(address) {
     let listCol = header.findIndex((h) => /compliance|purchase\s*agreement|contract\s*docs/.test(h));
     if (addrCol < 0) addrCol = 0;
     if (listCol < 0) { console.warn('[compliance-check] no Compliance Documents column found'); return ''; }
+    // Last non-empty match wins, so a re-opened deal's newer row beats a cancelled one.
+    let match = '';
     for (const r of rows.slice(1)) {
-      if (addrMatch(r[addrCol] || '', address)) return String(r[listCol] || '').trim();
+      if (addrMatch(r[addrCol] || '', address)) {
+        const v = String(r[listCol] || '').trim();
+        if (v) match = v;
+      }
     }
+    if (match) return match;
     console.warn(`[compliance-check] no compliance row matched "${address}"`);
     return '';
   } catch (err) {
