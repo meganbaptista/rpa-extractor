@@ -450,7 +450,7 @@ Rules for PART 2:
 - Each finding is ONE tight sentence in "detail". Do not write a paragraph.
 - Per-page initials appear in "findings" ONLY as a specific named page that is genuinely missing or unreadable -- never as a page range, and never at all if the page-by-page pass found them present.
 - This audit does not produce QC findings. Do not add findings for blank data fields, form-choice issues, or other non-signature observations.
-- "action_items": a client-ready restatement of the findings for the transaction coordinator to copy and send to the OTHER side of the deal. Write ONE line per issue in plain English, phrased as a clear notice or courteous request (e.g. "Seller's signature on the SCO and RPA (Section 33D) shows the trust name only -- please have the trustee re-execute signing with capacity, e.g. 'Jane Doe, Trustee'."). NO severity tags, NO S1/S2/N codes, NO internal jargon -- it must read like a message a coordinator would send to the other agent. Combine closely related findings into a single line where that reads more naturally. Order from most to least important. If there are no findings, use an empty array. The action_items must correspond to the findings -- do not introduce issues not in "findings".
+- "action_items": a client-ready restatement of the findings for the transaction coordinator to copy and send to the OTHER side of the deal. Write ONE line per issue in plain English, phrased as a clear notice or courteous request (e.g. "Seller's signature on the SCO and RPA (Section 33D) shows the trust name only -- please have the trustee re-execute signing with capacity, e.g. 'Jane Doe, Trustee'."). NO severity tags, NO S1/S2/N codes, NO internal jargon -- it must read like a message a coordinator would send to the other agent. Combine closely related findings into a single line where that reads more naturally. Order from most to least important. If there are no findings, use an empty array. The action_items must correspond to the findings -- do not introduce issues not in "findings". NEVER use em dashes ("—") or en dashes ("–") anywhere in action_items; restructure with periods, commas, parentheses, or the word "to" instead (ordinary hyphens in compound words are fine).
 - The JSON must be valid and parseable. PART 1 prose is the audit; PART 2 JSON is the machine-readable summary of it -- they must agree.`;
 }
 
@@ -516,7 +516,11 @@ function buildZapierPayload(jobId, auditPart, completedAtMs, propertyAddress, ap
           const det = f && f.detail ? ` ${f.detail}` : '';
           return `• ${iss}.${det}`;
         })
-    ).join('\n');
+    ).join('\n')
+      // Backstop for Megan's no-em-dash rule: the action_list is copied and sent to the
+      // other side, so strip any em/en dashes the model still produced (surrounding
+      // spaces collapse into a comma). Ordinary hyphens in compound words are untouched.
+      .replace(/\s*[—–]\s*/g, ', ');
 
     return {
       jobId: jobId,
