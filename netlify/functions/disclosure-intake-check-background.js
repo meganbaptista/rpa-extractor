@@ -162,6 +162,37 @@ async function fetchAuditListByAddress(address) {
   }
 }
 
+// Deal context (Year Built, HOA) from the master sheet — facts the disclosure
+// package may not contain (sourced from MLS/PP) that we cross-check answers against.
+async function fetchDealContext(address) {
+  const empty = { yearBuilt: null, hasHoa: null };
+  if (!AUDIT_LIST_CSV_URL || !address) return empty;
+  try {
+    const res = await fetch(AUDIT_LIST_CSV_URL);
+    if (!res.ok) return empty;
+    const rows = parseCsv(await res.text());
+    if (rows.length < 2) return empty;
+    const header = rows[0].map((h) => String(h).toLowerCase().trim());
+    let addrCol = header.findIndex((h) => h.includes('address'));
+    const yearCol = header.findIndex((h) => /year\s*built|yr\s*built|\byear\b/.test(h));
+    const hoaCol = header.findIndex((h) => /\bhoa\b|common\s*interest/.test(h));
+    if (addrCol < 0) addrCol = 0;
+    for (const r of rows.slice(1)) {
+      if (!addrMatch(r[addrCol] || '', address)) continue;
+      const ym = yearCol >= 0 ? String(r[yearCol] || '').match(/\b(1[89]\d{2}|20\d{2})\b/) : null;
+      const hoaRaw = hoaCol >= 0 ? String(r[hoaCol] || '').trim().toLowerCase() : '';
+      return {
+        yearBuilt: ym ? parseInt(ym[1], 10) : null,
+        hasHoa: hoaRaw ? /^y|true|1/.test(hoaRaw) : null,
+      };
+    }
+    return empty;
+  } catch (err) {
+    console.warn(`[disclosure-intake] deal-context lookup failed: ${err.message}`);
+    return empty;
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Form-version currency. CAR forms stamp a revision date ("Revised MM/YY"); the
 // listing side sometimes sends an outdated version. We read each received form's
@@ -504,10 +535,15 @@ const IDENTIFY_PROMPT =
   'package, skip this check.\n' +
   'Do NOT moralize about whether a disclosed issue is concerning, and do NOT review forms with no questions ' +
   '(receipts, booklets, profiles, AVID, certifications). For each flag give the form, the question/section, the ' +
-  'issue, and a short note stating the MARKED answer and what it should be.\n\n' +
+  'issue, and a short note stating the MARKED answer and what it should be.\n' +
+  'ALSO return key_answers for the facts we cross-check against our own records: "spq_7e" = the marked answer to ' +
+  'SPQ question 7E (one of "yes" / "no" / "blank", or "na" if there is no SPQ in the package); "hoa_any_no" = ' +
+  '"yes" if ANY HOA / common-interest question (TDS Section C items C12/C13/C14, SPQ 6G, SPQ Section 14) is marked ' +
+  'No or left blank, "no" if they are all Yes, "na" if those forms are not present.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
   '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25"}],' +
-  '"response_flags":[{"form":"SPQ","item":"<question/section>","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","note":"<marked answer and what it should be>"}]}';
+  '"response_flags":[{"form":"SPQ","item":"<question/section>","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","note":"<marked answer and what it should be>"}],' +
+  '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na"}}';
 
 async function identifyForms(docs) {
   // Backstop: Claude caps a request at ~32MB / 100 pages. If a large file (e.g. an
@@ -534,7 +570,9 @@ async function identifyForms(docs) {
       const responseFlags = Array.isArray(parsed.response_flags) ? parsed.response_flags
         .map((r) => ({ form: String(r.form || '').trim(), item: String(r.item || '').trim(), issue: String(r.issue || '').trim(), note: String(r.note || '').trim() }))
         .filter((r) => r.form || r.item || r.note) : [];
-      return { propertyAddress: String(parsed.property_address || '').trim(), forms, responseFlags, dropped };
+      const ka = parsed.key_answers || {};
+      const keyAnswers = { spq_7e: String(ka.spq_7e || 'na').toLowerCase().trim(), hoa_any_no: String(ka.hoa_any_no || 'na').toLowerCase().trim() };
+      return { propertyAddress: String(parsed.property_address || '').trim(), forms, responseFlags, keyAnswers, dropped };
     } catch (err) {
       const tooLarge = /\b413\b|request_too_large|too\s*large/i.test(err.message || '');
       if (tooLarge && working.length > 1) {
@@ -546,7 +584,7 @@ async function identifyForms(docs) {
       throw err;
     }
   }
-  return { propertyAddress: '', forms: [], responseFlags: [], dropped };
+  return { propertyAddress: '', forms: [], responseFlags: [], keyAnswers: { spq_7e: 'na', hoa_any_no: 'na' }, dropped };
 }
 
 // Merge two form lists, de-duping on code (case-insensitive), then name.
@@ -582,15 +620,21 @@ async function identifyFormsChunked(docs) {
   if (cur.length) batches.push(cur);
 
   let allForms = [], address = '', dropped = [], responseFlags = [];
+  const keyAnswers = { spq_7e: 'na', hoa_any_no: 'na' };
   for (let i = 0; i < batches.length; i++) {
     const r = await identifyForms(batches[i]);
     allForms = mergeForms(allForms, r.forms);
     if (r.responseFlags && r.responseFlags.length) responseFlags = responseFlags.concat(r.responseFlags);
+    // First batch with a real (non-na) answer wins — the SPQ/TDS live in one batch.
+    if (r.keyAnswers) {
+      if (keyAnswers.spq_7e === 'na' && r.keyAnswers.spq_7e && r.keyAnswers.spq_7e !== 'na') keyAnswers.spq_7e = r.keyAnswers.spq_7e;
+      if (keyAnswers.hoa_any_no === 'na' && r.keyAnswers.hoa_any_no && r.keyAnswers.hoa_any_no !== 'na') keyAnswers.hoa_any_no = r.keyAnswers.hoa_any_no;
+    }
     if (!address && r.propertyAddress) address = r.propertyAddress;
     if (r.dropped && r.dropped.length) dropped = dropped.concat(r.dropped);
     console.log(`[disclosure-intake] identify batch ${i + 1}/${batches.length} (${batches[i].length} doc[s]): ${r.forms.length} form(s), ${(r.responseFlags || []).length} response flag(s)`);
   }
-  return { propertyAddress: address, forms: allForms, responseFlags, dropped };
+  return { propertyAddress: address, forms: allForms, responseFlags, keyAnswers, dropped };
 }
 
 // ----------------------------------------------------------------------------
@@ -650,11 +694,30 @@ async function sendCallback(callbackUrl, payload) {
 // Reconcile the accumulated received set for a deal against its audit list and
 // POST the result to the callback. Shared by single-delivery mode and finalize.
 // ----------------------------------------------------------------------------
-async function reconcileAndCallback(address, received, auditList, callback, responseFlags = []) {
+async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}) {
   let listText = (auditList && String(auditList).trim()) || '';
   if (!listText) listText = await fetchAuditListByAddress(address);
   if (!listText) throw new Error(`No audit list for "${address}" — pass auditList in the body, or add a matching row to the AUDIT_LIST_CSV_URL sheet.`);
   const result = await reconcile(listText, received);
+
+  // Cross-check the seller's answers against our own records (Year Built, HOA from
+  // the master sheet) — facts the disclosure package may not contain. Adds flags the
+  // package-only check can't catch (e.g. SPQ 7E when the build year isn't in the pack).
+  const ctx = await fetchDealContext(address);
+  const ka = keyAnswers || {};
+  const ctxFlags = [];
+  const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.note || ''}`));
+  if (ctx.yearBuilt && (ka.spq_7e === 'yes' || ka.spq_7e === 'no') && !hasFlag(/7e/i)) {
+    if (ctx.yearBuilt >= 1978 && ka.spq_7e === 'yes') {
+      ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', note: `marked Yes (pre-1978) but property was built ${ctx.yearBuilt}; should be No` });
+    } else if (ctx.yearBuilt < 1978 && ka.spq_7e === 'no') {
+      ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', note: `marked No but property was built ${ctx.yearBuilt} (pre-1978); should be Yes and an LPD is required` });
+    }
+  }
+  if (ctx.hasHoa === true && ka.hoa_any_no === 'yes' && !hasFlag(/hoa|common\s*interest|c1[234]|6g|section\s*14/i)) {
+    ctxFlags.push({ form: 'HOA', item: 'HOA questions', issue: 'answer_contradicts_package', note: 'property is in an HOA per our records, but an HOA/common-interest question is marked No or blank; should be Yes' });
+  }
+  if (ctxFlags.length) responseFlags = (Array.isArray(responseFlags) ? responseFlags : []).concat(ctxFlags);
 
   // SFLS carries reference sqft in the audit list (e.g. "SFLS - Tax: 2,230 MLS: 2,854 sqft").
   // Many brokerages don't require the SFLS form; we just want confirmation. Strip the sqft
@@ -806,6 +869,7 @@ exports.handler = async function (event) {
       const slotKeys = [];
       let batchForms = [];
       let batchFlags = [];
+      const batchKeyAnswers = { spq_7e: 'na', hoa_any_no: 'na' };
       if (batchId) {
         const listing = await store.list({ prefix: `recv:${batchId}:` });
         for (const b of (listing.blobs || [])) {
@@ -813,6 +877,10 @@ exports.handler = async function (event) {
           const item = await store.get(b.key, { type: 'json' });
           if (item && Array.isArray(item.forms)) batchForms = mergeForms(batchForms, item.forms);
           if (item && Array.isArray(item.responseFlags)) batchFlags = batchFlags.concat(item.responseFlags);
+          if (item && item.keyAnswers) {
+            if (batchKeyAnswers.spq_7e === 'na' && item.keyAnswers.spq_7e && item.keyAnswers.spq_7e !== 'na') batchKeyAnswers.spq_7e = item.keyAnswers.spq_7e;
+            if (batchKeyAnswers.hoa_any_no === 'na' && item.keyAnswers.hoa_any_no && item.keyAnswers.hoa_any_no !== 'na') batchKeyAnswers.hoa_any_no = item.keyAnswers.hoa_any_no;
+          }
         }
       }
       const prior = (await store.get(key, { type: 'json' })) || { address, received: [] };
@@ -820,7 +888,7 @@ exports.handler = async function (event) {
       await store.setJSON(key, { address, received, updatedAt: Date.now() });
       console.log(`[disclosure-intake] finalize ${address}: merged ${batchForms.length} from ${slotKeys.length} slot(s) -> ${received.length} total`);
       for (const k of slotKeys) { try { await store.delete(k); } catch (e) { /* cleanup best-effort */ } }
-      await reconcileAndCallback(address, received, auditList, callback, batchFlags);
+      await reconcileAndCallback(address, received, auditList, callback, batchFlags, batchKeyAnswers);
       return { statusCode: 200 };
     }
 
@@ -833,7 +901,7 @@ exports.handler = async function (event) {
       throw new Error('No documents could be loaded (need fetchable url or base64)');
     }
 
-    const { propertyAddress: detectedAddr, forms: newForms, responseFlags: newFlags = [], dropped } = await identifyFormsChunked(docs);
+    const { propertyAddress: detectedAddr, forms: newForms, responseFlags: newFlags = [], keyAnswers: newKeyAnswers = {}, dropped } = await identifyFormsChunked(docs);
     if (dropped && dropped.length) console.warn(`[disclosure-intake] dropped oversized doc(s) to fit the model: ${dropped.join(', ')}`);
     const address = canonicalAddress(detectedAddr || propertyAddress || '');
     if (!address) throw new Error('Could not read a property address from the documents');
@@ -845,7 +913,7 @@ exports.handler = async function (event) {
     // background functions can't clobber each other). finalize merges the slots later.
     if (accumulateOnly) {
       const slot = `recv:${batchId || 'nobatch'}:${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-      await store.setJSON(slot, { address, forms: newForms, responseFlags: newFlags });
+      await store.setJSON(slot, { address, forms: newForms, responseFlags: newFlags, keyAnswers: newKeyAnswers });
       if (batchId) await store.setJSON('batch:' + batchId, { address, updatedAt: Date.now() });
       console.log(`[disclosure-intake] ${address}: accumulate-only, stored ${newForms.length} form(s), ${newFlags.length} flag(s) in slot (batch ${batchId || 'n/a'})`);
       return { statusCode: 200 };
@@ -856,7 +924,7 @@ exports.handler = async function (event) {
     const received = mergeForms(prior.received, newForms);
     await store.setJSON(key, { address, received, updatedAt: Date.now() });
     console.log(`[disclosure-intake] ${address}: ${received.length} form(s) received so far (was ${prior.received.length})`);
-    await reconcileAndCallback(address, received, auditList, callback, newFlags);
+    await reconcileAndCallback(address, received, auditList, callback, newFlags, newKeyAnswers);
     return { statusCode: 200 };
   } catch (err) {
     console.error('[disclosure-intake] ERROR:', err.message);
