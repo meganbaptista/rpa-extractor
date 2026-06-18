@@ -548,15 +548,20 @@ const IDENTIFY_PROMPT =
   'means 7E should be YES (and an LPD is required). Flag a contradicting answer. If the year built is NOT in the ' +
   'package, skip this check.\n' +
   'Do NOT moralize about whether a disclosed issue is concerning, and do NOT review forms with no questions ' +
-  '(receipts, booklets, profiles, AVID, certifications). For each flag give the form, the question/section, the ' +
-  'issue, and a short note stating the MARKED answer and what it should be.\n' +
+  '(receipts, booklets, profiles, AVID, certifications).\n' +
+  'For EACH flag return: "form" (e.g. SPQ, TDS); "item" = the CONCISE question code ONLY (e.g. 6K, C14, 14C, 7E, ' +
+  '6G) with NO words like "Section" or "Item" and NO parentheticals such as "(common area)"; "issue"; "marked" = ' +
+  'the marked answer ("Yes", "No", or "blank"); "should_be" = the answer it should be ("Yes" or "No") for ' +
+  'contradiction flags (empty for blank/explanation flags); "reason" = a brief plain reason (e.g. "the property is ' +
+  'a condominium", "a WBSA is included in the package"). Do NOT use em dashes or en dashes in any field; use ' +
+  'commas, semicolons, or periods.\n' +
   'ALSO return key_answers for the facts we cross-check against our own records: "spq_7e" = the marked answer to ' +
   'SPQ question 7E (one of "yes" / "no" / "blank", or "na" if there is no SPQ in the package); "hoa_any_no" = ' +
   '"yes" if ANY HOA / common-interest question (TDS Section C items C12/C13/C14, SPQ 6G, SPQ Section 14) is marked ' +
   'No or left blank, "no" if they are all Yes, "na" if those forms are not present.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
   '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25"}],' +
-  '"response_flags":[{"form":"SPQ","item":"<question/section>","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","note":"<marked answer and what it should be>"}],' +
+  '"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<brief reason, no dashes>"}],' +
   '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na"}}';
 
 async function identifyForms(docs) {
@@ -585,8 +590,15 @@ async function identifyForms(docs) {
         .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim() }))
         .filter((f) => f.code || f.name) : [];
       const responseFlags = Array.isArray(parsed.response_flags) ? parsed.response_flags
-        .map((r) => ({ form: String(r.form || '').trim(), item: String(r.item || '').trim(), issue: String(r.issue || '').trim(), note: String(r.note || '').trim() }))
-        .filter((r) => r.form || r.item || r.note) : [];
+        .map((r) => ({
+          form: String(r.form || '').trim(),
+          item: String(r.item || '').trim(),
+          issue: String(r.issue || '').trim(),
+          marked: String(r.marked || '').trim(),
+          should_be: String(r.should_be || '').trim(),
+          reason: String(r.reason || r.note || '').trim(),
+        }))
+        .filter((r) => r.form || r.item || r.reason) : [];
       const ka = parsed.key_answers || {};
       const keyAnswers = { spq_7e: String(ka.spq_7e || 'na').toLowerCase().trim(), hoa_any_no: String(ka.hoa_any_no || 'na').toLowerCase().trim() };
       return { propertyAddress: String(parsed.property_address || '').trim(), forms, responseFlags, keyAnswers, dropped };
@@ -727,13 +739,13 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.note || ''}`));
   if (ctx.yearBuilt && (ka.spq_7e === 'yes' || ka.spq_7e === 'no') && !hasFlag(/7e/i)) {
     if (ctx.yearBuilt >= 1978 && ka.spq_7e === 'yes') {
-      ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', note: `marked Yes (pre-1978) but property was built ${ctx.yearBuilt}; should be No` });
+      ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', marked: 'Yes', should_be: 'No', reason: `the property was built ${ctx.yearBuilt}, after 1978` });
     } else if (ctx.yearBuilt < 1978 && ka.spq_7e === 'no') {
-      ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', note: `marked No but property was built ${ctx.yearBuilt} (pre-1978); should be Yes and an LPD is required` });
+      ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', marked: 'No', should_be: 'Yes', reason: `the property was built ${ctx.yearBuilt}, before 1978, and an LPD is required` });
     }
   }
   if (ctx.hasHoa === true && ka.hoa_any_no === 'yes' && !hasFlag(/hoa|common\s*interest|c1[234]|6g|section\s*14/i)) {
-    ctxFlags.push({ form: 'HOA', item: 'HOA questions', issue: 'answer_contradicts_package', note: 'property is in an HOA per our records, but an HOA/common-interest question is marked No or blank; should be Yes' });
+    ctxFlags.push({ form: 'SPQ', item: '14', issue: 'answer_contradicts_package', marked: 'No', should_be: 'Yes', reason: 'the property is in an HOA per our records' });
   }
   if (ctxFlags.length) responseFlags = (Array.isArray(responseFlags) ? responseFlags : []).concat(ctxFlags);
 
@@ -778,8 +790,16 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const followupCount = stillNeeded.length + flags.length + outdated.length;
   const overall = followupCount ? (result.overall === 'complete' ? 'outstanding' : (result.overall || 'outstanding')) : 'complete';
 
-  // Human-readable response issue: "SPQ 7E — marked Yes, no explanation written".
-  const flagLine = (f) => `${[f.form, f.item].filter(Boolean).join(' ')}${f.note ? ` — ${f.note}` : ` — ${f.issue}`}`;
+  // Flag formatting. "Revise" flags (the seller's answer should be corrected) use the
+  // standard wording; everything else is a confirm/clarify line. No em dashes.
+  const stripDashes = (s) => String(s || '').replace(/\s*[—–]\s*/g, ', ');
+  const flagRef = (f) => [f.form, f.item].filter(Boolean).join(' ');
+  const isRevise = (f) => !!f.should_be || f.issue === 'answer_contradicts_package';
+  const reviseLine = (f) => `${flagRef(f)}: Marked ${f.marked || 'No'}; however, ${stripDashes(f.reason)}. The response should be revised to ${f.should_be || 'Yes'}.`;
+  const confirmLine = (f) => `${flagRef(f)}: ${stripDashes(f.reason || f.issue || '')}`;
+  const flagLine = (f) => (isRevise(f) ? reviseLine(f) : confirmLine(f));
+  const reviseFlags = flags.filter(isRevise);
+  const confirmFlags = flags.filter((f) => !isRevise(f));
 
   // BIW alert: a Buyer Inspection Waiver should NOT be forwarded to the buyer with the
   // disclosures. If one is in the package, flag it for removal (internal note, not the
@@ -795,7 +815,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     (biwAlert ? `** ${biwAlert} **\n\n` : '') +
     `TO REQUEST FROM LISTING SIDE:\n${bullets(stillNeeded, (x) => x)}\n\n` +
     (outdated.length ? `OUTDATED VERSIONS (request current):\n${bullets(outdated, outdatedLine)}\n\n` : '') +
-    (flags.length ? `RESPONSES TO VERIFY:\n${bullets(flags, flagLine)}\n\n` : '') +
+    (reviseFlags.length ? `RESPONSES TO REVISE:\n${bullets(reviseFlags, reviseLine)}\n\n` : '') +
+    (confirmFlags.length ? `RESPONSES TO CONFIRM:\n${bullets(confirmFlags, confirmLine)}\n\n` : '') +
     `RECEIVED:\n${bullets(present, (x) => x)}\n\n` +
     (preparedByUs.length ? `PREPARED BY US (do not request):\n${bullets(preparedByUs, (x) => x)}\n\n` : '') +
     (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
@@ -817,12 +838,17 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
       (outdated.length
         ? '\nThe following were sent in an outdated version. Please send the current version:\n' + outdated.map((o) => `- ${o.name} (received ${o.received}; current ${o.current})`).join('\n') + '\n'
         : '') +
-      (flags.length
-        ? '\nResponses we would appreciate clarification on:\n' + flags.map((f) => `- ${[f.form, f.item].filter(Boolean).join(' ')}${f.note ? `: ${f.note}` : ''}`).join('\n') + '\n'
+      (reviseFlags.length
+        ? '\nPlease revise the following disclosures to address the inconsistencies below:\n' + reviseFlags.map((f) => `- ${reviseLine(f)}`).join('\n') + '\n'
+        : '') +
+      (confirmFlags.length
+        ? '\nPlease confirm the following:\n' + confirmFlags.map((f) => `- ${confirmLine(f)}`).join('\n') + '\n'
         : '') +
       '\nWhen you have a moment, please send these over so we can wrap up our review. ' +
       'If any have already been provided or do not apply, just let me know.\n\n' +
       `Thanks!\n${signer}`;
+    // Backstop for Megan's no-em-dash rule across the whole email body.
+    chaseEmailBody = stripDashes(chaseEmailBody);
   }
 
   const payload = {
