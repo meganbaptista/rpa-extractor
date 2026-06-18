@@ -587,9 +587,18 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // Human-readable response issue: "SPQ 7E — marked Yes, no explanation written".
   const flagLine = (f) => `${[f.form, f.item].filter(Boolean).join(' ')}${f.note ? ` — ${f.note}` : ` — ${f.issue}`}`;
 
+  // BIW alert: a Buyer Inspection Waiver should NOT be forwarded to the buyer with the
+  // disclosures. If one is in the package, flag it for removal (internal note, not the
+  // chase email). Matches BIW specifically — never the BIA buyer inspection ADVISORY.
+  const biwFound = (received || []).some((f) => /\bbiw\b|buyer'?s?\s*inspection\s*waiver|waiver\s*of\s*(the\s*)?(right\s*to\s*)?inspect|inspection\s*waiver/i.test(`${f.code || ''} ${f.name || ''}`));
+  const biwAlert = biwFound
+    ? 'ACTION: A Buyer Inspection Waiver (BIW) is in this package. Remove it before forwarding the disclosures to the buyer.'
+    : '';
+
   const psComment =
     `Disclosure intake — ${address}\n` +
     `Status: ${overall} | ${present.length} of the required disclosures received; ${stillNeeded.length} to request, ${flags.length} response(s) to clarify\n\n` +
+    (biwAlert ? `** ${biwAlert} **\n\n` : '') +
     `TO REQUEST FROM LISTING SIDE:\n${bullets(stillNeeded, (x) => x)}\n\n` +
     (flags.length ? `RESPONSES TO VERIFY:\n${bullets(flags, flagLine)}\n\n` : '') +
     `RECEIVED:\n${bullets(present, (x) => x)}\n\n` +
@@ -632,6 +641,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     still_needed_text: stillNeeded.join(', '),
     prepared_by_us_text: preparedByUs.join(', '),
     response_flags_text: flags.map(flagLine).join('; '),
+    biw_found: biwFound ? 'yes' : 'no',
+    biw_alert: biwAlert,
     summary: result.summary || '',
     ps_comment: psComment,
     chase_email_subject: chaseEmailSubject,
