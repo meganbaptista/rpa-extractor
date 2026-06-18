@@ -789,6 +789,9 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const formVersions = await fetchFormVersions();
   const outdated = findOutdatedForms(received, formVersions);
   const outdatedLine = (o) => `${o.name}: received ${o.received}, current ${o.current}`;
+  const revisionsRead = (received || []).filter((f) => f.revision).map((f) => `${f.code || f.name}=${f.revision}`).join(', ') || '(none read)';
+  const versionsDebug = `versionsSheetRows=${formVersions.length} outdated=${outdated.length} | revisionsRead: ${revisionsRead}`;
+  console.log(`[disclosure-intake] version check ${address}: ${versionsDebug}`);
 
   // Split the reconciled "still needed" into what we must REQUEST from the listing
   // side vs what our team prepares in-house. Only the listing-side items drive the
@@ -903,6 +906,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     biw_found: biwFound ? 'yes' : 'no',
     biw_alert: biwAlert,
     context_debug: debugContext,
+    versions_debug: versionsDebug,
     summary: result.summary || '',
     ps_comment: psComment,
     chase_email_subject: chaseEmailSubject,
