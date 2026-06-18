@@ -571,7 +571,10 @@ async function identifyForms(docs) {
     try {
       // Ceiling is generous: adaptive thinking + effort:high count toward max_tokens,
       // and a multi-form packet can require a lot of reasoning before the small JSON.
-      const raw = await callClaude(content, 12000);
+      // Generous ceiling: identify now also reads each form's revision date, runs the
+      // answer-contradiction check, and returns key_answers — adaptive thinking + this
+      // output can run long, so leave plenty of room to avoid a max_tokens truncation.
+      const raw = await callClaude(content, 24000);
       const parsed = parseJson(raw);
       const forms = Array.isArray(parsed.forms) ? parsed.forms
         .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim() }))
