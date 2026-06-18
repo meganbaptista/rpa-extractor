@@ -556,7 +556,19 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   if (!listText) throw new Error(`No audit list for "${address}" — pass auditList in the body, or add a matching row to the AUDIT_LIST_CSV_URL sheet.`);
   const result = await reconcile(listText, received);
 
-  const present = Array.isArray(result.present) ? result.present : [];
+  // SFLS carries reference sqft in the audit list (e.g. "SFLS - Tax: 2,230 MLS: 2,854 sqft").
+  // Many brokerages don't require the SFLS form; we just want confirmation. Strip the sqft
+  // and, when it's still outstanding, turn it into a clear ask to the listing side.
+  const fmtSfls = (name, stillNeeded) => {
+    if (/^\s*sfls\b/i.test(String(name || ''))) {
+      return stillNeeded
+        ? 'SFLS - If your brokerage does not require this form, please email us confirming this'
+        : 'SFLS';
+    }
+    return name;
+  };
+
+  const present = (Array.isArray(result.present) ? result.present : []).map((n) => fmtSfls(n, false));
   const verify = Array.isArray(result.verify) ? result.verify : [];
   const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
   const flags = Array.isArray(responseFlags) ? responseFlags : [];
@@ -565,7 +577,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // side vs what our team prepares in-house. Only the listing-side items drive the
   // count, the chase email, and the status; prepared-by-us items stay visible in
   // the PS comment as our own to-do.
-  const stillNeededAll = Array.isArray(result.still_needed) ? result.still_needed : [];
+  const stillNeededAll = (Array.isArray(result.still_needed) ? result.still_needed : []).map((n) => fmtSfls(n, true));
   const preparedByUs = stillNeededAll.filter(isPreparedByUs);
   const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x));
   // Anything to follow up on with the listing side = missing docs OR response flags.
