@@ -722,6 +722,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // package-only check can't catch (e.g. SPQ 7E when the build year isn't in the pack).
   const ctx = await fetchDealContext(address);
   const ka = keyAnswers || {};
+  console.log(`[disclosure-intake] context check ${address}: yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} | spq_7e=${ka.spq_7e} hoa_any_no=${ka.hoa_any_no}`);
   const ctxFlags = [];
   const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.note || ''}`));
   if (ctx.yearBuilt && (ka.spq_7e === 'yes' || ka.spq_7e === 'no') && !hasFlag(/7e/i)) {
