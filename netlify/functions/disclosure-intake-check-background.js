@@ -519,7 +519,8 @@ const IDENTIFY_PROMPT =
   '"Homeowner\'s Guide to Environmental Hazards and Earthquake Safety" booklet — both the standard CAR receipt and ' +
   'custom brokerage equivalents such as a "Receipt for Links to Booklets" page (a page acknowledging receipt of the ' +
   'environmental hazards / earthquake safety / HERS / lead booklets). Name that receipt clearly, e.g. ' +
-  '"Earthquake/Environmental Hazards Booklet Receipt".\n' +
+  '"Earthquake/Environmental Hazards Booklet Receipt". Also recognize the WBSA (Wooden Balconies and Stairs ' +
+  'Addendum, C.A.R. Form WBSA) when its page is present.\n' +
   'For EACH form, also read its printed REVISION DATE and return it as "revision" in M/YY form. CAR forms print it ' +
   'under the title ("C.A.R. Form SPQ, Revised 12/25") and in the footer ("SPQ REVISED 12/25"). Local/county forms ' +
   '(e.g. an Orange County Local Area Disclosure) print their own date. Return empty string for "revision" if no ' +
@@ -538,6 +539,10 @@ const IDENTIFY_PROMPT =
   '   - Provided documents: SPQ Section 6 asks whether specific reports/booklets/advisories were provided (e.g. 6K). ' +
   'If that document is PHYSICALLY PRESENT in this package, the matching "provided?" box should be YES; flag it if it ' +
   'is not marked YES.\n' +
+  '   - WBSA consistency: if a WBSA (Wooden Balconies and Stairs Addendum) is in this package, then the SPQ ' +
+  'question about wooden balconies / decks / stairways / elevated wooden elements / SB 326 or SB 721 inspection ' +
+  '(this is SPQ 6K) should be answered consistently — i.e. YES. If SPQ 6K is marked NO while a WBSA was provided, ' +
+  'flag it: the seller provided a WBSA, which is inconsistent with a No on 6K.\n' +
   '   - Year built / lead paint: if the property\'s year built is evident anywhere in the package, the pre-1978 ' +
   'lead-based-paint question (SPQ 7E) must match it — built 1978 or later means 7E should be NO; built before 1978 ' +
   'means 7E should be YES (and an LPD is required). Flag a contradicting answer. If the year built is NOT in the ' +
