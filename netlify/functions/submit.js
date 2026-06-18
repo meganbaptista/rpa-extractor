@@ -288,25 +288,35 @@ exports.handler = async function(event) {
     // and swallowed. The extraction 202 response below is unaffected. There
     // is no audit jobId in the response: V1 is two-PS-workflow, and nothing
     // in the extractor UI waits on the audit.
-    try {
-      const auditJobId = crypto.randomUUID();
-      await payloadStore.setJSON(auditJobId, {
-        documents: documents,
-        prompt_override: body.prompt_override || null
-      });
+    //
+    // SKIP for listing-agreement (RLA) runs: the signature audit is built for the
+    // purchase-agreement packet (RPA signatures/initials/counter chain/escrow). A
+    // listing agreement has none of that, so the audit gets confused and fails. The
+    // RLA path is the only one that sends a prompt_override; RPA runs send null and
+    // are still audited.
+    if (body.prompt_override) {
+      console.log('submit: skipping signature-audit fan-out for listing-agreement (prompt_override) run, jobId=' + jobId);
+    } else {
+      try {
+        const auditJobId = crypto.randomUUID();
+        await payloadStore.setJSON(auditJobId, {
+          documents: documents,
+          prompt_override: body.prompt_override || null
+        });
 
-      const auditUrl = protocol + '://' + host + '/.netlify/functions/audit-orchestrator-background';
-      await fetch(auditUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: auditJobId })  // No overrides — V1
-      });
+        const auditUrl = protocol + '://' + host + '/.netlify/functions/audit-orchestrator-background';
+        await fetch(auditUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: auditJobId })  // No overrides — V1
+        });
 
-      console.log('submit: fanned out audit for extraction jobId=' + jobId + ', auditJobId=' + auditJobId);
-    } catch (auditErr) {
-      // Audit fan-out failure must NEVER touch the extraction path. Log and
-      // continue — the extraction will still succeed and return 202 below.
-      console.error('audit fan-out failed for extraction jobId=' + jobId + ': ' + auditErr.message);
+        console.log('submit: fanned out audit for extraction jobId=' + jobId + ', auditJobId=' + auditJobId);
+      } catch (auditErr) {
+        // Audit fan-out failure must NEVER touch the extraction path. Log and
+        // continue — the extraction will still succeed and return 202 below.
+        console.error('audit fan-out failed for extraction jobId=' + jobId + ': ' + auditErr.message);
+      }
     }
 
     return {
