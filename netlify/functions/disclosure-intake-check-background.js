@@ -392,7 +392,13 @@ const IDENTIFY_PROMPT =
   'referenced, cross-mentioned, or described inside another form. Examples of what NOT to count: the TDS Section III ' +
   '"Agent Inspection Disclosure" is part of the TDS, not a separate AVID; SBSA discussing wildfire/natural hazards is ' +
   'not a separate Wildfire or NHD form; the DIA describing the ESD is not an ESD. Also read the property street ' +
-  'address from the forms.\n\n' +
+  'address from the forms.\n' +
+  'Also list these as their own present documents when their pages are physically here: the Natural Hazard ' +
+  'Disclosure report (any provider — FANHD, JCP-LGS, Disclosure Source); and the RECEIPT/acknowledgment page for the ' +
+  '"Homeowner\'s Guide to Environmental Hazards and Earthquake Safety" booklet — both the standard CAR receipt and ' +
+  'custom brokerage equivalents such as a "Receipt for Links to Booklets" page (a page acknowledging receipt of the ' +
+  'environmental hazards / earthquake safety / HERS / lead booklets). Name that receipt clearly, e.g. ' +
+  '"Earthquake/Environmental Hazards Booklet Receipt".\n\n' +
   'ALSO do a LIGHT buyer-side response check on the forms that actually have questions/answers (SPQ, TDS, SBSA, ' +
   'and similar Q&A disclosures). Be lenient. Flag ONLY: (a) a question or section left BLANK / unanswered; (b) an ' +
   'item the seller marked YES where there is NO written explanation, the explanation is ILLEGIBLE, or it is present ' +
@@ -504,8 +510,17 @@ async function reconcile(auditList, received) {
     'SFLS, MCA, DIA, NHD, RFR, etc.) to the received forms.\n' +
     '- Conditionals: items marked "if any", "only SFR required", "once completed", "Contingency Release(s)", or that ' +
     'are inherently later/escrow items, are "not_applicable" unless clearly required and absent.\n' +
-    '- Content/receipt checks: when the form IS present but the item is really a per-answer or signed-receipt check ' +
-    '(e.g. "SPQ 7E: Yes", "Earthquake Booklet Receipt" when the booklet is present), mark it "verify".\n' +
+    '- NHD is a PRESENT/MISSING item, never "verify". If a Natural Hazard Disclosure report (any provider — FANHD, ' +
+    'JCP-LGS, Disclosure Source, etc.) is in the package, put the NHD requirement in "present". If it is absent, put it ' +
+    'in "still_needed".\n' +
+    '- Earthquake / Environmental Hazards booklet RECEIPT is a PRESENCE check, never "verify". If the receipt/' +
+    'acknowledgment page for the "Homeowner\'s Guide to Environmental Hazards and Earthquake Safety" booklet is in the ' +
+    'package — the standard CAR receipt OR a custom brokerage equivalent (e.g. "Receipt for Links to Booklets", or any ' +
+    'page acknowledging receipt of the environmental hazards / earthquake safety / HERS / lead booklets) — put it in ' +
+    '"present". If absent, put it in "still_needed". Do NOT add a "confirm signed" note for it.\n' +
+    '- "verify" is reserved ONLY for genuine per-answer content confirmations where the form is present but a specific ' +
+    'answer should be eyeballed (e.g. "SPQ 7E: Yes, pre-1978 build"). Keep verify minimal; do NOT put whole documents ' +
+    'or receipts there.\n' +
     '- Do NOT count a form as received just because it is referenced inside another form.\n\n' +
     'Respond with ONLY this JSON (no prose, no fences):\n' +
     '{"overall":"complete|outstanding","present":["..names.."],"still_needed":["..names.."],' +
