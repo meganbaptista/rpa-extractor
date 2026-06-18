@@ -688,7 +688,7 @@ exports.handler = async function(event, context) {
       text: 'Extract all required fields from the attached California real estate purchase agreement package by calling the extract_contract_fields tool. Read each field description carefully — they contain specific source-priority and disambiguation rules.'
     }];
 
-    const callApi = (msgContent, tool) => fetch('https://api.anthropic.com/v1/messages', {
+    const callApi = (msgContent, tool, model) => fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -696,7 +696,7 @@ exports.handler = async function(event, context) {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: model || 'claude-sonnet-4-6',
         max_tokens: 4096,
         tools: [tool],
         tool_choice: { type: "tool", name: tool.name },
@@ -1081,6 +1081,50 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
             extractionStatus === 'vision_trim_sonnet') {
           extractionStatus = 'failed_all_paths';
         }
+      }
+    }
+
+    // ── OPUS ESCALATION (robustness for hard PDFs: signed / scanned / image) ──
+    // Sonnet handles clean PDFs; on a hard packet (e.g. an Adobe-signed, image-
+    // rendered bundle) it can miss core fields, and the server-side render fallback
+    // can't process signed PDFs so it yields nothing -> blanks shipped. Rather than
+    // return a confident-but-empty result, re-run the FULL extraction ONCE on Opus
+    // 4.8 (native PDF vision, no server-side render dependency — the same model that
+    // reads hard packets reliably in the audit) and fill any field Sonnet left blank.
+    // Only fires on weak results, so clean PDFs stay on Sonnet and stay cheap.
+    const CRITICAL_FIELDS = ['buyer_names', 'seller_names', 'property_address', 'final_purchase_price'];
+    const missingCritical = CRITICAL_FIELDS.filter((k) => !(mergedFields[k] && String(mergedFields[k]).trim() !== ''));
+    const weakStatus = ['failed_all_paths', 'image_fallback_sonnet', 'vision_trim_sonnet'].includes(extractionStatus);
+    if (missingCritical.length > 0 || weakStatus) {
+      console.warn('extract-background: escalating to Opus (missingCritical=[' + missingCritical.join(', ') + '], status=' + extractionStatus + ')');
+      // On the blind image-fallback path Sonnet's date/buyer-agent values are
+      // confabulation-prone (the existing anti-fabrication safeguard normally blanks
+      // them). Clear them now so the fill-only merge lets Opus's reliable read replace
+      // them. If Opus then fails, they stay blank (same as today, never fabricated).
+      if (extractionStatus === 'image_fallback_sonnet') {
+        ['date_rpa_prepared', 'buyer_agent_name', 'buyer_agent_dre', 'buyer_agent_name_2', 'buyer_agent_dre_2',
+         'buyer_agent_brokerage_name', 'buyer_agent_brokerage_dre', 'buyer_agent_address', 'buyer_agent_email', 'buyer_agent_phone']
+          .forEach((f) => { mergedFields[f] = ''; });
+      }
+      try {
+        const opusResp = await callApi(mainContent, extractionTool, 'claude-opus-4-8');
+        const opusTool = findToolUse(opusResp);
+        if (opusTool && opusTool.input) {
+          let opusFilled = 0;
+          for (const [k, v] of Object.entries(opusTool.input)) {
+            // Fill only what Sonnet left blank — keep Sonnet's confirmed values.
+            if (v && String(v).trim() !== '' && !(mergedFields[k] && String(mergedFields[k]).trim() !== '')) {
+              mergedFields[k] = v;
+              opusFilled++;
+            }
+          }
+          extractionStatus = 'opus_escalation';
+          console.log('extract-background: Opus escalation filled ' + opusFilled + ' field(s)');
+        } else {
+          console.warn('extract-background: Opus escalation returned no tool_use');
+        }
+      } catch (opusErr) {
+        console.error('extract-background: Opus escalation failed (keeping Sonnet result): ' + opusErr.message);
       }
     }
 
