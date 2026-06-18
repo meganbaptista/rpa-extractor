@@ -761,7 +761,12 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // the PS comment as our own to-do.
   const stillNeededAll = (Array.isArray(result.still_needed) ? result.still_needed : []).map((n) => fmtSfls(n, true));
   const preparedByUs = stillNeededAll.filter(isPreparedByUs);
-  const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x));
+  // Brokerage Affiliate Disclosures ("if any" items requested at opening): if not in the
+  // package we assume the brokerage has none, so never re-request — move to not_applicable.
+  const isAssumeNone = (name) => /brokerage\s*affiliate|affiliated\s*business\b/i.test(String(name || ''));
+  const assumeNone = stillNeededAll.filter((x) => !isPreparedByUs(x) && isAssumeNone(x));
+  for (const x of assumeNone) na.push({ item: x, note: 'Requested at opening; if not provided, assume the brokerage has none on file.' });
+  const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x) && !isAssumeNone(x));
   // Anything to follow up on with the listing side = missing docs OR response flags
   // OR outdated form versions.
   const followupCount = stillNeeded.length + flags.length + outdated.length;
