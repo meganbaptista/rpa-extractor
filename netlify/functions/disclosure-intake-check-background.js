@@ -555,8 +555,12 @@ const IDENTIFY_PROMPT =
   '"discrepancy_type" and fill the matching fields, so each reads like a TC requesting revised disclosures:\n' +
   '  - "incorrect" (the Yes/No answer is wrong on its face): set "should_be" (Yes/No) and "reason" = one concise ' +
   'factual reason (e.g. "the property is a condominium").\n' +
-  '  - "inconsistent" (conflicts with another disclosure form): set "other_form" = the other form, concise (e.g. ' +
-  '"the TDS").\n' +
+  '  - "inconsistent" (one form\'s answer genuinely conflicts with a RELATED answer on another form that actually ' +
+  'addresses it): set "other_form" AND set "reason" to the SPECIFIC conflicting answer on that other form (e.g. ' +
+  '"the seller indicates they occupy the property") so the request is not vague. Flag a REAL conflict only, do not ' +
+  'invent one. Real example: SPQ 18E marked "property is tenant occupied = Yes" conflicts with the TDS where the ' +
+  'seller indicates they occupy the property. If you cannot point to a concrete conflicting answer on a specific ' +
+  'form, do not use this type.\n' +
   '  - "document" (a supporting document in the package contradicts it): set "document" = the doc (e.g. "a WBSA ' +
   '(Wooden Balconies and Stairs Addendum)") and "should_be".\n' +
   '  - "transaction" (information elsewhere in the transaction contradicts it): set "source" = one of MLS, title, ' +
@@ -822,7 +826,10 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     const marked = f.marked || 'No';
     const t = f.discrepancy_type || (f.other_form ? 'inconsistent' : f.document ? 'document' : f.source ? 'transaction' : 'incorrect');
     if (t === 'inconsistent' && f.other_form) {
-      return `${ref}: Marked ${marked}; however, this response is inconsistent with ${stripDashes(f.other_form)}. The response should be revised for consistency.`;
+      const detail = stripDashes(f.reason);
+      return detail
+        ? `${ref}: Marked ${marked}; however, this is inconsistent with ${stripDashes(f.other_form)}, where ${detail}. The response should be revised for consistency.`
+        : `${ref}: Marked ${marked}; however, this response is inconsistent with ${stripDashes(f.other_form)}. The response should be revised for consistency.`;
     }
     if (t === 'document' && f.document) {
       return `${ref}: Marked ${marked}; however, ${stripDashes(f.document)} is included in the disclosure package. The response should be revised to ${f.should_be || 'Yes'}.`;
