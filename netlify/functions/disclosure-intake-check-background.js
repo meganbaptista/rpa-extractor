@@ -571,6 +571,14 @@ const IDENTIFY_PROMPT =
   'its TDS subsection (e.g. "II A Water Heater", "II A Roof"), "issue":"detail_incomplete", "marked":"present", and ' +
   '"reason" = the specific blank detail phrased to drop into a request, e.g. "the type (Gas/Solar/Electric) is left ' +
   'blank" or "the Age is left blank". Do NOT flag an item that is simply not checked / not present.\n' +
+  'ALSO inspect the SELLER signature block(s) on the signed disclosure forms (TDS, SPQ, SBSA and similar). If a ' +
+  'seller signed as an ENTITY rather than as a natural person, raise a flag: this is when the signature line shows a ' +
+  'trust, LLC, corporation, estate, or partnership name (e.g. "Smith Family Trust") instead of an individual person, ' +
+  'OR the entity name is signed without an individual signing in a representative capacity (no "..., Trustee" / ' +
+  '"..., Manager" / "..., its President"). Return a flag with "form":"Seller signature", "item":"entity signer", ' +
+  '"issue":"entity_signer", and "reason" = a one-line request naming the entity, e.g. "Seller signed as an entity ' +
+  '(Smith Family Trust); please provide a Trust Certification and have the trustee sign in a representative capacity, ' +
+  'or confirm the signer\'s authority to sign". Do NOT flag an ordinary individual seller signature.\n' +
   'Do NOT moralize about whether a disclosed issue is concerning, and do NOT review forms with no questions ' +
   '(receipts, booklets, profiles, AVID, certifications).\n' +
   'For EACH flag return: "form" (e.g. SPQ, TDS); "item" = the CONCISE question code ONLY (e.g. 6K, C14, 14C, 7E) ' +
@@ -600,11 +608,14 @@ const IDENTIFY_PROMPT =
   'cleared or that flammable materials be removed. FIND THIS QUESTION BY ITS DESCRIPTION, NOT BY A FIXED LETTER: it ' +
   'is item 17F on the SPQ revised 12/24 and item 17G on the SPQ revised 6/26, and the letter can move again on other ' +
   'revisions; "fire_clearance_item" = the item letter/number exactly as printed on this form (e.g. "17F" or "17G"), ' +
-  'or "" if not found.\n\n' +
+  'or "" if not found; "fhds" = "yes" if a Fire Hardening Disclosure and Advisory (C.A.R. Form FHDS) is present AND ' +
+  'completed as required (its Section 2 compliance boxes are checked AND its Section 3 question is marked Yes), "no" ' +
+  'if an FHDS is present but Section 2 boxes are left unchecked or Section 3 is not marked Yes, or "na" if no FHDS is ' +
+  'in the package.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
   '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25"}],' +
   '"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect>","other_form":"<for inconsistent>","document":"<for document>","source":"<for transaction>"}],' +
-  '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na","fire_clearance":"yes|no|blank|na","fire_clearance_item":"17F"}}';
+  '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na","fire_clearance":"yes|no|blank|na","fire_clearance_item":"17F","fhds":"yes|no|na"}}';
 
 async function identifyForms(docs) {
   // Backstop: Claude caps a request at ~32MB / 100 pages. If a large file (e.g. an
@@ -651,6 +662,7 @@ async function identifyForms(docs) {
         hoa_any_no: String(ka.hoa_any_no || 'na').toLowerCase().trim(),
         fire_clearance: String(ka.fire_clearance || 'na').toLowerCase().trim(),
         fire_clearance_item: String(ka.fire_clearance_item || '').trim(),
+        fhds: String(ka.fhds || 'na').toLowerCase().trim(),
       };
       return { propertyAddress: String(parsed.property_address || '').trim(), forms, responseFlags, keyAnswers, dropped };
     } catch (err) {
@@ -664,7 +676,7 @@ async function identifyForms(docs) {
       throw err;
     }
   }
-  return { propertyAddress: '', forms: [], responseFlags: [], keyAnswers: { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '' }, dropped };
+  return { propertyAddress: '', forms: [], responseFlags: [], keyAnswers: { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '', fhds: 'na' }, dropped };
 }
 
 // Merge two form lists, de-duping on code (case-insensitive), then name.
@@ -700,7 +712,7 @@ async function identifyFormsChunked(docs) {
   if (cur.length) batches.push(cur);
 
   let allForms = [], address = '', dropped = [], responseFlags = [];
-  const keyAnswers = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '' };
+  const keyAnswers = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '', fhds: 'na' };
   for (let i = 0; i < batches.length; i++) {
     const r = await identifyForms(batches[i]);
     allForms = mergeForms(allForms, r.forms);
@@ -713,6 +725,7 @@ async function identifyFormsChunked(docs) {
         keyAnswers.fire_clearance = r.keyAnswers.fire_clearance;
         if (r.keyAnswers.fire_clearance_item) keyAnswers.fire_clearance_item = r.keyAnswers.fire_clearance_item;
       }
+      if (keyAnswers.fhds === 'na' && r.keyAnswers.fhds && r.keyAnswers.fhds !== 'na') keyAnswers.fhds = r.keyAnswers.fhds;
     }
     if (!address && r.propertyAddress) address = r.propertyAddress;
     if (r.dropped && r.dropped.length) dropped = dropped.concat(r.dropped);
@@ -795,7 +808,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const norm7e = String(ka.spq_7e || '').toLowerCase();
   const sev = (/\bna\b|not\s*applicable/.test(norm7e)) ? '' : ((/\byes\b/.test(norm7e) || norm7e === 'y') ? 'yes' : ((/\bno\b/.test(norm7e) || norm7e === 'n') ? 'no' : ''));
   const hoaNo = /\byes\b/.test(String(ka.hoa_any_no || '').toLowerCase());
-  const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no} fire_clearance=${ka.fire_clearance || 'na'}(${ka.fire_clearance_item || '?'})`;
+  const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no} fire_clearance=${ka.fire_clearance || 'na'}(${ka.fire_clearance_item || '?'}) fhds=${ka.fhds || 'na'}`;
   console.log(`[disclosure-intake] context check ${address}: ${debugContext}`);
   const ctxFlags = [];
   const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.reason || ''}`));
@@ -827,31 +840,51 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   let verify = Array.isArray(result.verify) ? result.verify : [];
   const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
 
-  // Fire/brush-clearance (SPQ governmental). When the compliance list asks us to
-  // verify this is Yes (it does for high fire hazard properties, like the pre-1978
-  // 7E check), resolve it ourselves from the mark we read in identify instead of
-  // punting it back for a human to eyeball. The question's letter moves by SPQ
-  // revision (17F on 12/24, 17G on 6/26), so identify located it by description and
-  // returned whatever letter the form actually printed.
-  const fireRe = /brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i;
-  const fireMark = String(ka.fire_clearance || 'na').toLowerCase().trim();
+  // Resolve the compliance list's "Confirm X marked YES" items ourselves from the
+  // answers we read during identify, instead of handing them back for a human to
+  // eyeball. Each entry maps a verify item (by text) to the mark we read; the expected
+  // answer is parsed from the item text (defaults to Yes). When the mark matches we
+  // note it as checked; when it doesn't we raise a revision request. Items we cannot
+  // read (no SPQ, no FHDS, etc.) stay under VERIFY. The fire-clearance question's
+  // letter moves by SPQ revision (17F on 12/24, 17G on 6/26); identify located it by
+  // description and returned whatever letter the form printed.
   const fireItem = String(ka.fire_clearance_item || '').trim() || 'brush/vegetation clearance';
-  const fireVerifyAsked = verify.some((v) => fireRe.test(`${v.item || ''} ${v.note || ''}`));
+  const yesno = (v) => {
+    const s = String(v || '').toLowerCase();
+    if (/\bna\b|not\s*applicable/.test(s)) return 'na';
+    if (/yes|^y$/.test(s)) return 'yes';
+    if (/\bno\b|^n$/.test(s)) return 'no';
+    if (/blank/.test(s)) return 'blank';
+    return '';
+  };
+  // hoa_any_no is "yes" when ANY HOA question is No/blank, so the HOA reading (are they
+  // all Yes?) is its inverse.
+  const hoaReading = ka.hoa_any_no === 'no' ? 'yes' : (ka.hoa_any_no === 'yes' ? 'no' : 'na');
+  const VERIFY_READINGS = [
+    { re: /hoa|common\s*interest|\bc\s*,?\s*1[234]\b|\b6g\b|section\s*14/i, mark: hoaReading, refDefault: 'HOA disclosures', reasonBad: 'the property is in an HOA / common interest development, so it should be Yes' },
+    { re: /brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i, mark: yesno(ka.fire_clearance), refDefault: `SPQ ${fireItem}`, reasonBad: 'the property is in a high fire hazard area, so it should be Yes' },
+    { re: /\bfhds\b|fire\s*hardening/i, mark: yesno(ka.fhds), refDefault: 'FHDS', reasonBad: 'Section 2 and/or Section 3 are not completed as required; please send the completed FHDS' },
+    { re: /\b7e\b|pre[-\s]*1978|lead[-\s]*based\s*paint/i, mark: yesno(ka.spq_7e), refDefault: 'SPQ 7E', reasonBad: 'the property was built before 1978, so it should be Yes' },
+  ];
   const confirmedReadings = [];
-  if (fireVerifyAsked && fireMark !== 'na' && fireMark !== '') {
-    verify = verify.filter((v) => !fireRe.test(`${v.item || ''} ${v.note || ''}`));
-    if (/yes/.test(fireMark)) {
-      // Matches the expectation — confirm it for the TC, don't chase the listing side.
-      confirmedReadings.push(`SPQ ${fireItem}: marked Yes, as expected for a high fire hazard area`);
+  const verifyKept = [];
+  for (const v of verify) {
+    const hay = `${v.item || ''} ${v.note || ''}`;
+    const r = VERIFY_READINGS.find((x) => x.re.test(hay));
+    if (!r || r.mark === '' || r.mark === 'na') { verifyKept.push(v); continue; }
+    if (hasFlag(r.re)) continue; // already resolved via the sheet-based context check above
+    const expected = /marked\s*no\b|=\s*no\b/i.test(hay) ? 'no' : 'yes';
+    // Reference the item the way the compliance list named it (e.g. "TDS C,12,13,14").
+    const ref = `${v.item ? v.item + ' ' : ''}${String(v.note || '').replace(/^\s*confirm\s+/i, '').replace(/\s*marked\s+(yes|no)\b.*$/i, '').trim()}`.trim() || r.refDefault;
+    if (r.mark === expected) {
+      confirmedReadings.push(`${ref}: marked ${expected === 'yes' ? 'Yes' : 'No'} as expected`);
     } else {
-      // Marked No/blank where the compliance list expects Yes — request a revision.
-      responseFlags = (Array.isArray(responseFlags) ? responseFlags : []).concat([{
-        form: 'SPQ', item: fireItem, issue: 'answer_contradicts_package', discrepancy_type: 'incorrect',
-        marked: /no/.test(fireMark) ? 'No' : 'blank', should_be: 'Yes',
-        reason: 'the property is in a high fire hazard area per the compliance list',
-      }]);
+      const markWord = r.mark === 'no' ? 'No' : (r.mark === 'blank' ? 'left blank' : r.mark);
+      const reason = /not\s*completed|send the completed/i.test(r.reasonBad) ? r.reasonBad : `marked ${markWord}, but ${r.reasonBad}`;
+      responseFlags = (Array.isArray(responseFlags) ? responseFlags : []).concat([{ form: '', item: ref, issue: 'verify_mismatch', reason }]);
     }
   }
+  verify = verifyKept;
 
   const flags = Array.isArray(responseFlags) ? responseFlags : [];
 
@@ -886,7 +919,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // standard wording; everything else is a confirm/clarify line. No em dashes.
   const stripDashes = (s) => String(s || '').replace(/\s*[—–]\s*/g, ', ');
   const flagRef = (f) => [f.form, f.item].filter(Boolean).join(' ');
-  const isRevise = (f) => !!f.should_be || !!f.other_form || !!f.document || !!f.source || f.issue === 'answer_contradicts_package' || f.issue === 'detail_incomplete';
+  const isRevise = (f) => !!f.should_be || !!f.other_form || !!f.document || !!f.source || f.issue === 'answer_contradicts_package' || f.issue === 'detail_incomplete' || f.issue === 'verify_mismatch' || f.issue === 'entity_signer';
   const sourceVerb = (src) => (/(documents|instructions)\b/i.test(src) ? 'indicate' : 'indicates');
   // Type-specific wording so each correction reads like a TC, not a template.
   const reviseLine = (f) => {
@@ -895,6 +928,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     // is blank: ask the listing side to complete it rather than treating it as a Yes/No.
     if (f.issue === 'detail_incomplete') {
       return `${ref}: ${stripDashes(f.reason)}; please specify it or mark Unknown.`;
+    }
+    // A compliance-list "Confirm marked YES" item we read and found not as expected,
+    // or a seller who signed as an entity. The reason is already a complete request.
+    if (f.issue === 'verify_mismatch') {
+      return `${ref}: ${stripDashes(f.reason)}.`;
+    }
+    if (f.issue === 'entity_signer') {
+      return stripDashes(f.reason);
     }
     const marked = f.marked || 'No';
     const t = f.discrepancy_type || (f.other_form ? 'inconsistent' : f.document ? 'document' : f.source ? 'transaction' : 'incorrect');
@@ -1037,7 +1078,7 @@ exports.handler = async function (event) {
       const slotKeys = [];
       let batchForms = [];
       let batchFlags = [];
-      const batchKeyAnswers = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '' };
+      const batchKeyAnswers = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '', fhds: 'na' };
       if (batchId) {
         const listing = await store.list({ prefix: `recv:${batchId}:` });
         for (const b of (listing.blobs || [])) {
@@ -1052,6 +1093,7 @@ exports.handler = async function (event) {
               batchKeyAnswers.fire_clearance = item.keyAnswers.fire_clearance;
               if (item.keyAnswers.fire_clearance_item) batchKeyAnswers.fire_clearance_item = item.keyAnswers.fire_clearance_item;
             }
+            if (batchKeyAnswers.fhds === 'na' && item.keyAnswers.fhds && item.keyAnswers.fhds !== 'na') batchKeyAnswers.fhds = item.keyAnswers.fhds;
           }
         }
       }
