@@ -72,11 +72,11 @@ const MAX_DOC_BYTES = 28 * 1024 * 1024;
 // a "prepared by us" bucket so the TC still sees them on our own to-do. Editable;
 // extend with the DISCLOSURE_PREPARED_BY_US env (comma-separated keywords).
 // DIA: we technically don't need it. "Los Angeles County Local Area Disclosures":
-// not a county requirement; we add our own per-brokerage version. Both are ours to
-// handle, so never request them from the listing side.
+// not a county requirement; we add our own per-brokerage version. WFDA: our brokerage
+// supplies its own. All are ours to handle, so never request them from the listing side.
 const PREPARED_BY_US_DEFAULTS = [
   'property profile', 'mls client', 'ba avid', 'receipt for reports', 'rfr',
-  'dia', 'los angeles county local area',
+  'dia', 'los angeles county local area', 'wfda',
 ];
 function isPreparedByUs(name) {
   const n = String(name || '').toLowerCase();
@@ -529,7 +529,12 @@ const IDENTIFY_PROMPT =
   '"Homeowner\'s Guide to Environmental Hazards and Earthquake Safety" booklet — both the standard CAR receipt and ' +
   'custom brokerage equivalents such as a "Receipt for Links to Booklets" page (a page acknowledging receipt of the ' +
   'environmental hazards / earthquake safety / HERS / lead booklets). Name that receipt clearly, e.g. ' +
-  '"Earthquake/Environmental Hazards Booklet Receipt". Also recognize the WBSA (Wooden Balconies and Stairs ' +
+  '"Earthquake/Environmental Hazards Booklet Receipt". CRITICAL: the booklet ITSELF (the multi-page informational ' +
+  '"Homeowner\'s Guide to Environmental Hazards and Earthquake Safety", "Environmental Hazards: A Guide for ' +
+  'Homeowners...", or earthquake-safety guide content) is NOT a receipt. Count a booklet receipt as present ONLY when ' +
+  'an actual ACKNOWLEDGMENT page is included, one with a signature/initial line or wording like "I/we acknowledge ' +
+  'receipt of ...". If only the informational booklet pages are present with no such signed/signable acknowledgment ' +
+  'page, do NOT list any booklet receipt as present. Also recognize the WBSA (Wooden Balconies and Stairs ' +
   'Addendum, C.A.R. Form WBSA) when its page is present.\n' +
   'For EACH form, also read its printed REVISION DATE and return it as "revision" in M/YY form. CAR forms print it ' +
   'under the title ("C.A.R. Form SPQ, Revised 12/25") and in the footer ("SPQ REVISED 12/25"). Local/county forms ' +
@@ -557,6 +562,15 @@ const IDENTIFY_PROMPT =
   'lead-based-paint question (SPQ 7E) must match it — built 1978 or later means 7E should be NO; built before 1978 ' +
   'means 7E should be YES (and an LPD is required). Flag a contradicting answer. If the year built is NOT in the ' +
   'package, skip this check.\n' +
+  'ALSO check TDS Section II (the Seller\'s Information checklist of features the property HAS). For any item the ' +
+  'seller marked the property HAS but left its REQUIRED DETAIL blank, raise a flag: in particular (a) Water Heater ' +
+  'checked but its type (Gas/Solar/Electric) all blank; (b) Roof checked or its Type filled but the Age left blank; ' +
+  '(c) "Exhaust Fan(s) in:" with no location written; (d) "220 Volt Wiring in:" with no location written; and any ' +
+  'similar item that is checked/listed while its type, age, or location line is blank (e.g. Pool/Spa Heater type, ' +
+  'Water Supply type, Gas Supply type). For EACH, return a flag with "form":"TDS", "item" = the item name including ' +
+  'its TDS subsection (e.g. "II A Water Heater", "II A Roof"), "issue":"detail_incomplete", "marked":"present", and ' +
+  '"reason" = the specific blank detail phrased to drop into a request, e.g. "the type (Gas/Solar/Electric) is left ' +
+  'blank" or "the Age is left blank". Do NOT flag an item that is simply not checked / not present.\n' +
   'Do NOT moralize about whether a disclosed issue is concerning, and do NOT review forms with no questions ' +
   '(receipts, booklets, profiles, AVID, certifications).\n' +
   'For EACH flag return: "form" (e.g. SPQ, TDS); "item" = the CONCISE question code ONLY (e.g. 6K, C14, 14C, 7E) ' +
@@ -580,11 +594,17 @@ const IDENTIFY_PROMPT =
   'ALSO return key_answers for the facts we cross-check against our own records: "spq_7e" = the marked answer to ' +
   'SPQ question 7E (one of "yes" / "no" / "blank", or "na" if there is no SPQ in the package); "hoa_any_no" = ' +
   '"yes" if ANY HOA / common-interest question (TDS Section C items C12/C13/C14, SPQ 6G, SPQ Section 14) is marked ' +
-  'No or left blank, "no" if they are all Yes, "na" if those forms are not present.\n\n' +
+  'No or left blank, "no" if they are all Yes, "na" if those forms are not present; "fire_clearance" = the marked ' +
+  'answer ("yes" / "no" / "blank", or "na" if there is no SPQ) to the SPQ GOVERNMENTAL-section question asking ' +
+  'whether there are existing or proposed government requirements that tall grass, brush or other vegetation be ' +
+  'cleared or that flammable materials be removed. FIND THIS QUESTION BY ITS DESCRIPTION, NOT BY A FIXED LETTER: it ' +
+  'is item 17F on the SPQ revised 12/24 and item 17G on the SPQ revised 6/26, and the letter can move again on other ' +
+  'revisions; "fire_clearance_item" = the item letter/number exactly as printed on this form (e.g. "17F" or "17G"), ' +
+  'or "" if not found.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
   '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25"}],' +
   '"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect>","other_form":"<for inconsistent>","document":"<for document>","source":"<for transaction>"}],' +
-  '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na"}}';
+  '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na","fire_clearance":"yes|no|blank|na","fire_clearance_item":"17F"}}';
 
 async function identifyForms(docs) {
   // Backstop: Claude caps a request at ~32MB / 100 pages. If a large file (e.g. an
@@ -626,7 +646,12 @@ async function identifyForms(docs) {
         }))
         .filter((r) => r.form || r.item || r.reason || r.other_form || r.document || r.source) : [];
       const ka = parsed.key_answers || {};
-      const keyAnswers = { spq_7e: String(ka.spq_7e || 'na').toLowerCase().trim(), hoa_any_no: String(ka.hoa_any_no || 'na').toLowerCase().trim() };
+      const keyAnswers = {
+        spq_7e: String(ka.spq_7e || 'na').toLowerCase().trim(),
+        hoa_any_no: String(ka.hoa_any_no || 'na').toLowerCase().trim(),
+        fire_clearance: String(ka.fire_clearance || 'na').toLowerCase().trim(),
+        fire_clearance_item: String(ka.fire_clearance_item || '').trim(),
+      };
       return { propertyAddress: String(parsed.property_address || '').trim(), forms, responseFlags, keyAnswers, dropped };
     } catch (err) {
       const tooLarge = /\b413\b|request_too_large|too\s*large/i.test(err.message || '');
@@ -639,7 +664,7 @@ async function identifyForms(docs) {
       throw err;
     }
   }
-  return { propertyAddress: '', forms: [], responseFlags: [], keyAnswers: { spq_7e: 'na', hoa_any_no: 'na' }, dropped };
+  return { propertyAddress: '', forms: [], responseFlags: [], keyAnswers: { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '' }, dropped };
 }
 
 // Merge two form lists, de-duping on code (case-insensitive), then name.
@@ -675,7 +700,7 @@ async function identifyFormsChunked(docs) {
   if (cur.length) batches.push(cur);
 
   let allForms = [], address = '', dropped = [], responseFlags = [];
-  const keyAnswers = { spq_7e: 'na', hoa_any_no: 'na' };
+  const keyAnswers = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '' };
   for (let i = 0; i < batches.length; i++) {
     const r = await identifyForms(batches[i]);
     allForms = mergeForms(allForms, r.forms);
@@ -684,6 +709,10 @@ async function identifyFormsChunked(docs) {
     if (r.keyAnswers) {
       if (keyAnswers.spq_7e === 'na' && r.keyAnswers.spq_7e && r.keyAnswers.spq_7e !== 'na') keyAnswers.spq_7e = r.keyAnswers.spq_7e;
       if (keyAnswers.hoa_any_no === 'na' && r.keyAnswers.hoa_any_no && r.keyAnswers.hoa_any_no !== 'na') keyAnswers.hoa_any_no = r.keyAnswers.hoa_any_no;
+      if (keyAnswers.fire_clearance === 'na' && r.keyAnswers.fire_clearance && r.keyAnswers.fire_clearance !== 'na') {
+        keyAnswers.fire_clearance = r.keyAnswers.fire_clearance;
+        if (r.keyAnswers.fire_clearance_item) keyAnswers.fire_clearance_item = r.keyAnswers.fire_clearance_item;
+      }
     }
     if (!address && r.propertyAddress) address = r.propertyAddress;
     if (r.dropped && r.dropped.length) dropped = dropped.concat(r.dropped);
@@ -716,7 +745,9 @@ async function reconcile(auditList, received) {
     'acknowledgment page for the "Homeowner\'s Guide to Environmental Hazards and Earthquake Safety" booklet is in the ' +
     'package — the standard CAR receipt OR a custom brokerage equivalent (e.g. "Receipt for Links to Booklets", or any ' +
     'page acknowledging receipt of the environmental hazards / earthquake safety / HERS / lead booklets) — put it in ' +
-    '"present". If absent, put it in "still_needed". Do NOT add a "confirm signed" note for it.\n' +
+    '"present". The booklet ITSELF does NOT satisfy this; only an actual signed/signable acknowledgment page does, so ' +
+    'if only the informational booklet pages were sent, treat the receipt as absent. If absent, put it in ' +
+    '"still_needed". Do NOT add a "confirm signed" note for it.\n' +
     '- "verify" is reserved ONLY for genuine per-answer content confirmations where the form is present but a specific ' +
     'answer should be eyeballed (e.g. "SPQ 7E: Yes, pre-1978 build"). Keep verify minimal; do NOT put whole documents ' +
     'or receipts there.\n' +
@@ -764,7 +795,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const norm7e = String(ka.spq_7e || '').toLowerCase();
   const sev = (/\bna\b|not\s*applicable/.test(norm7e)) ? '' : ((/\byes\b/.test(norm7e) || norm7e === 'y') ? 'yes' : ((/\bno\b/.test(norm7e) || norm7e === 'n') ? 'no' : ''));
   const hoaNo = /\byes\b/.test(String(ka.hoa_any_no || '').toLowerCase());
-  const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no}`;
+  const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no} fire_clearance=${ka.fire_clearance || 'na'}(${ka.fire_clearance_item || '?'})`;
   console.log(`[disclosure-intake] context check ${address}: ${debugContext}`);
   const ctxFlags = [];
   const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.reason || ''}`));
@@ -793,8 +824,35 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   };
 
   const present = (Array.isArray(result.present) ? result.present : []).map((n) => fmtSfls(n, false));
-  const verify = Array.isArray(result.verify) ? result.verify : [];
+  let verify = Array.isArray(result.verify) ? result.verify : [];
   const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
+
+  // Fire/brush-clearance (SPQ governmental). When the compliance list asks us to
+  // verify this is Yes (it does for high fire hazard properties, like the pre-1978
+  // 7E check), resolve it ourselves from the mark we read in identify instead of
+  // punting it back for a human to eyeball. The question's letter moves by SPQ
+  // revision (17F on 12/24, 17G on 6/26), so identify located it by description and
+  // returned whatever letter the form actually printed.
+  const fireRe = /brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i;
+  const fireMark = String(ka.fire_clearance || 'na').toLowerCase().trim();
+  const fireItem = String(ka.fire_clearance_item || '').trim() || 'brush/vegetation clearance';
+  const fireVerifyAsked = verify.some((v) => fireRe.test(`${v.item || ''} ${v.note || ''}`));
+  const confirmedReadings = [];
+  if (fireVerifyAsked && fireMark !== 'na' && fireMark !== '') {
+    verify = verify.filter((v) => !fireRe.test(`${v.item || ''} ${v.note || ''}`));
+    if (/yes/.test(fireMark)) {
+      // Matches the expectation — confirm it for the TC, don't chase the listing side.
+      confirmedReadings.push(`SPQ ${fireItem}: marked Yes, as expected for a high fire hazard area`);
+    } else {
+      // Marked No/blank where the compliance list expects Yes — request a revision.
+      responseFlags = (Array.isArray(responseFlags) ? responseFlags : []).concat([{
+        form: 'SPQ', item: fireItem, issue: 'answer_contradicts_package', discrepancy_type: 'incorrect',
+        marked: /no/.test(fireMark) ? 'No' : 'blank', should_be: 'Yes',
+        reason: 'the property is in a high fire hazard area per the compliance list',
+      }]);
+    }
+  }
+
   const flags = Array.isArray(responseFlags) ? responseFlags : [];
 
   // Form-version currency: flag any received form whose printed revision is OLDER
@@ -828,11 +886,16 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // standard wording; everything else is a confirm/clarify line. No em dashes.
   const stripDashes = (s) => String(s || '').replace(/\s*[—–]\s*/g, ', ');
   const flagRef = (f) => [f.form, f.item].filter(Boolean).join(' ');
-  const isRevise = (f) => !!f.should_be || !!f.other_form || !!f.document || !!f.source || f.issue === 'answer_contradicts_package';
+  const isRevise = (f) => !!f.should_be || !!f.other_form || !!f.document || !!f.source || f.issue === 'answer_contradicts_package' || f.issue === 'detail_incomplete';
   const sourceVerb = (src) => (/(documents|instructions)\b/i.test(src) ? 'indicate' : 'indicates');
   // Type-specific wording so each correction reads like a TC, not a template.
   const reviseLine = (f) => {
     const ref = flagRef(f);
+    // TDS Section II item marked present but its required detail (type/age/location)
+    // is blank: ask the listing side to complete it rather than treating it as a Yes/No.
+    if (f.issue === 'detail_incomplete') {
+      return `${ref}: ${stripDashes(f.reason)}; please specify it or mark Unknown.`;
+    }
     const marked = f.marked || 'No';
     const t = f.discrepancy_type || (f.other_form ? 'inconsistent' : f.document ? 'document' : f.source ? 'transaction' : 'incorrect');
     if (t === 'inconsistent' && f.other_form) {
@@ -872,6 +935,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     (confirmFlags.length ? `RESPONSES TO CONFIRM:\n${bullets(confirmFlags, confirmLine)}\n\n` : '') +
     `RECEIVED:\n${bullets(present, (x) => x)}\n\n` +
     (preparedByUs.length ? `PREPARED BY US (do not request):\n${bullets(preparedByUs, (x) => x)}\n\n` : '') +
+    (confirmedReadings.length ? `CONFIRMED (we checked these):\n${bullets(confirmedReadings, (x) => x)}\n\n` : '') +
     (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
     (na.length ? `NOT APPLICABLE / LATER:\n${bullets(na, (x) => `${x.item}: ${x.note}`)}\n` : '');
 
@@ -928,7 +992,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     ps_comment: psComment,
     chase_email_subject: chaseEmailSubject,
     chase_email_body: chaseEmailBody,
-    result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, verify, not_applicable: na, response_flags: flags, outdated_versions: outdated },
+    result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, confirmed: confirmedReadings, verify, not_applicable: na, response_flags: flags, outdated_versions: outdated },
   };
 
   console.log(`[disclosure-intake] ${address}: ${overall} — ${stillNeeded.length} to request, ${flags.length} response flag(s), ${preparedByUs.length} prepared by us`);
@@ -973,7 +1037,7 @@ exports.handler = async function (event) {
       const slotKeys = [];
       let batchForms = [];
       let batchFlags = [];
-      const batchKeyAnswers = { spq_7e: 'na', hoa_any_no: 'na' };
+      const batchKeyAnswers = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '' };
       if (batchId) {
         const listing = await store.list({ prefix: `recv:${batchId}:` });
         for (const b of (listing.blobs || [])) {
@@ -984,6 +1048,10 @@ exports.handler = async function (event) {
           if (item && item.keyAnswers) {
             if (batchKeyAnswers.spq_7e === 'na' && item.keyAnswers.spq_7e && item.keyAnswers.spq_7e !== 'na') batchKeyAnswers.spq_7e = item.keyAnswers.spq_7e;
             if (batchKeyAnswers.hoa_any_no === 'na' && item.keyAnswers.hoa_any_no && item.keyAnswers.hoa_any_no !== 'na') batchKeyAnswers.hoa_any_no = item.keyAnswers.hoa_any_no;
+            if (batchKeyAnswers.fire_clearance === 'na' && item.keyAnswers.fire_clearance && item.keyAnswers.fire_clearance !== 'na') {
+              batchKeyAnswers.fire_clearance = item.keyAnswers.fire_clearance;
+              if (item.keyAnswers.fire_clearance_item) batchKeyAnswers.fire_clearance_item = item.keyAnswers.fire_clearance_item;
+            }
           }
         }
       }
