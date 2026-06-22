@@ -919,7 +919,10 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // standard wording; everything else is a confirm/clarify line. No em dashes.
   const stripDashes = (s) => String(s || '').replace(/\s*[—–]\s*/g, ', ');
   const flagRef = (f) => [f.form, f.item].filter(Boolean).join(' ');
-  const isRevise = (f) => !!f.should_be || !!f.other_form || !!f.document || !!f.source || f.issue === 'answer_contradicts_package' || f.issue === 'detail_incomplete' || f.issue === 'verify_mismatch' || f.issue === 'entity_signer';
+  const isRevise = (f) => !!f.should_be || !!f.other_form || !!f.document || !!f.source
+    || f.issue === 'answer_contradicts_package' || f.issue === 'detail_incomplete'
+    || f.issue === 'verify_mismatch' || f.issue === 'entity_signer'
+    || f.issue === 'yes_no_explanation' || f.issue === 'unanswered' || f.issue === 'explanation_unclear';
   const sourceVerb = (src) => (/(documents|instructions)\b/i.test(src) ? 'indicate' : 'indicates');
   // Type-specific wording so each correction reads like a TC, not a template.
   const reviseLine = (f) => {
@@ -937,6 +940,17 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     if (f.issue === 'entity_signer') {
       return stripDashes(f.reason);
     }
+    // Response-completion issues: the seller needs to complete/clarify the answer, so
+    // these are revision requests (not "confirm") and never a Yes/No correction.
+    if (f.issue === 'yes_no_explanation') {
+      return `${ref}: ${stripDashes(f.reason) || 'marked Yes with no written explanation'}; please provide an explanation.`;
+    }
+    if (f.issue === 'unanswered') {
+      return `${ref}: ${stripDashes(f.reason) || 'left blank / unanswered'}; please answer this question.`;
+    }
+    if (f.issue === 'explanation_unclear') {
+      return `${ref}: ${stripDashes(f.reason) || 'the written explanation is unclear'}; please clarify it.`;
+    }
     const marked = f.marked || 'No';
     const t = f.discrepancy_type || (f.other_form ? 'inconsistent' : f.document ? 'document' : f.source ? 'transaction' : 'incorrect');
     if (t === 'inconsistent' && f.other_form) {
@@ -953,7 +967,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     }
     return `${ref}: Marked ${marked}; however, ${stripDashes(f.reason)}. The response should be revised to ${f.should_be || 'Yes'}.`;
   };
-  const confirmLine = (f) => `${flagRef(f)}: ${stripDashes(f.reason || f.issue || '')}`;
+  const ISSUE_TEXT = { unanswered: 'left blank / unanswered', yes_no_explanation: 'marked Yes with no written explanation', explanation_unclear: 'the written explanation is unclear' };
+  const confirmLine = (f) => `${flagRef(f)}: ${stripDashes(f.reason) || ISSUE_TEXT[f.issue] || 'please confirm this item'}`;
   const flagLine = (f) => (isRevise(f) ? reviseLine(f) : confirmLine(f));
   const reviseFlags = flags.filter(isRevise);
   const confirmFlags = flags.filter((f) => !isRevise(f));
@@ -997,7 +1012,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
         ? '\nThe following were sent in an outdated version. Please send the current version:\n' + outdated.map((o) => `- ${o.name} (received ${o.received}; current ${o.current})`).join('\n') + '\n'
         : '') +
       (reviseFlags.length
-        ? '\nPlease revise the following disclosures to address the inconsistencies below:\n' + reviseFlags.map((f) => `- ${reviseLine(f)}`).join('\n') + '\n'
+        ? '\nPlease revise or complete the following disclosures:\n' + reviseFlags.map((f) => `- ${reviseLine(f)}`).join('\n') + '\n'
         : '') +
       (confirmFlags.length
         ? '\nPlease confirm the following:\n' + confirmFlags.map((f) => `- ${confirmLine(f)}`).join('\n') + '\n'
