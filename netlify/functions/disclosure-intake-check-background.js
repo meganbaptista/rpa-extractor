@@ -301,6 +301,10 @@ function isBlockedName(name) {
 
 function looksZip(buf, name, contentType) {
   if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(ZIP_MAGIC)) return true;
+  // Magic bytes win over a misleading name/content-type: a single PDF sometimes
+  // arrives named "attachments.zip" served as application/octet-stream. Real PDF
+  // bytes are never a zip, so don't route them into the unzip path.
+  if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC)) return false;
   if (/\.zip$/i.test(name || '')) return true;
   if (/zip/i.test(contentType || '')) return true;
   return false;
@@ -425,23 +429,29 @@ async function loadDocuments(documents) {
 
       // ZIP: expand into the PDFs inside, filtering blocked/non-PDF entries.
       if (looksZip(buf, name, contentType)) {
-        let entries;
+        let entries = null;
         try { entries = unzipEntries(buf); }
         catch (e) {
           console.warn(`[disclosure-intake] could not unzip ${name}: ${e.message} | ${describeBuffer(buf, contentType)}`);
-          continue; // not a real zip (likely an HTML interstitial / permission page) — skip
+          // Not a real zip. If the bytes are actually a PDF (e.g. a single PDF mis-named
+          // attachments.zip), fall through to single-document handling below; otherwise
+          // skip (likely an HTML interstitial / permission page).
+          if (!(buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC))) continue;
         }
-        let kept = 0;
-        const skippedNames = [];
-        for (const e of entries) {
-          if (!looksPdf(e.data, e.name)) { skippedNames.push(e.name + ' [not pdf]'); continue; }
-          if (isBlockedName(e.name)) { skippedNames.push(e.name + ' [blocked]'); continue; }
-          if (e.data.length > MAX_DOC_BYTES) { skippedNames.push(e.name + ' [too large]'); continue; }
-          out.push({ name: e.name, base64: e.data.toString('base64') });
-          kept++;
+        if (entries) {
+          let kept = 0;
+          const skippedNames = [];
+          for (const e of entries) {
+            if (!looksPdf(e.data, e.name)) { skippedNames.push(e.name + ' [not pdf]'); continue; }
+            if (isBlockedName(e.name)) { skippedNames.push(e.name + ' [blocked]'); continue; }
+            if (e.data.length > MAX_DOC_BYTES) { skippedNames.push(e.name + ' [too large]'); continue; }
+            out.push({ name: e.name, base64: e.data.toString('base64') });
+            kept++;
+          }
+          console.log(`[disclosure-intake] unzipped ${name}: kept ${kept} PDF(s)` + (skippedNames.length ? `, skipped ${skippedNames.length} (${skippedNames.join(', ')})` : ''));
+          continue;
         }
-        console.log(`[disclosure-intake] unzipped ${name}: kept ${kept} PDF(s)` + (skippedNames.length ? `, skipped ${skippedNames.length} (${skippedNames.join(', ')})` : ''));
-        continue;
+        // entries === null and bytes are a PDF: fall through to single-document handling.
       }
 
       // Single document: only forward it if the BYTES are actually a PDF (don't trust
