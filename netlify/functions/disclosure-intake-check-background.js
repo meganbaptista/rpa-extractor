@@ -603,8 +603,8 @@ const ANSWER_REVIEW_PROMPT =
   'OR the entity name is signed without an individual signing in a representative capacity (no "..., Trustee" / ' +
   '"..., Manager" / "..., its President"). Return a flag with "form":"Seller signature", "item":"entity signer", ' +
   '"issue":"entity_signer", and "reason" = a one-line request naming the entity, e.g. "Seller signed as an entity ' +
-  '(Smith Family Trust); please provide a Trust Certification and have the trustee sign in a representative capacity, ' +
-  'or confirm the signer\'s authority to sign". Do NOT flag an ordinary individual seller signature.\n' +
+  '(Smith Family Trust); please have the seller sign as an individual on behalf of the entity (e.g. Jane Smith, ' +
+  'Trustee or authorized signer)". Do NOT flag an ordinary individual seller signature.\n' +
   'Do NOT moralize about whether a disclosed issue is concerning, and do NOT review forms with no questions ' +
   '(receipts, booklets, profiles, AVID, certifications).\n' +
   'For EACH flag return: "form" (e.g. SPQ, TDS); "item" = the CONCISE question code ONLY (e.g. 6K, C14, 14C, 7E) ' +
