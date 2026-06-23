@@ -864,7 +864,7 @@ async function sendCallback(callbackUrl, payload) {
 // Reconcile the accumulated received set for a deal against its audit list and
 // POST the result to the callback. Shared by single-delivery mode and finalize.
 // ----------------------------------------------------------------------------
-async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}) {
+async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}, threadId = '') {
   let listText = (auditList && String(auditList).trim()) || '';
   if (!listText) listText = await fetchAuditListByAddress(address);
   if (!listText) throw new Error(`No audit list for "${address}" — pass auditList in the body, or add a matching row to the AUDIT_LIST_CSV_URL sheet.`);
@@ -1097,6 +1097,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 
   const payload = {
     property_address: address,
+    gmail_thread_id: threadId,
     overall_status: overall,
     still_needed_count: stillNeeded.length,
     response_flags_count: flags.length,
@@ -1137,10 +1138,13 @@ exports.handler = async function (event) {
   //                      accumulate_only:true }       ingest only, NO callback (per-attachment loop)
   //   finalize       — { batchId, finalize:true }     reconcile the batch's deal + callback once
   const {
-    auditList, documents, propertyAddress = '', callbackUrl,
+    auditList, documents, propertyAddress = '', callbackUrl, threadId = '',
     accumulate_only: accumulateOnly = false, finalize = false, batchId = '',
   } = body;
   const callback = callbackUrl || CALLBACK_URL_ENV;
+  // Gmail thread of the triggering email, passed straight through to the callback so
+  // Zap B can draft the chase as a reply in that thread. Accept threadId or thread_id.
+  const gmailThreadId = threadId || body.thread_id || '';
 
   try {
     const store = getStore(blobsConfig(STATE_STORE));
@@ -1224,7 +1228,7 @@ exports.handler = async function (event) {
     const received = mergeForms(prior.received, newForms);
     await store.setJSON(key, { address, received, updatedAt: Date.now() });
     console.log(`[disclosure-intake] ${address}: ${received.length} form(s) received so far (was ${prior.received.length})`);
-    await reconcileAndCallback(address, received, auditList, callback, newFlags, newKeyAnswers);
+    await reconcileAndCallback(address, received, auditList, callback, newFlags, newKeyAnswers, gmailThreadId);
     return { statusCode: 200 };
   } catch (err) {
     console.error('[disclosure-intake] ERROR:', err.message);
@@ -1233,6 +1237,7 @@ exports.handler = async function (event) {
     if (!accumulateOnly) {
       await sendCallback(callback, {
         property_address: propertyAddress || '',
+        gmail_thread_id: gmailThreadId,
         overall_status: 'error',
         still_needed_count: 0,
         received_count: 0,
