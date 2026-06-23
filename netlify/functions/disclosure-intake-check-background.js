@@ -540,11 +540,36 @@ const IDENTIFY_PROMPT =
   'under the title ("C.A.R. Form SPQ, Revised 12/25") and in the footer ("SPQ REVISED 12/25"). Local/county forms ' +
   '(e.g. an Orange County Local Area Disclosure) print their own date. Return empty string for "revision" if no ' +
   'revision date is printed on the form.\n\n' +
-  'ALSO do a buyer-side response check on the forms that have questions/answers (SPQ, TDS, SBSA, and similar Q&A ' +
-  'disclosures). READ the ACTUAL marked answers (Yes / No / blank), do not just note items to verify. Flag:\n' +
-  '(a) a question or section left BLANK / unanswered;\n' +
-  '(b) an item marked YES with NO written explanation, an ILLEGIBLE explanation, or one TOO VAGUE to understand;\n' +
-  '(c) an answer that CONTRADICTS a fact evident in this package (the seller likely marked it wrong) — read the ' +
+  'Respond with ONLY this JSON (no prose, no fences): ' +
+  '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25"}]}';
+
+// ----------------------------------------------------------------------------
+// Step 1b — DEDICATED answer-review pass. Split out of IDENTIFY_PROMPT on purpose
+// so the detail work (read EVERY marked answer, pair each Yes with its OWN
+// explanation, catch blanks, catch answer/explanation mismatches) gets a focused
+// prompt instead of competing with form-ID + revision reading in one overloaded
+// call. Reads the same PDFs; returns response_flags + key_answers only.
+// ----------------------------------------------------------------------------
+const ANSWER_REVIEW_PROMPT =
+  'These PDFs are a buyer-side disclosure delivery (one combined packet and/or several single-form PDFs). Review the ' +
+  'SELLER\'S MARKED ANSWERS on every form that has questions/answers (SPQ and its addendum, TDS, SBSA, ESD and similar ' +
+  'Q&A disclosures) and flag responses the buyer side would send back to be corrected or completed. READ the ACTUAL ' +
+  'marked answer for each item (Yes / No / blank); do not just note items to verify. Work through each Q&A form ' +
+  'SECTION BY SECTION and SUB-ITEM BY SUB-ITEM, and do NOT skip any lettered or numbered sub-item: read the TDS ' +
+  'Section C items C1 through C14 individually, and every SPQ sub-item individually (e.g. 6G, 7A, 14A, 14B, 14C).\n' +
+  'Flag:\n' +
+  '(a) a question or sub-item left BLANK / unanswered (issue "unanswered");\n' +
+  '(b) ANY sub-item marked YES whose OWN explanation is BLANK, ILLEGIBLE, or TOO VAGUE to understand (issue ' +
+  '"yes_no_explanation"). The rule is universal: every Yes on a Q&A form must have its own written explanation, on ' +
+  'the TDS and the SPQ alike, regardless of which question or letter it is. Check each Yes sub-item SEPARATELY: when ' +
+  'several sub-items in a row are marked Yes but only ONE explanation is written, do NOT assume that one explanation ' +
+  'covers the others. Determine which sub-item the explanation actually addresses, and flag every OTHER Yes sub-item ' +
+  'as missing its explanation, naming the exact sub-item;\n' +
+  '(c) a sub-item that HAS a written explanation but whose box is marked NO or left BLANK: a seller writes an ' +
+  'explanation only when the answer is Yes, so the mark should be Yes. Set "issue":"answer_contradicts_package", ' +
+  '"discrepancy_type":"incorrect", "marked" = the marked answer (No or blank), "should_be":"Yes", and "reason":"an ' +
+  'explanation is provided, so this should be marked Yes";\n' +
+  '(d) an answer that CONTRADICTS a fact evident in this package (the seller likely marked it wrong) — read the ' +
   'actual mark and report it. In particular:\n' +
   '   - HOA / common interest: if anything in the package shows the property is in an HOA or common interest ' +
   'development (an HOA or CC&R disclosure is present, HOA dues are referenced, or the forms otherwise indicate an ' +
@@ -562,7 +587,8 @@ const IDENTIFY_PROMPT =
   'lead-based-paint question (SPQ 7E) must match it — built 1978 or later means 7E should be NO; built before 1978 ' +
   'means 7E should be YES (and an LPD is required). Flag a contradicting answer. If the year built is NOT in the ' +
   'package, skip this check.\n' +
-  'ALSO check TDS Section II (the Seller\'s Information checklist of features the property HAS). For any item the ' +
+  'ALSO check TDS Section II (the Seller\'s Information checklist of features the property HAS). Go through EVERY row ' +
+  'of this checklist in order and do not skip any. For any item the ' +
   'seller marked the property HAS but left its REQUIRED DETAIL blank, raise a flag: in particular (a) Water Heater ' +
   'checked but its type (Gas/Solar/Electric) all blank; (b) Roof checked or its Type filled but the Age left blank; ' +
   '(c) "Exhaust Fan(s) in:" with no location written; (d) "220 Volt Wiring in:" with no location written; and any ' +
@@ -613,9 +639,10 @@ const IDENTIFY_PROMPT =
   'if an FHDS is present but Section 2 boxes are left unchecked or Section 3 is not marked Yes, or "na" if no FHDS is ' +
   'in the package.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
-  '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25"}],' +
-  '"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect>","other_form":"<for inconsistent>","document":"<for document>","source":"<for transaction>"}],' +
+  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect>","other_form":"<for inconsistent>","document":"<for document>","source":"<for transaction>"}],' +
   '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na","fire_clearance":"yes|no|blank|na","fire_clearance_item":"17F","fhds":"yes|no|na"}}';
+
+const EMPTY_KEY_ANSWERS = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '', fhds: 'na' };
 
 async function identifyForms(docs) {
   // Backstop: Claude caps a request at ~32MB / 100 pages. If a large file (e.g. an
@@ -632,16 +659,47 @@ async function identifyForms(docs) {
     }));
     content.push({ type: 'text', text: IDENTIFY_PROMPT });
     try {
-      // Ceiling is generous: adaptive thinking + effort:high count toward max_tokens,
-      // and a multi-form packet can require a lot of reasoning before the small JSON.
-      // Generous ceiling: identify now also reads each form's revision date, runs the
-      // answer-contradiction check, and returns key_answers — adaptive thinking + this
-      // output can run long, so leave plenty of room to avoid a max_tokens truncation.
-      const raw = await callClaude(content, 24000);
+      // Form-ID + revision + address only now (the answer review is a separate pass),
+      // so the output is small. Keep a comfortable ceiling for adaptive thinking over a
+      // multi-form packet.
+      const raw = await callClaude(content, 12000);
       const parsed = parseJson(raw);
       const forms = Array.isArray(parsed.forms) ? parsed.forms
         .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim() }))
         .filter((f) => f.code || f.name) : [];
+      return { propertyAddress: String(parsed.property_address || '').trim(), forms, dropped };
+    } catch (err) {
+      const tooLarge = /\b413\b|request_too_large|too\s*large/i.test(err.message || '');
+      if (tooLarge && working.length > 1) {
+        const big = working.shift(); // largest, list is size-sorted descending
+        dropped.push(big.name);
+        console.warn(`[disclosure-intake] identify: request too large — dropping biggest doc "${big.name}" and retrying with ${working.length} doc(s)`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  return { propertyAddress: '', forms: [], dropped };
+}
+
+// Dedicated answer-review pass over the same PDFs (ANSWER_REVIEW_PROMPT). Returns
+// response_flags + key_answers read off the Q&A forms. Same 413 drop-biggest
+// backstop as identifyForms.
+async function reviewAnswers(docs) {
+  let working = docs.slice().sort((a, b) => (b.base64 || '').length - (a.base64 || '').length);
+  const dropped = [];
+  while (working.length) {
+    const content = working.map((d) => ({
+      type: 'document',
+      source: { type: 'base64', media_type: 'application/pdf', data: d.base64 },
+      title: d.name,
+    }));
+    content.push({ type: 'text', text: ANSWER_REVIEW_PROMPT });
+    try {
+      // Generous ceiling: this is the heavy reasoning pass (read every marked answer,
+      // pair Yes with explanation, run the contradiction checks) before a small JSON.
+      const raw = await callClaude(content, 24000);
+      const parsed = parseJson(raw);
       const responseFlags = Array.isArray(parsed.response_flags) ? parsed.response_flags
         .map((r) => ({
           form: String(r.form || '').trim(),
@@ -664,19 +722,19 @@ async function identifyForms(docs) {
         fire_clearance_item: String(ka.fire_clearance_item || '').trim(),
         fhds: String(ka.fhds || 'na').toLowerCase().trim(),
       };
-      return { propertyAddress: String(parsed.property_address || '').trim(), forms, responseFlags, keyAnswers, dropped };
+      return { responseFlags, keyAnswers, dropped };
     } catch (err) {
       const tooLarge = /\b413\b|request_too_large|too\s*large/i.test(err.message || '');
       if (tooLarge && working.length > 1) {
-        const big = working.shift(); // largest, list is size-sorted descending
+        const big = working.shift();
         dropped.push(big.name);
-        console.warn(`[disclosure-intake] request too large — dropping biggest doc "${big.name}" and retrying with ${working.length} doc(s)`);
+        console.warn(`[disclosure-intake] answer-review: request too large — dropping biggest doc "${big.name}" and retrying with ${working.length} doc(s)`);
         continue;
       }
       throw err;
     }
   }
-  return { propertyAddress: '', forms: [], responseFlags: [], keyAnswers: { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '', fhds: 'na' }, dropped };
+  return { responseFlags: [], keyAnswers: { ...EMPTY_KEY_ANSWERS }, dropped };
 }
 
 // Merge two form lists, de-duping on code (case-insensitive), then name.
@@ -696,8 +754,21 @@ function mergeForms(a, b) {
 // batching them under Claude's request-size limit, identifying each batch, and
 // merging the forms. The first non-empty address wins. One unzipped bundle can
 // easily exceed 32MB of base64 in a single request, so batching is required.
+// Run BOTH passes over one batch concurrently (latency ~ the slower of the two)
+// and combine into the shape callers already expect.
+async function identifyAndReview(batch) {
+  const [idr, ansr] = await Promise.all([identifyForms(batch), reviewAnswers(batch)]);
+  return {
+    propertyAddress: idr.propertyAddress || '',
+    forms: idr.forms || [],
+    responseFlags: ansr.responseFlags || [],
+    keyAnswers: ansr.keyAnswers || { ...EMPTY_KEY_ANSWERS },
+    dropped: [...(idr.dropped || []), ...(ansr.dropped || [])],
+  };
+}
+
 async function identifyFormsChunked(docs) {
-  if (docs.length <= 1) return identifyForms(docs);
+  if (docs.length <= 1) return identifyAndReview(docs);
   const MAX_BATCH_B64 = 18 * 1024 * 1024; // keep each request well under the 32MB cap
   const MAX_BATCH_DOCS = 10;              // and bounded on page/doc count
   const batches = [];
@@ -712,9 +783,9 @@ async function identifyFormsChunked(docs) {
   if (cur.length) batches.push(cur);
 
   let allForms = [], address = '', dropped = [], responseFlags = [];
-  const keyAnswers = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '', fhds: 'na' };
+  const keyAnswers = { ...EMPTY_KEY_ANSWERS };
   for (let i = 0; i < batches.length; i++) {
-    const r = await identifyForms(batches[i]);
+    const r = await identifyAndReview(batches[i]);
     allForms = mergeForms(allForms, r.forms);
     if (r.responseFlags && r.responseFlags.length) responseFlags = responseFlags.concat(r.responseFlags);
     // First batch with a real (non-na) answer wins — the SPQ/TDS live in one batch.
