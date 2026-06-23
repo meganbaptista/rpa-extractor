@@ -44,6 +44,12 @@ console.log('[disclosure-intake] module loading');
 const zlib = require('zlib');
 const { getStore } = require('@netlify/blobs');
 const { canonicalAddress } = require('./lib/address');
+// Crisp-render dependencies (same stack the RPA extractor uses): pdf-lib to slice out
+// the Q&A pages, and pdf-parse (pdfjs under the hood) with its CanvasFactory polyfill to
+// rasterize them server-side so Netlify Functions don't need the native canvas package.
+const { PDFDocument } = require('pdf-lib');
+const { CanvasFactory } = require('pdf-parse/worker');
+const { PDFParse } = require('pdf-parse');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-opus-4-8';
@@ -560,7 +566,14 @@ const ANSWER_REVIEW_PROMPT =
   'Flag:\n' +
   '(a) a question or sub-item left BLANK / unanswered (issue "unanswered");\n' +
   '(b) ANY sub-item marked YES whose OWN explanation is BLANK, ILLEGIBLE, or TOO VAGUE to understand (issue ' +
-  '"yes_no_explanation"). The rule is universal: every Yes on a Q&A form must have its own written explanation, on ' +
+  '"yes_no_explanation"). FIRST be certain the YES box is the one actually marked: these packages are SCANNED, and ' +
+  'the Yes column (left) sits directly beside the No column (right), so do not transpose them. Treat a sub-item as ' +
+  'Yes ONLY when the Yes box is clearly and affirmatively checked. If the No box is checked, the box is blank, or the ' +
+  'mark is faint, ambiguous, or you are not certain which box is checked, treat the answer as not-Yes and do NOT ' +
+  'raise a yes_no_explanation flag for it. Never infer Yes from a written explanation, a neighboring sub-item, or a ' +
+  'shared item-level explanation line: on the SPQ and TDS a single Explanation line serves the whole numbered item, ' +
+  'so it belongs to whichever sub-item(s) are actually Yes, not to one marked No. ' +
+  'The rule is universal: every Yes on a Q&A form must have its own written explanation, on ' +
   'the TDS and the SPQ alike, regardless of which question or letter it is. Check each Yes sub-item SEPARATELY: when ' +
   'several sub-items in a row are marked Yes but only ONE explanation is written, do NOT assume that one explanation ' +
   'covers the others. Determine which sub-item the explanation actually addresses, and flag every OTHER Yes sub-item ' +
@@ -682,10 +695,181 @@ async function identifyForms(docs) {
   return { propertyAddress: '', forms: [], dropped };
 }
 
-// Dedicated answer-review pass over the same PDFs (ANSWER_REVIEW_PROMPT). Returns
-// response_flags + key_answers read off the Q&A forms. Same 413 drop-biggest
-// backstop as identifyForms.
+// ----------------------------------------------------------------------------
+// Crisp-render answer review. Scanned packets have no text layer, so the model reads
+// checkboxes from pixels; relying on Anthropic's internal PDF rasterization transposed
+// adjacent Yes/No boxes. Instead we render the Q&A pages OURSELVES at high DPI and send
+// sharp PNGs. Two stages: (A) render every page small + ask which pages carry seller-
+// marked answers; (B) re-render only those pages large and run the answer review on the
+// images. Falls back to the document-block path if rendering/classification yields nothing.
+// ----------------------------------------------------------------------------
+const QA_THUMB_SCALE = 0.7;                 // stage A: small thumbnails, just enough to classify
+const QA_HIRES_SCALE = 2.5;                 // stage B: ~1980px tall, sharp enough to resolve a checkbox
+const QA_MAX_RENDER_PAGES = 60;             // safety cap on pages rendered from one document
+const QA_MAX_BATCH_B64 = 18 * 1024 * 1024;  // keep each review request well under the 32MB cap
+const QA_MAX_BATCH_IMAGES = 20;
+
+const CLASSIFY_PROMPT =
+  'These are page thumbnails from a California real estate disclosure delivery: one image per page, each preceded ' +
+  'by its page number. Identify every page that contains SELLER-ANSWERED content, meaning a page where the seller ' +
+  'marks Yes/No (or similar) checkboxes or fills in / handwrites answers or explanations. Those are the ' +
+  'question-and-answer disclosure pages we must read closely. They include forms such as the TDS, SPQ and its ' +
+  'addenda, ESD, CSPQ, SBSA, FHDS (Fire Hardening), the Residential Earthquake Hazards Report, the water heater / ' +
+  'smoke / carbon monoxide statement, the lead-based paint disclosure (LPD), septic or well disclosures (SWPI), and ' +
+  'solar questionnaires. Judge by the FUNCTIONAL test (does the seller mark or write answers on the page?), NOT by ' +
+  'the form name, so you also catch Q&A pages whose form is not in that list. EXCLUDE pages that are purely ' +
+  'informational or advisory text, provider Natural Hazard Disclosure (NHD) reports, booklets, the Agent Visual ' +
+  'Inspection Disclosure (AVID) narrative, receipts, cover sheets, and signature-only pages. Respond with ONLY this ' +
+  'JSON, no prose: {"qa_pages":[1,2,3]} listing the 1-indexed page numbers, in order.';
+
+// Render pages of a PDF to PNG base64 via pdf-parse. scale multiplies the 72dpi base;
+// maxPages caps render work. Returns [{ pageNumber, base64 }].
+async function renderAllPagesAsImages(buffer, scale, maxPages) {
+  const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
+  try {
+    const options = { scale: (typeof scale === 'number' && scale > 0) ? scale : 1.0 };
+    if (maxPages) options.first = maxPages;
+    const result = await parser.getScreenshot(options);
+    return (result.pages || [])
+      .filter((p) => p.data)
+      .map((p) => ({ pageNumber: p.pageNumber, base64: Buffer.from(p.data).toString('base64') }));
+  } finally {
+    await parser.destroy();
+  }
+}
+
+// Build a new PDF containing only the given 1-indexed pages, preserving order.
+async function buildSubPdf(buffer, pageNumbers) {
+  const src = await PDFDocument.load(buffer, { ignoreEncryption: true });
+  const out = await PDFDocument.create();
+  const idx = pageNumbers.map((n) => n - 1).filter((i) => i >= 0 && i < src.getPageCount());
+  const copied = await out.copyPages(src, idx);
+  copied.forEach((p) => out.addPage(p));
+  const bytes = await out.save();
+  return Buffer.from(bytes);
+}
+
+// Stage A: ask the model which page numbers carry seller-answered content.
+async function classifyQAPages(thumbs) {
+  const content = [];
+  for (const t of thumbs) {
+    content.push({ type: 'text', text: `Page ${t.pageNumber}:` });
+    content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: t.base64 } });
+  }
+  content.push({ type: 'text', text: CLASSIFY_PROMPT });
+  const raw = await callClaude(content, 8000);
+  const parsed = parseJson(raw);
+  return Array.isArray(parsed.qa_pages)
+    ? parsed.qa_pages.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 1)
+    : [];
+}
+
+// Render one document's Q&A pages to crisp PNGs (stage A classify + stage B hi-res).
+// Returns [] when the doc has no Q&A pages (e.g. an NHD report or booklet).
+async function renderQAPageImages(buffer, name) {
+  const thumbs = await renderAllPagesAsImages(buffer, QA_THUMB_SCALE, QA_MAX_RENDER_PAGES);
+  if (!thumbs.length) return [];
+  const qaNums = await classifyQAPages(thumbs);
+  if (!qaNums.length) { console.log(`[disclosure-intake] ${name}: no Q&A pages classified`); return []; }
+  const subBuf = await buildSubPdf(buffer, qaNums);
+  const hi = await renderAllPagesAsImages(subBuf, QA_HIRES_SCALE, qaNums.length);
+  console.log(`[disclosure-intake] ${name}: rendered ${hi.length} Q&A page(s) hi-res (pages ${qaNums.join(', ')})`);
+  return hi.map((p, i) => ({ name: `${name} qa-p${qaNums[i] != null ? qaNums[i] : p.pageNumber}`, base64: p.base64 }));
+}
+
+// Parse the answer-review JSON into the { responseFlags, keyAnswers } shape callers expect.
+function parseAnswerReview(raw) {
+  const parsed = parseJson(raw);
+  const responseFlags = Array.isArray(parsed.response_flags) ? parsed.response_flags
+    .map((r) => ({
+      form: String(r.form || '').trim(),
+      item: String(r.item || '').trim(),
+      issue: String(r.issue || '').trim(),
+      discrepancy_type: String(r.discrepancy_type || '').trim().toLowerCase(),
+      marked: String(r.marked || '').trim(),
+      should_be: String(r.should_be || '').trim(),
+      reason: String(r.reason || r.note || '').trim(),
+      other_form: String(r.other_form || '').trim(),
+      document: String(r.document || '').trim(),
+      source: String(r.source || '').trim(),
+    }))
+    .filter((r) => r.form || r.item || r.reason || r.other_form || r.document || r.source) : [];
+  const ka = parsed.key_answers || {};
+  const keyAnswers = {
+    spq_7e: String(ka.spq_7e || 'na').toLowerCase().trim(),
+    hoa_any_no: String(ka.hoa_any_no || 'na').toLowerCase().trim(),
+    fire_clearance: String(ka.fire_clearance || 'na').toLowerCase().trim(),
+    fire_clearance_item: String(ka.fire_clearance_item || '').trim(),
+    fhds: String(ka.fhds || 'na').toLowerCase().trim(),
+  };
+  return { responseFlags, keyAnswers };
+}
+
+// First non-"na" value wins per field (the SPQ/TDS usually land in one batch).
+function mergeKeyAnswers(acc, next) {
+  if (!next) return acc;
+  if (acc.spq_7e === 'na' && next.spq_7e && next.spq_7e !== 'na') acc.spq_7e = next.spq_7e;
+  if (acc.hoa_any_no === 'na' && next.hoa_any_no && next.hoa_any_no !== 'na') acc.hoa_any_no = next.hoa_any_no;
+  if (acc.fire_clearance === 'na' && next.fire_clearance && next.fire_clearance !== 'na') {
+    acc.fire_clearance = next.fire_clearance;
+    if (next.fire_clearance_item) acc.fire_clearance_item = next.fire_clearance_item;
+  }
+  if (acc.fhds === 'na' && next.fhds && next.fhds !== 'na') acc.fhds = next.fhds;
+  return acc;
+}
+
+// Answer review over crisp Q&A page images. Renders each doc's Q&A pages, batches the
+// images under the request cap, and runs ANSWER_REVIEW_PROMPT on them. Falls back to the
+// document-block review if nothing renders, so the review is never silently skipped.
 async function reviewAnswers(docs) {
+  let qaImages = [];
+  for (const d of docs) {
+    try {
+      const buf = Buffer.from(d.base64 || '', 'base64');
+      const imgs = await renderQAPageImages(buf, d.name);
+      qaImages = qaImages.concat(imgs);
+    } catch (err) {
+      console.warn(`[disclosure-intake] Q&A render/classify failed for "${d.name}": ${err.message}`);
+    }
+  }
+  if (!qaImages.length) {
+    console.log('[disclosure-intake] no Q&A page images; falling back to document-block answer review');
+    return reviewAnswersFromDocuments(docs);
+  }
+
+  // Batch the images under the request size/count cap.
+  const batches = [];
+  let cur = [], curSize = 0;
+  for (const img of qaImages) {
+    const sz = (img.base64 || '').length;
+    if (cur.length && (cur.length >= QA_MAX_BATCH_IMAGES || curSize + sz > QA_MAX_BATCH_B64)) {
+      batches.push(cur); cur = []; curSize = 0;
+    }
+    cur.push(img); curSize += sz;
+  }
+  if (cur.length) batches.push(cur);
+
+  let responseFlags = [];
+  const keyAnswers = { ...EMPTY_KEY_ANSWERS };
+  for (let i = 0; i < batches.length; i++) {
+    const content = batches[i].map((img) => ({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: img.base64 },
+    }));
+    content.push({ type: 'text', text: ANSWER_REVIEW_PROMPT });
+    const raw = await callClaude(content, 48000);
+    const parsed = parseAnswerReview(raw);
+    if (parsed.responseFlags.length) responseFlags = responseFlags.concat(parsed.responseFlags);
+    mergeKeyAnswers(keyAnswers, parsed.keyAnswers);
+    console.log(`[disclosure-intake] answer-review image batch ${i + 1}/${batches.length} (${batches[i].length} page[s]): ${parsed.responseFlags.length} flag(s)`);
+  }
+  return { responseFlags, keyAnswers, dropped: [] };
+}
+
+// Document-block answer review (fallback): sends the whole PDF(s) to the model and lets
+// Anthropic rasterize. Used when crisp Q&A-page rendering yields nothing. Same 413
+// drop-biggest backstop as identifyForms.
+async function reviewAnswersFromDocuments(docs) {
   let working = docs.slice().sort((a, b) => (b.base64 || '').length - (a.base64 || '').length);
   const dropped = [];
   while (working.length) {
@@ -699,29 +883,7 @@ async function reviewAnswers(docs) {
       // Generous ceiling: this is the heavy reasoning pass (read every marked answer,
       // pair Yes with explanation, run the contradiction checks) before a small JSON.
       const raw = await callClaude(content, 48000);
-      const parsed = parseJson(raw);
-      const responseFlags = Array.isArray(parsed.response_flags) ? parsed.response_flags
-        .map((r) => ({
-          form: String(r.form || '').trim(),
-          item: String(r.item || '').trim(),
-          issue: String(r.issue || '').trim(),
-          discrepancy_type: String(r.discrepancy_type || '').trim().toLowerCase(),
-          marked: String(r.marked || '').trim(),
-          should_be: String(r.should_be || '').trim(),
-          reason: String(r.reason || r.note || '').trim(),
-          other_form: String(r.other_form || '').trim(),
-          document: String(r.document || '').trim(),
-          source: String(r.source || '').trim(),
-        }))
-        .filter((r) => r.form || r.item || r.reason || r.other_form || r.document || r.source) : [];
-      const ka = parsed.key_answers || {};
-      const keyAnswers = {
-        spq_7e: String(ka.spq_7e || 'na').toLowerCase().trim(),
-        hoa_any_no: String(ka.hoa_any_no || 'na').toLowerCase().trim(),
-        fire_clearance: String(ka.fire_clearance || 'na').toLowerCase().trim(),
-        fire_clearance_item: String(ka.fire_clearance_item || '').trim(),
-        fhds: String(ka.fhds || 'na').toLowerCase().trim(),
-      };
+      const { responseFlags, keyAnswers } = parseAnswerReview(raw);
       return { responseFlags, keyAnswers, dropped };
     } catch (err) {
       const tooLarge = /\b413\b|request_too_large|too\s*large/i.test(err.message || '');
