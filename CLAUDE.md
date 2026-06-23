@@ -21,7 +21,9 @@ This was written from a long chat session that had repeated confusion about *whi
 - **Make all field-schema changes ONCE, in `lib/rpa-fields.js`.** Both paths inherit them. Do not reintroduce an inline `FIELDS` in either function.
 - `lib/` is a subfolder *on purpose*: Netlify turns every top-level functions `.js` into an endpoint, but subfolder files are plain importable modules.
 - The schema feeds the tool via `properties: FIELDS` + `required: Object.keys(FIELDS)`, so adding a key to `lib/rpa-fields.js` auto-registers it.
-- **STILL DUPLICATED (not yet shared):** the targeted-call orchestration — `TARGETED_FIELDS`, `TARGETED_FIELD_NAMES`, `TARGETED_PROMPT`, and the merge loop — exists inline in BOTH `extract.js` and `extract-background.js`. They are currently **identical**. If you change targeted/merge logic, change BOTH files, or finish the job by extracting that orchestration into a shared module too.
+- **NOW SHARED (consolidated 2026-06-23):** the targeted-call orchestration lives in **`netlify/functions/lib/targeted-call.js`** — `TARGETED_FIELDS`, `TARGETED_FIELD_NAMES`, `targetedTool`, `TARGETED_PROMPT`, `buildTargetedContent`, `buildImageFallbackContent`, `mergeTargetedFields`, `trimStatusFor`, and `runTargetedTrimCall` (the build-call-merge flow + the render-retry). Both `extract.js` and `extract-background.js` import from it; their inline copies are gone. **Make targeted/merge changes ONCE here.** The functions still own the surrounding handler wiring (`callApi`, `renderAllPagesAsImages`, `findToolUse`, page detection, `buildTrimmedPdf`, Opus escalation) and pass `callApi`/`renderAllPagesAsImages`/`findToolUse` into `runTargetedTrimCall` via `deps`.
+  - Drift that existed before consolidation and was reconciled: the live worker carried a **stale one-sided** `targetedTool.description` (subsection A only) while `extract.js` had the corrected **bidirectional** one — the shared module uses the bidirectional version, so the live worker now correctly instructs seller extraction from subsection B.
+  - Known REMAINING divergence (out of scope, NOT shared): `extract-background.js` has `pdfStructureError` detection in its trim/detection block and an `image_fallback` confabulation-clearing step in Opus escalation that `extract.js` lacks; Opus-escalation log prefixes differ (`extract-background:` vs `extract:`). These are in the handler bodies, not the targeted unit.
 
 ## 4. What changed this session
 ### a) Buyer entity modeling + buyer/seller swap fix
@@ -39,6 +41,12 @@ Root cause: on dual-agency deals (same brokerage both sides, different agents), 
 - `TARGETED_PROMPT` rewritten **bidirectional**: A → `buyer_agent_*`, B → `seller_agent_*`, strict separation, "if B's contact lines are blank, return empty — don't borrow from A."
 - Merge loop: `hasMls` guard — the targeted (subsection-B) seller value wins **only when there is no MLS**; with an MLS present, keep the MLS-sourced seller agent.
 
+### c) Example-leak fix + targeted-call render-retry + consolidation (2026-06-23)
+Triggered by a real run where the brokers fields showed "Anvil Real Estate" / DRE "02014153" with ZERO reflection on any document.
+- **Root cause 1 (hallucination):** those exact strings were the *example values* baked into the `buyer_agent_brokerage_name` / `_dre` descriptions in `lib/rpa-fields.js`. When the brokers page didn't render for the model, it echoed the example. Fix: replaced the realistic examples on all four buyer agent/brokerage fields with synthetic placeholders (`<FIRM_NAME>`, `<########>`, `<AGENT_NAME>`) and added a **"BLANK / UNREADABLE RULE: return empty string, never guess, never echo the placeholder."**
+- **Root cause 2 (blank legit data):** the run's PDF had a corrupt object (`Invalid object ref: 1338 0 R`). The text layer was intact (so detection succeeded → `text_trim`), but Anthropic's PDF renderer choked on those pages → the targeted call returned ALL fields empty → buyer names/agent stayed blank. Fix: `runTargetedTrimCall` now **retries once on a hi-res server-side PNG render** when a `text_trim` result comes back all-empty (our renderer tolerates broken object refs). Status becomes `<status>_render_retry` on recovery. Normal (non-empty) runs are unchanged — single call, no added latency.
+- **Consolidation:** the whole targeted unit moved to `lib/targeted-call.js` (see §3). The functions' targeted+merge regions are now byte-identical.
+
 ## 5. Downstream (Zapier → Process Street) — owner's side, VERIFY before relying
 - Frontend posts `extracted.rpa` to the RPA Zapier catch-hook (get the exact hook URL/IDs from the owner; don't trust any pasted from this doc).
 - A Formatter **"Split Text"** step ("Buyer Names (separate)") splits `buyer_names` on comma and **shatters entity names**. Now that `buyer_1..4` exist, the plan is to **retire that Split Text step and map `buyer_1..4` directly**.
@@ -48,7 +56,9 @@ Root cause: on dual-agency deals (same brokerage both sides, different agents), 
 - Confirm the consolidation deploy is healthy: a fresh frontend extraction returns normally and **Copy JSON** shows `buyer_1`, `buyer_2`, `buyer_type` populated.
 - Retire the Zapier "Split Text" step; map `buyer_1..4`.
 - Add the new buyer fields to the Zapier → Process Street mapping.
-- (Optional) finish consolidation by sharing the targeted-call orchestration (`TARGETED_*` + merge) so it can't drift either.
+- ✅ DONE (2026-06-23): targeted-call orchestration shared into `lib/targeted-call.js` so it can't drift; example-leak + render-retry fixes landed (see §4c).
+- Watch the function logs for `_render_retry` statuses — they mark packets that only extracted after the hi-res re-render (i.e. PDFs whose pages don't render natively). A cluster of them = a source-PDF quality problem worth chasing upstream.
+- (Optional) the remaining handler-body divergence between `extract.js` and `extract-background.js` (`pdfStructureError`, Opus confab-clearing, log prefixes — see §3) is still un-shared. Low priority since `extract.js` is the legacy direct-call endpoint, not the frontend path.
 
 ## 7. Working conventions (owner's preferences)
 - Deliver **complete replacement files** with exact destination paths. Surgical/patch edits only when there's a specific safety reason and current file contents are unknown — in that case, ask for the current file first.

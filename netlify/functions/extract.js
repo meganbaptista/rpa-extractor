@@ -9,6 +9,16 @@ const { PDFDocument } = require('pdf-lib');
 const { CanvasFactory } = require('pdf-parse/worker');
 const { PDFParse } = require('pdf-parse');
 const { canonicalAddress } = require('./lib/address');
+// Targeted-call orchestration (definitions, prompt, merge, render-retry) is
+// shared with extract-background.js — single source of truth, see lib/targeted-call.js.
+const {
+  TARGETED_FIELD_NAMES,
+  targetedTool,
+  buildImageFallbackContent,
+  mergeTargetedFields,
+  runTargetedTrimCall,
+  trimStatusFor
+} = require('./lib/targeted-call');
 
 // ── PAGE-DETECTION MARKERS ──────────────────────────────────────────────────
 // These two literal strings have been stable in CAR purchase agreement forms
@@ -31,18 +41,8 @@ const BROKERS_SECTION_MARKER = 'REAL ESTATE BROKERS SECTION';
 // If a real package exceeds this cap, the call truncates and logs a warning.
 const MAX_FALLBACK_PAGES = 30;
 
-// ── TARGETED-CALL HI-RES RENDER SCALE ───────────────────────────────────────
-// When the packet's text layer is destroyed (vision/image detection path), the
-// model can only read the rendered pixels of the brokers page + RPA p1. The
-// Anthropic-side rasterization of a flattened/scanned page is low-legibility —
-// that is where digit misreads (e.g. "June 7" read as 6/10) and subsection
-// A/B column drift happen. So instead of handing the targeted call the 2-page
-// PDF trim, we render those 2 pages ourselves at this scale and send crisp
-// PNGs. ~2.75 renders a letter page near 1680x2180 — sharp enough to resolve a
-// single handwritten digit and to keep the Buyer/Seller brokerage rows apart —
-// while 2 pages stay well under the request size limit. Text-layer-intact
-// packets keep the PDF block (the model gets text + image there and is reliable).
-const TARGETED_IMAGE_SCALE = 2.75;
+// TARGETED_IMAGE_SCALE (the hi-res render scale for the targeted call) now lives
+// in lib/targeted-call.js alongside the render-retry logic that uses it.
 
 // ── HELPER: extract text from each page of a PDF buffer ─────────────────────
 // Returns an array of strings, one per page (page 1 at index 0).
@@ -619,131 +619,9 @@ exports.handler = async function(event, context) {
       : null;
 
     // ─── TARGETED CALL DEFINITIONS ────────────────────────────────────────────
-    // Pulled OUT of the conditional block so we can fire the targeted call in
-    // parallel with the main call (see PARALLEL EXECUTION below).
-    const TARGETED_FIELD_NAMES = [
-      'date_rpa_prepared',
-      'buyer_agent_name',
-      'buyer_agent_dre',
-      'buyer_agent_brokerage_name',
-      'buyer_agent_brokerage_dre',
-      'buyer_agent_address',
-      'buyer_agent_email',
-      'buyer_agent_phone',
-      // buyer_agent_name_2 and _dre_2 intentionally NOT in the trigger list —
-      // they're legitimately empty when only one agent signs, so an empty
-      // value here doesn't mean the main call failed.
-      'seller_agent_name',
-      'seller_agent_dre',
-      'seller_agent_brokerage_name',
-      'seller_agent_brokerage_dre',
-      'seller_agent_address',
-      'seller_agent_email',
-      'seller_agent_phone'
-      // seller_agent_email_2 (co-listing agent) is an MLS-only concept — the
-      // targeted call only sees the 2-page RPA trim, so it never sources it.
-    ];
-
-    const TARGETED_FIELDS = {
-      date_rpa_prepared: FIELDS.date_rpa_prepared,
-      buyer_agent_name: FIELDS.buyer_agent_name,
-      buyer_agent_dre: FIELDS.buyer_agent_dre,
-      buyer_agent_name_2: FIELDS.buyer_agent_name_2,
-      buyer_agent_dre_2: FIELDS.buyer_agent_dre_2,
-      buyer_agent_brokerage_name: FIELDS.buyer_agent_brokerage_name,
-      buyer_agent_brokerage_dre: FIELDS.buyer_agent_brokerage_dre,
-      buyer_agent_address: FIELDS.buyer_agent_address,
-      buyer_agent_email: FIELDS.buyer_agent_email,
-      buyer_agent_phone: FIELDS.buyer_agent_phone,
-      // Seller agent — sourced ONLY from subsection B "Seller's Brokerage Firm"
-      // on the last page of the RPA. The targeted call sees only the 2-page RPA
-      // trim (no MLS), so these descriptions point exclusively at subsection B.
-      // The merge step decides whether these win over the main call.
-      seller_agent_name: { type: "string", description: "Seller's agent name from the FIRST 'By' line in subsection B 'Seller's Brokerage Firm' on the LAST PAGE of the RPA. CRITICAL: subsection A 'Buyer's Brokerage Firm' sits directly ABOVE subsection B on the same page with an identical layout — DO NOT pull this name from subsection A, that is the buyer's agent, a completely different person. The seller agent name is on the line directly under 'B. Seller's Brokerage Firm'. The name may be a faint cursive DocuSign signature with the printed name beside or below it — read the printed name. If the name is illegible, return empty string (do not guess). Example: 'By Lauren Reichenberg   DRE Lic. # 01415570' → return 'Lauren Reichenberg'." },
-      seller_agent_dre: { type: "string", description: "Seller agent INDIVIDUAL DRE license number from the FIRST 'By' line in subsection B on the LAST PAGE of the RPA. This is the individual agent's DRE, NOT the brokerage's DRE (which sits on the firm-name line). DO NOT pull from subsection A — that is the buyer agent's DRE, a different number. Example: 'By Lauren Reichenberg   DRE Lic. # 01415570' → return '01415570'." },
-      seller_agent_brokerage_name: { type: "string", description: "Seller's brokerage/listing firm name from the 'B. Seller's Brokerage Firm' line in subsection B on the LAST PAGE of the RPA. DO NOT pull from subsection A (that is the buyer's brokerage). Example: 'B. Seller's Brokerage Firm Compass' → return 'Compass'." },
-      seller_agent_brokerage_dre: { type: "string", description: "Seller brokerage DRE on the SAME LINE as the seller brokerage firm name in subsection B (NOT the agent's individual DRE line). DO NOT pull from subsection A. Example: 'B. Seller's Brokerage Firm Compass   DRE Lic. # 01991628' → return '01991628'." },
-      seller_agent_address: { type: "string", description: "Seller agent OFFICE STREET ADDRESS from subsection B on the LAST PAGE of the RPA — the Address line between the 'By' lines and the Email line. Combine Address + City + State + Zip into one string. This is a STREET ADDRESS, never a phone number. Subsection B's contact lines are frequently BLANK — if the Address line after the label is empty, return empty string (do NOT borrow the address from subsection A). DO NOT pull from subsection A." },
-      seller_agent_email: { type: "string", description: "Seller agent email from subsection B on the LAST PAGE of the RPA — shares the line with 'Phone #'. Subsection B's email is frequently BLANK — if empty, return empty string (do NOT borrow the email from subsection A, that is the buyer agent's email). DO NOT pull from subsection A, CCPA pages, advisories, or the document footer." },
-      seller_agent_phone: { type: "string", description: "Seller agent phone from subsection B, on the SAME line as seller_agent_email, after 'Phone #'. Frequently BLANK in subsection B — if empty, return empty string (do NOT borrow from subsection A). DO NOT pull from subsection A." }
-    };
-
-    const targetedTool = {
-      name: "extract_targeted_fields",
-      description: "Extract a small set of fields from a California real estate purchase agreement package. You have ONE job: locate two specific pages and extract from them. (1) Find page 1 of the original RPA/VLPA/RIPA/CPA — identifiable by the literal label 'Date Prepared:' at the top-left and the footer 'PAGE 1 OF 17' or similar — and extract the date next to that label. (2) Find the LAST PAGE of the same RPA — identifiable by the 'REAL ESTATE BROKERS SECTION' header and the footer 'PAGE 17 OF 17' or similar. From subsection A 'Buyer's Brokerage Firm' extract every buyer_agent_* field; from subsection B 'Seller's Brokerage Firm' extract every seller_agent_* field. Keep the two subsections strictly separate. Both pages exist in the package. The RPA is always present. Read each field description carefully and return values directly from those two pages.",
-      input_schema: {
-        type: "object",
-        properties: TARGETED_FIELDS,
-        required: Object.keys(TARGETED_FIELDS)
-      }
-    };
-
-    const TARGETED_PROMPT = `Your task is narrow and specific. The attached package contains a California real estate purchase agreement (RPA / VLPA / RIPA / CPA). Find these two pages in the document set and extract from them by calling the extract_targeted_fields tool:
-
-• Page 1 of the RPA — top-left contains the literal text "Date Prepared:" followed by a date. The footer on this page reads "RPA REVISED 12/25 (PAGE 1 OF 17)" or similar variant. Extract the date for date_rpa_prepared. Transcribe the characters that literally appear after the "Date Prepared:" label exactly as written, then convert to ISO — e.g. "June 7, 2026" → "2026-06-07". Read each digit; do NOT round, infer, or approximate the day (do not turn a 7 into a 10, etc.).
-
-• Last page of the RPA (typically PAGE 17 OF 17) — titled "REAL ESTATE BROKERS SECTION". This page contains TWO subsections that look almost identical. Buyer fields come from subsection A; seller fields come from subsection B:
-
-  ┌─────────────────────────────────────────────────────────┐
-  │ A. Buyer's Brokerage Firm  [BUYER firm]    DRE # [...]  │  ← buyer_agent_* fields
-  │    By [BUYER agent 1]                      DRE # [...]  │  ← buyer_agent_* fields
-  │    By [BUYER agent 2 if any]               DRE # [...]  │  ← buyer_agent_* fields
-  │    Address [BUYER office addr]  City  State  Zip        │  ← buyer_agent_* fields
-  │    Email [BUYER agent email]    Phone # [BUYER phone]   │  ← buyer_agent_* fields
-  │    ☐ More than one agent from the same firm...          │
-  ├─────────────────────────────────────────────────────────┤
-  │ B. Seller's Brokerage Firm [SELLER firm]   DRE # [...]  │  ← seller_agent_* fields
-  │    By [SELLER agent 1]                     DRE # [...]  │  ← seller_agent_* fields
-  │    Address [SELLER office addr] City State Zip          │  ← seller_agent_* fields
-  │    Email [SELLER email]         Phone # [SELLER phone]  │  ← seller_agent_* fields
-  └─────────────────────────────────────────────────────────┘
-
-The two subsections are mirror images with identical labels (firm, By, DRE, Address, Email, Phone) but completely different people. Keep them strictly separated:
-• EVERY buyer_agent_* field MUST come from subsection A only. Never pull a buyer field from subsection B.
-• EVERY seller_agent_* field MUST come from subsection B only. Never pull a seller field from subsection A.
-A common failure mode is locking onto the right subsection for the agent name, then drifting into the other subsection for the remaining fields. Re-anchor on the correct subsection header — "A. Buyer's Brokerage Firm" for buyer fields, "B. Seller's Brokerage Firm" for seller fields — before each field.
-
-This matters most when the SAME brokerage represents both sides (dual agency) and/or the agency boxes are checked "both the Buyer's and Seller's Agent." Even then, the buyer agent is whoever signs under subsection A and the seller agent is whoever signs under subsection B — they are different people with different DRE numbers. Anchor on the subsection header and the DRE, never on the dual-agency wording.
-
-DIFFERENT BROKERAGES ARE THE COMMON CASE. The buyer's brokerage (subsection A) and the seller's brokerage (subsection B) are usually DIFFERENT firms — e.g. subsection A is "KW Beverly Hills" and subsection B is "Compass" — each with its own office address, email, and phone. Do NOT assume the two sides share a firm name, brokerage DRE, office address, email, or phone. Read each subsection's firm / address / email / phone from its OWN block. If the buyer agent's phone line in subsection A is blank, return empty for buyer_agent_phone — do NOT copy the seller agent's phone from subsection B.
-
-DRE ANCHORING. Each "By" line carries the INDIVIDUAL agent's DRE on that same line, next to that agent's printed name. The BROKERAGE's DRE is a different number on the firm-name line (the "A. Buyer's Brokerage Firm" / "B. Seller's Brokerage Firm" line above the "By" lines). Put the individual agent's DRE in buyer_agent_dre / seller_agent_dre, and the brokerage's DRE in buyer_agent_brokerage_dre / seller_agent_brokerage_dre. Never read an agent's DRE off the firm line, and never put a brokerage DRE into an agent_dre field.
-
-SECOND BUYER AGENT — only when there genuinely are two. Populate buyer_agent_name_2 and buyer_agent_dre_2 ONLY when BOTH are true: (a) the "More than one agent from the same firm represents Buyer" checkbox in subsection A is marked, AND (b) a SECOND "By" line in subsection A has a real printed name. If only one agent signed under subsection A, leave buyer_agent_name_2 and buyer_agent_dre_2 EMPTY. NEVER place the seller's agent (subsection B) into the second buyer slot — the seller's agent is never a buyer's second agent.
-
-Subsection B's contact lines (Address, Email, Phone) are frequently BLANK even when the seller agent name and DRE are filled in. When a subsection B contact line is blank, return an EMPTY STRING for that field — do NOT borrow the buyer's address, email, or phone from subsection A to fill a seller field.
-
-Address fields are STREET ADDRESSES like "23046 Avenida De La Carlota, Ste 600, Laguna Hills, CA 92653" — never a phone number. If you are about to return digits like "949-707-4400" for an address, stop and re-read the Address line in the correct subsection.
-
-ANTI-HALLUCINATION RULES — read carefully:
-
-When you CAN clearly read the value on the page (text is sharp, label is visible, value is filled in), return it. The RPA is always present and the agent name/DRE fields are usually filled in, so the common case is non-empty.
-
-But when you CANNOT clearly read a value — page is blurry, OCR text is garbled, label is visible but the line after it is blank or unreadable, or you genuinely cannot find the field — return an EMPTY STRING. An honest blank is always better than a guess.
-
-Specifically, NEVER do any of the following:
-
-• NEVER return "2025" or any year that comes from the form's copyright footer "© 2025 California Association of REALTORS®". The copyright year is NOT the Date Prepared.
-• NEVER return "<UNKNOWN>", "N/A", "TBD", "see addendum", or any placeholder string for an agent field. If you can't find the info, return empty string for that field.
-• NEVER use a date from elsewhere in the package (counter offer date, signature date, DocuSign timestamp, property profile sale date, MLS list date) as a substitute for date_rpa_prepared.
-• NEVER invent an agent name. Only return a name that appears verbatim on the page. If a "By" line is an unreadable signature with no legible printed name, return empty string for that name.
-• NEVER infer buyer or seller agent details from the MLS or property profile — neither is included in this 2-page trim.
-• NEVER copy values across subsections. If subsection A is unreadable, return empty for the buyer fields; if subsection B is unreadable, return empty for the seller fields. Do not silently fall back to the other subsection.
-
-Empty strings are the correct answer when extraction is uncertain. The user can fill in missing data manually; they cannot easily detect a wrong-but-plausible-looking value that was hallucinated.`;
-
-    const buildTargetedContent = (docs) => [...docs, { type: 'text', text: TARGETED_PROMPT }];
-
-    // Build content for image-fallback path: each rendered page becomes its
-    // own image block, followed by the targeted prompt.
-    const buildImageFallbackContent = (renderedPages) => {
-      const blocks = renderedPages.map((p) => ({
-        type: 'image',
-        source: { type: 'base64', media_type: 'image/png', data: p.base64 }
-      }));
-      blocks.push({ type: 'text', text: TARGETED_PROMPT });
-      return blocks;
-    };
+    // TARGETED_FIELD_NAMES, TARGETED_FIELDS, targetedTool, TARGETED_PROMPT,
+    // buildTargetedContent, buildImageFallbackContent and the merge/render-retry
+    // logic are imported from lib/targeted-call.js (shared with extract-background.js).
 
     // ─── ORCHESTRATION ───────────────────────────────────────────────────────
     // Detection runs FIRST (was parallel with main). For text-path success
@@ -858,44 +736,16 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
 
       // Fire targeted call on the 2-page trim, in parallel with main.
       if (trimmedTargetedB64) {
-        // On a broken-text-layer packet (vision / image_locate detection) the
-        // model has no text to read -- only pixels. Render the 2-page trim to
-        // hi-res PNGs ourselves and send those instead of the PDF document
-        // block; that is where the date-digit misreads and the Buyer/Seller
-        // (subsection A vs B) column drift come from. Text-layer-intact packets
-        // (text_trim) keep the PDF block -- the model gets text + image there
-        // and is already reliable.
-        const brokenTextLayer =
-          detection.method === 'vision' || detection.method === 'image_locate';
-        targetedCallPromise = (async () => {
-          let targetedContent = null;
-          if (brokenTextLayer) {
-            try {
-              const trimBuffer = Buffer.from(trimmedTargetedB64, 'base64');
-              const hiResPages = await renderAllPagesAsImages(trimBuffer, 2, TARGETED_IMAGE_SCALE);
-              if (hiResPages.length) {
-                targetedContent = buildImageFallbackContent(hiResPages);
-                console.log('targeted call: rendered 2-page trim to hi-res images (scale ' +
-                  TARGETED_IMAGE_SCALE + ') for broken-text-layer packet (' + detection.method + ')');
-              }
-            } catch (renderErr) {
-              console.warn('targeted hi-res render failed (' + renderErr.message + '), using PDF trim instead');
-            }
-          }
-          if (!targetedContent) {
-            const targetedDocs = [{
-              type: 'document',
-              source: { type: 'base64', media_type: 'application/pdf', data: trimmedTargetedB64 },
-              title: 'RPA page 1 and brokers section (trimmed)'
-            }];
-            targetedContent = buildTargetedContent(targetedDocs);
-          }
-          return callApi(targetedContent, targetedTool);
-        })();
-        extractionStatus =
-          detection.method === 'text' ? 'text_trim' :
-          detection.method === 'image_locate' ? 'image_locate_trim' :
-          'vision_trim_sonnet';
+        // Set synchronously so the catch-on-reject path below can downgrade the
+        // status; runTargetedTrimCall returns the final status (it may suffix
+        // '_render_retry' when an all-empty PDF-block result is recovered by a
+        // hi-res server-side re-render). See lib/targeted-call.js.
+        extractionStatus = trimStatusFor(detection.method);
+        targetedCallPromise = runTargetedTrimCall({
+          trimmedTargetedB64,
+          detectionMethod: detection.method,
+          deps: { callApi, renderAllPagesAsImages, findToolUse }
+        });
         console.log(
           'targeted call: started in parallel with main, trimmed to 2 pages via ' + detection.method + ' ' +
           '(date_prepared=doc' + located.dpDoc + '/page' + (located.dpPage + 1) +
@@ -915,7 +765,10 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
           'image fallback: rendered ' + renderedPages.length + ' pages in ' +
           (Date.now() - renderStart) + 'ms, firing targeted call on images'
         );
-        return callApi(buildImageFallbackContent(renderedPages), targetedTool);
+        const data = await callApi(buildImageFallbackContent(renderedPages), targetedTool);
+        // Same { data, status } shape as runTargetedTrimCall so the await/merge
+        // below is uniform across both targeted-call paths.
+        return { data, status: 'image_fallback_sonnet' };
       })();
       extractionStatus = 'image_fallback_sonnet';
     }
@@ -928,34 +781,18 @@ Empty strings are the correct answer when extraction is uncertain. The user can 
 
     if (targetedCallPromise) {
       try {
-        const targetedData = await targetedCallPromise;
-        const targetedToolBlock = findToolUse(targetedData);
+        const targetedResult = await targetedCallPromise;
+        // Both targeted paths now resolve to { data, status }. Adopt the
+        // resolved status (it may be '<status>_render_retry' when the trim call
+        // recovered an all-empty PDF result via a hi-res re-render).
+        extractionStatus = targetedResult.status;
+        const targetedToolBlock = findToolUse(targetedResult.data);
 
         if (targetedToolBlock && targetedToolBlock.input) {
-          const filled = [];
-          const empty = [];
-          const skippedForMls = [];
-          // Seller agent priority is MLS-first (see FIELDS.seller_agent_*). The
-          // targeted call reads subsection B of the RPA brokers section, which
-          // should only win for the seller when there is NO MLS in the package.
-          // If the main call found an MLS (mls_number non-empty), keep the main
-          // call's MLS-sourced seller agent and ignore the targeted B values.
-          const hasMls = !!(mergedFields.mls_number && mergedFields.mls_number.trim() !== '');
-          for (const [key, value] of Object.entries(targetedToolBlock.input)) {
-            // Don't let subsection B override an MLS-sourced seller agent.
-            if (hasMls && key.indexOf('seller_agent_') === 0) {
-              skippedForMls.push(key);
-              continue;
-            }
-            // Targeted call wins ONLY if it produced a non-empty value.
-            // Never overwrite a main-call success with a targeted-call empty.
-            if (value && value.trim() !== '') {
-              mergedFields[key] = value;
-              filled.push(key);
-            } else {
-              empty.push(key);
-            }
-          }
+          // Merge subsection-A/B values over the main call (non-empty wins;
+          // seller_agent_* skipped when an MLS is present). See lib/targeted-call.js.
+          const { filled, empty, skippedForMls } =
+            mergeTargetedFields(mergedFields, targetedToolBlock.input);
           console.log(
             'targeted call results (' + extractionStatus + '): filled [' + filled.join(', ') + '], ' +
             'still empty [' + empty.join(', ') + ']' +
