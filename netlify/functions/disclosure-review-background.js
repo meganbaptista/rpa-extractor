@@ -240,7 +240,7 @@ async function callClaude(prompt, attempt = 0) {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 8000,
+      max_tokens: 48000,
       thinking: { type: 'adaptive', display: 'omitted' },
       output_config: { effort: 'high' },
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],

@@ -483,7 +483,7 @@ async function callClaude(content, maxTokens, attempt = 0) {
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: maxTokens || 8000,
+      max_tokens: maxTokens || 16000,
       thinking: { type: 'adaptive', display: 'omitted' },
       output_config: { effort: 'high' },
       messages: [{ role: 'user', content }],
@@ -662,7 +662,7 @@ async function identifyForms(docs) {
       // Form-ID + revision + address only now (the answer review is a separate pass),
       // so the output is small. Keep a comfortable ceiling for adaptive thinking over a
       // multi-form packet.
-      const raw = await callClaude(content, 12000);
+      const raw = await callClaude(content, 24000);
       const parsed = parseJson(raw);
       const forms = Array.isArray(parsed.forms) ? parsed.forms
         .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim() }))
@@ -698,7 +698,7 @@ async function reviewAnswers(docs) {
     try {
       // Generous ceiling: this is the heavy reasoning pass (read every marked answer,
       // pair Yes with explanation, run the contradiction checks) before a small JSON.
-      const raw = await callClaude(content, 24000);
+      const raw = await callClaude(content, 48000);
       const parsed = parseJson(raw);
       const responseFlags = Array.isArray(parsed.response_flags) ? parsed.response_flags
         .map((r) => ({
