@@ -1075,7 +1075,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   if (followupCount) {
     chaseEmailBody =
       'Hi,\n\n' +
-      `Thank you for sending over the disclosures for ${address}. After reviewing the package against our file, a few items still need attention.\n` +
+      'Thank you for sending the disclosures. After reviewing the package against our file, a few items still need attention.\n' +
       (stillNeeded.length
         ? '\nStill outstanding:\n' + stillNeeded.map((x) => `- ${x}`).join('\n') + '\n'
         : '') +
