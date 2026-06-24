@@ -19,6 +19,9 @@ const {
   runTargetedTrimCall,
   trimStatusFor
 } = require('./lib/targeted-call');
+// Scrubs model-emitted placeholder sentinels ("<UNKNOWN>", "N/A", ...) back to
+// empty string so a missed field reads as honestly blank, not fake-filled.
+const { scrubPlaceholders } = require('./lib/sanitize');
 
 // ── PAGE-DETECTION MARKERS ──────────────────────────────────────────────────
 // These two literal strings have been stable in CAR purchase agreement forms
@@ -823,6 +826,13 @@ exports.handler = async function(event, context) {
     // server-side render fallback fails (it can't process Adobe-signed PDFs), re-run
     // the full extraction ONCE on Opus 4.8 (native PDF vision, no render dependency)
     // and fill the blanks. Only fires on weak results; clean PDFs stay on Sonnet.
+    // Scrub placeholder sentinels BEFORE the missingCritical check so a field
+    // the model fake-filled with "<UNKNOWN>"/"N/A"/etc. counts as missing and
+    // gets a real escalation attempt (instead of silently passing as filled).
+    const scrubbedPreEscalation = scrubPlaceholders(mergedFields);
+    if (scrubbedPreEscalation.length) {
+      console.warn('sanitize: scrubbed placeholder values before escalation check [' + scrubbedPreEscalation.join(', ') + ']');
+    }
     const CRITICAL_FIELDS = ['buyer_names', 'seller_names', 'property_address', 'final_purchase_price'];
     const missingCritical = CRITICAL_FIELDS.filter((k) => !(mergedFields[k] && String(mergedFields[k]).trim() !== ''));
     const weakStatus = ['failed_all_paths', 'image_fallback_sonnet', 'vision_trim_sonnet'].includes(extractionStatus);
@@ -890,6 +900,14 @@ exports.handler = async function(event, context) {
         if (blanked.length) {
           console.warn('anti-fabrication: blanked blind-path values for manual review [' + blanked.join(', ') + ']');
         }
+      }
+
+      // Final placeholder scrub before the result leaves the function — catches
+      // any sentinel the Opus escalation re-introduced after the pre-escalation
+      // scrub. Guarantees no "<UNKNOWN>"-style value reaches the UI or Zapier.
+      const scrubbedFinal = scrubPlaceholders(mergedFields);
+      if (scrubbedFinal.length) {
+        console.warn('sanitize: scrubbed placeholder values before store [' + scrubbedFinal.join(', ') + ']');
       }
 
       // Canonicalize the property address to USPS shorthand suffixes so it joins
