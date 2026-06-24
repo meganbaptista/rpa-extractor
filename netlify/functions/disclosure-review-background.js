@@ -82,6 +82,36 @@ function isDisclosureField(label) {
 }
 
 // ----------------------------------------------------------------------------
+// Pull the seller name(s) out of the FULL (pre-filter) field set so the email
+// can be addressed to the actual sellers. Without this the model never sees a
+// seller name (those fields are dropped by NON_DISCLOSURE_LABEL_HINTS) and
+// invents a greeting from whatever leaks through — the agent, the brokerage
+// team, or just seller 1. Match labels that look like a seller name field
+// ("Seller 1 Name", "Seller Name(s)", "Name of Seller"), ordered by seller
+// number, and hand the raw values to the model so it can greet by first name.
+// Entity/trust names (which contain commas) are passed through intact; the
+// model decides how to address them.
+// ----------------------------------------------------------------------------
+function extractSellerNames(fields) {
+  const ranked = [];
+  const seen = new Set();
+  for (const f of fields || []) {
+    const l = String(f.label || '').toLowerCase();
+    if (!l.includes('seller') || !l.includes('name')) continue;
+    if (/agent|broker|assistant|email|docusign|signature|initial/.test(l)) continue;
+    const v = String(f.value || '').trim();
+    if (!v) continue;
+    const key = v.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const m = l.match(/seller\s*#?\s*(\d+)/);
+    ranked.push({ order: m ? parseInt(m[1], 10) : 50, v });
+  }
+  ranked.sort((a, b) => a.order - b.order);
+  return ranked.map((r) => r.v);
+}
+
+// ----------------------------------------------------------------------------
 // Normalize one raw Process Street form-field-value item to { label, value }.
 // Defensive on shape because the exact property names should be confirmed
 // against the live API (see the README note delivered with this file): we try
@@ -193,11 +223,18 @@ function buildReviewPrompt(fields, ctx) {
 
   const where = ctx.propertyAddress ? ` for ${ctx.propertyAddress}` : '';
 
+  const sellers = Array.isArray(ctx.sellerNames) ? ctx.sellerNames.filter(Boolean) : [];
+  const sellerBlock = sellers.length
+    ? `SELLERS (the people this email is addressed to — use these and ONLY these for the greeting):\n${sellers.map((n) => `- ${n}`).join('\n')}`
+    : `SELLERS: the seller name was not available — open the email with exactly "Hi there,".`;
+
   return `You are an expert California real estate transaction coordinator on the LISTING side, reviewing a seller's completed disclosure answers${where} BEFORE they are finalized for signature. Forms involved are the seller-narrative disclosures (TDS, SPQ and its addendum, ESD, CSPQ, VLQ) — the parts where the seller writes explanations.
 
 Your ONE job: read the seller's answers below and flag explanations that a buyer's side will question, so the listing team can ask the seller to clarify BEFORE the disclosures go out. You are NOT giving legal advice, NOT changing the seller's disclosures, and NOT auditing signatures. You surface clarifying questions only.
 
 Pair each "Yes" disclosure with its matching "Please explain here" answer (they share a code like C12, or a section like 7A). Judge each explanation for: vagueness (no where/when/extent), missing resolution (issue noted but not whether fixed/permitted), missing permits on improvements, missing dates, internal inconsistency across answers, and material facts that read as incomplete (water/drainage, soil/slope, active pest treatment, deaths, litigation, unpermitted work, neighbor disputes).
+
+LOCATOR: for EVERY finding, capture where it lives so the seller and the team can jump straight to it. Read it off the question label — the form (TDS, SPQ, ESD, CSPQ, VLQ) plus the question code (like C12) or section (like 7A), e.g. "SPQ C12" or "TDS Section II". This matters MOST for "material" findings, because those are the ones that go to the seller — every material finding MUST carry a locator. If a material finding draws on more than one answer, list each locator (e.g. "SPQ C7, C9" or "SPQ C7; TDS II"). Only use an empty string when the underlying question genuinely has no code or section in its label.
 
 Tier EVERY finding into exactly one of:
 - "material": a vague or incomplete answer that carries real liability, renegotiation, or buyer-cancellation risk if it goes out as-is (e.g. water intrusion / drainage / a spring, active termite or pest treatment, unpermitted structural work, unresolved damage). These are worth clarifying with the seller before finalizing.
@@ -206,7 +243,12 @@ Tier EVERY finding into exactly one of:
 
 Be calibrated: most answers are fine. Only call something "material" if a careful buyer's agent would genuinely push on it. It is normal for a packet to have just one to three material items, sometimes zero.
 
-Then write a short, friendly clarification email to the seller that includes ONLY the material items, phrased as easy questions grouped by topic. Plain and warm. CRITICAL STYLE RULE: do NOT use em dashes (the "—" character) anywhere in the email or your output; use periods, commas, or parentheses instead. SIGN-OFF: close the email with exactly "Thanks!" on its own line and nothing after it. Do NOT use "Warm regards", "Best", a team name, or any signature block.
+Then write a short, friendly clarification email to the seller that includes ONLY the material items, phrased as easy questions grouped by topic. Plain and warm.
+GREETING: open with a greeting on its own line addressed to the sellers by FIRST name only, e.g. "Hi Chase and Kelly,". Use only the first names of the people listed under SELLERS below (join two with "and", three or more with commas and a final "and"). If a seller is a trust, estate, or other entity, use its short name or just "Hi there,". NEVER address the email to an agent, a team, the brokerage, or a property address.
+SECTION REFERENCES: for each topic in the email, put its locator in parentheses right after the topic heading, e.g. "Unpermitted work (SPQ C12):", so the seller and the listing team can find the exact question. If a finding has no locator, omit the parentheses for that one.
+CRITICAL STYLE RULE: do NOT use em dashes (the "—" character) anywhere in the email or your output; use periods, commas, or parentheses instead. SIGN-OFF: close the email with exactly "Thanks!" on its own line and nothing after it. Do NOT use "Warm regards", "Best", a team name, or any signature block.
+
+${sellerBlock}
 
 SELLER'S DISCLOSURE ANSWERS:
 ${qa}
@@ -214,11 +256,11 @@ ${qa}
 Respond with ONLY a single JSON object (no markdown fences, no prose before or after) of this shape:
 {
   "overall_status": "clarifications_recommended" | "looks_complete",
-  "material": [ { "topic": "short label", "seller_wrote": "the seller's words", "why": "one sentence on the risk", "ask": "the clarifying question to the seller" } ],
-  "minor": [ { "topic": "...", "note": "one sentence" } ],
-  "internal": [ { "topic": "...", "note": "one sentence for the team" } ],
+  "material": [ { "topic": "short label", "section": "form + question locator, e.g. 'SPQ C12' (empty string if none)", "seller_wrote": "the seller's words", "why": "one sentence on the risk", "ask": "the clarifying question to the seller" } ],
+  "minor": [ { "topic": "...", "section": "locator or empty string", "note": "one sentence" } ],
+  "internal": [ { "topic": "...", "section": "locator or empty string", "note": "one sentence for the team" } ],
   "email_subject": "subject line, no em dashes",
-  "email_body": "the full seller email, material items only, no em dashes. If there are no material items, a one-line note that everything looked complete."
+  "email_body": "the full seller email. Greeting addressed to the sellers by first name, material items only, each topic heading followed by its (locator), no em dashes. If there are no material items, a one-line note that everything looked complete."
 }`;
 }
 
@@ -349,13 +391,18 @@ exports.handler = async function (event) {
       throw new Error('Request had neither formFields nor a workflowRunId');
     }
 
+    // Grab the seller name(s) from the FULL field set before we filter them
+    // out, so the email is addressed to the actual sellers (not the agent/team).
+    const sellerNames = extractSellerNames(fields);
+    console.log(`[disclosure-review] seller names for greeting: ${sellerNames.length ? sellerNames.join(', ') : '(none found)'}`);
+
     const disclosureFields = fields.filter((f) => isDisclosureField(f.label));
     if (!disclosureFields.length) {
       throw new Error('No disclosure fields found after filtering — check the field labels / PS response shape');
     }
 
     // 2) Materiality review.
-    const prompt = buildReviewPrompt(disclosureFields, { propertyAddress });
+    const prompt = buildReviewPrompt(disclosureFields, { propertyAddress, sellerNames });
     const raw = await callClaude(prompt);
     const review = parseReview(raw);
 
@@ -367,9 +414,9 @@ exports.handler = async function (event) {
     const psComment =
       `Disclosure review${propertyAddress ? ` — ${propertyAddress}` : ''}\n` +
       `Status: ${review.overall_status || 'reviewed'} | Material: ${material.length}, Minor: ${minor.length}, Internal: ${internal.length}\n\n` +
-      (material.length ? `MATERIAL (worth clarifying before it goes out):\n${bullets(material, (x) => `${x.topic}: ${x.why} (ask: ${x.ask})`)}\n\n` : 'No material items.\n\n') +
-      (minor.length ? `MINOR (optional):\n${bullets(minor, (x) => `${x.topic}: ${x.note}`)}\n\n` : '') +
-      (internal.length ? `INTERNAL (team only):\n${bullets(internal, (x) => `${x.topic}: ${x.note}`)}\n` : '');
+      (material.length ? `MATERIAL (worth clarifying before it goes out):\n${bullets(material, (x) => `${x.topic}${x.section ? ` (${x.section})` : ''}: ${x.why} (ask: ${x.ask})`)}\n\n` : 'No material items.\n\n') +
+      (minor.length ? `MINOR (optional):\n${bullets(minor, (x) => `${x.topic}${x.section ? ` (${x.section})` : ''}: ${x.note}`)}\n\n` : '') +
+      (internal.length ? `INTERNAL (team only):\n${bullets(internal, (x) => `${x.topic}${x.section ? ` (${x.section})` : ''}: ${x.note}`)}\n` : '');
 
     const payload = {
       checklistRunId: runId || '',
