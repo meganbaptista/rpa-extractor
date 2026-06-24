@@ -602,19 +602,44 @@ const ANSWER_REVIEW_PROMPT =
   'package, skip this check.\n' +
   'ALSO check TDS Section II (the Seller\'s Information checklist of features the property HAS). Go through EVERY row ' +
   'of this checklist in order and do not skip any. For any item the ' +
-  'seller marked the property HAS but left its REQUIRED DETAIL blank, raise a flag: in particular (a) Water Heater ' +
-  'checked but its type (Gas/Solar/Electric) all blank; (b) Roof checked or its Type filled but the Age left blank; ' +
-  '(c) "Exhaust Fan(s) in:" with no location written; (d) "220 Volt Wiring in:" with no location written; and any ' +
-  'similar item that is checked/listed while its type, age, or location line is blank (e.g. Pool/Spa Heater type, ' +
-  'Water Supply type, Gas Supply type). For EACH, return a flag with "form":"TDS", "item" = the item name including ' +
-  'its TDS subsection (e.g. "II A Water Heater", "II A Roof"), "issue":"detail_incomplete", "marked":"present", and ' +
+  'seller marked the property HAS but left its REQUIRED DETAIL blank, raise a "detail_incomplete" flag: in ' +
+  'particular (a) Water Heater checked but its type (Gas/Solar/Electric) all blank; (b) a Pool, Spa, or Pool/Spa ' +
+  'Heater shown present but its type (Gas/Solar/Electric) box not checked; (c) Roof checked or its Type filled but ' +
+  'the Age left blank; and any similar checked item whose type or age line is blank (Water Supply type, Gas Supply ' +
+  'type). ALSO, the fill-in fields in the BOTTOM block of TDS page 1 are expected to be completed by the seller: ' +
+  'flag each of these as "detail_incomplete" whenever its line is left BLANK, even if no adjacent box is checked: ' +
+  '"Exhaust Fan(s) in:" (location), "220 Volt Wiring in:" (location), "Fireplace(s) in:" (location), and "Roof(s): ' +
+  'Type" and "Age". For EACH, return a flag with "form":"TDS", "item" = the item name including ' +
+  'its TDS subsection (e.g. "II A Water Heater", "II A Pool/Spa Heater", "II A Roof", "II A Exhaust Fan(s)"), ' +
+  '"issue":"detail_incomplete", "marked":"present", and ' +
   '"reason" = the specific blank detail phrased to drop into a request, e.g. "the type (Gas/Solar/Electric) is left ' +
-  'blank" or "the Age is left blank". Do NOT flag an item that is simply not checked / not present.\n' +
-  'ALSO inspect the SELLER signature block(s) on the signed disclosure forms (TDS, SPQ, SBSA and similar). If a ' +
-  'seller signed as an ENTITY rather than as a natural person, raise a flag: this is when the signature line shows a ' +
-  'trust, LLC, corporation, estate, or partnership name (e.g. "Smith Family Trust") instead of an individual person, ' +
-  'OR the entity name is signed without an individual signing in a representative capacity (no "..., Trustee" / ' +
-  '"..., Manager" / "..., its President"). Return a flag with "form":"Seller signature", "item":"entity signer", ' +
+  'blank", "the Age is left blank", or "the location is left blank". For the Section II CHECKLIST items (not the ' +
+  'bottom fill-in block) do NOT flag an item that is simply not checked / not present.\n' +
+  'ALSO check these REQUIRED HEADER FIELDS and flag any that are blank with "issue":"unanswered": (1) the TDS ' +
+  'disclosure date, the "...AS OF (DATE) ____" line near the top of TDS page 1 (the date the seller completes the ' +
+  'TDS, NOT a signature or DocuSign date); return "form":"TDS", "item":"disclosure date", "reason":"the disclosure ' +
+  'date near the top of page 1 is left blank". (2) the SPQ Assessor\'s Parcel Number ("Assessor\'s Parcel No.") in ' +
+  'the SPQ page 1 header; return "form":"SPQ", "item":"APN", "reason":"the Assessor\'s Parcel Number in the header ' +
+  'is left blank". Flag these only when the field is genuinely blank.\n' +
+  'ALSO check the FHDS (Fire Hardening and Defensible Space Disclosure and Addendum, C.A.R. Form FHDS) if its pages ' +
+  'are anywhere in the package (it may be embedded inside a combined packet). The required-complete standard is: the ' +
+  'Section 2 fire-hardening compliance boxes are checked AND Section 3 is completed, specifically Section 3A is ' +
+  'marked (the Property IS or is NOT subject to a local vegetation management ordinance) AND a Section 3C ' +
+  'responsibility option is selected. If an FHDS is present but Section 2 is unchecked, or Section 3A is unmarked, ' +
+  'or no Section 3C option is selected, raise a flag: "form":"FHDS", "item" = the incomplete part (e.g. "Section 2" ' +
+  'or "Section 3"), "issue":"verify_mismatch", "reason" = a complete request sentence, e.g. "the FHDS is present but ' +
+  'Section 2 boxes are not checked and Section 3 is not completed; please complete Section 2, mark Section 3A, ' +
+  'select a Section 3C option, and resend the FHDS". Do NOT flag an FHDS that is fully completed, and do NOT raise ' +
+  'this if no FHDS is in the package.\n' +
+  'ALSO inspect the SELLER signature block(s) on the signed disclosure forms (TDS, SPQ, SBSA and similar). The pre-' +
+  'printed party name on a form (the typed "Seller" name line, which is often a trust or LLC) is NOT the signature ' +
+  'and must NEVER by itself trigger this flag. Judge ONLY by how the seller actually SIGNED. Raise an entity_signer ' +
+  'flag ONLY when, across the ENTIRE package, the seller signed with a bare entity name (trust, LLC, corporation, ' +
+  'estate, or partnership) and NO individual ever signed in a representative capacity. If an individual signs in a ' +
+  'representative capacity ANYWHERE in the seller signing blocks (e.g. "Jane Smith, Trustee", "John Doe, Manager", ' +
+  '"..., its President", or a DocuSign signature showing an individual person\'s name), the signature is CORRECT: do ' +
+  'NOT flag it. When you are not certain an individual signed in a representative capacity, do NOT raise this flag. ' +
+  'When you do flag, return "form":"Seller signature", "item":"entity signer", ' +
   '"issue":"entity_signer", and "reason" = a one-line request naming the entity, e.g. "Seller signed as an entity ' +
   '(Smith Family Trust); please have the seller sign as an individual on behalf of the entity (e.g. Jane Smith, ' +
   'Trustee or authorized signer)". Do NOT flag an ordinary individual seller signature.\n' +
@@ -652,7 +677,7 @@ const ANSWER_REVIEW_PROMPT =
   'if an FHDS is present but Section 2 boxes are left unchecked or Section 3 is not marked Yes, or "na" if no FHDS is ' +
   'in the package.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
-  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect>","other_form":"<for inconsistent>","document":"<for document>","source":"<for transaction>"}],' +
+  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect>","other_form":"<for inconsistent>","document":"<for document>","source":"<for transaction>"}],' +
   '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na","fire_clearance":"yes|no|blank|na","fire_clearance_item":"17F","fhds":"yes|no|na"}}';
 
 const EMPTY_KEY_ANSWERS = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '', fhds: 'na' };
