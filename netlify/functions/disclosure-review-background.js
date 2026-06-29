@@ -329,6 +329,54 @@ function bullets(list, fmt) {
 }
 
 // ----------------------------------------------------------------------------
+// HTML email rendering. The model writes a PLAIN-TEXT body that ends at
+// "Thanks!" with no signature (see the prompt). We build the full HTML email
+// here — body converted to HTML + Megan's branded signature — so the Gmail
+// draft created downstream can be an HTML draft (Body Type = HTML, mapped to
+// `email_body_html`). Previously the signature was injected into a plain-text
+// draft downstream, which stripped its <br> line breaks (everything mashed onto
+// one line) and showed the apostrophe as the raw code "&#39;". Owning the HTML
+// here fixes both. NOTE: escape only & < > — NOT apostrophes/quotes; encoding
+// those is exactly what produced "California&#39;s".
+// ----------------------------------------------------------------------------
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Megan's branded signature block (Georgia font, teal accent, photo, links).
+// The image is Google-hosted; if it ever stops rendering, re-pull the current
+// <img src> from one of her recent sent emails.
+const SIGNATURE_HTML = `<br>-- <br>
+<table style="border:none;border-collapse:collapse" cellpadding="0" cellspacing="0"><tbody>
+<tr style="height:171pt">
+<td style="border-right:1.5pt solid rgb(32,195,212);vertical-align:top;padding:5pt">
+<img src="https://lh5.googleusercontent.com/syzG9xfX8zPsMbrPVZ7hEImywj4ydD1T6nBSrXSBNUOI7WI-bcnSAWDAZnYG1VsU_pAlLr9vnYo59SiZ600yD0DiKyHpedLgRb8PWUVgefo4PE61HcZQkCxwvook5oxHw-YGXZtM" width="134" height="200" style="border:none" alt="My TC Concierge">
+</td>
+<td style="vertical-align:top;padding:5pt">
+<p style="line-height:1.2;margin:0 0 0 4.5pt"><span style="font-size:11pt;color:rgb(32,195,212);font-weight:700;font-family:Georgia,serif">Megan Baptista</span></p>
+<p style="line-height:1.2;margin:0 0 0 4.5pt"><span style="font-size:11pt;color:#000;font-family:Georgia,serif">Owner, My TC Concierge</span></p>
+<p style="line-height:1.2;margin:0 0 0 4.5pt"><span style="font-size:11pt;color:#000;font-family:Georgia,serif">DRE#01956910</span></p>
+<p style="line-height:1.2;margin:0 0 0 4.5pt"><span style="font-size:11pt;color:#000;font-family:Georgia,serif">@My.TC.Concierge</span></p>
+<p style="line-height:1.2;margin:0 0 0 4.5pt"><a href="http://www.mytcconcierge.com" target="_blank" style="font-size:11pt;color:rgb(255,98,228);font-family:Georgia,serif;text-decoration:none">MyTcConcierge.com</a></p>
+<p style="line-height:1.2;margin:4.5pt 0 0 4.5pt"><span style="font-size:11pt;color:#000;font-family:Georgia,serif">Office Hours Mon - Fri 8am - 5pm PST</span></p>
+</td>
+</tr>
+</tbody></table>`;
+
+// Turn the model's plain-text body into HTML: blank lines (\n\n) become
+// paragraph breaks; single newlines become <br>. Then append the signature.
+function renderEmailHtml(bodyText) {
+  const body = String(bodyText || '').trim();
+  const blocks = body
+    ? body
+        .split(/\n{2,}/)
+        .map((block) => `<p style="margin:0 0 1em 0">${escapeHtml(block).replace(/\n/g, '<br>')}</p>`)
+        .join('\n')
+    : '';
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:11pt;color:#000">\n${blocks}\n${SIGNATURE_HTML}\n</div>`;
+}
+
+// ----------------------------------------------------------------------------
 // Deliver the finished review to the Zapier callback (Zap B), which creates the
 // Gmail draft + PS comment. Failure-isolated.
 // ----------------------------------------------------------------------------
@@ -427,6 +475,7 @@ exports.handler = async function (event) {
       material_count: material.length,
       email_subject: review.email_subject || `Quick clarifications on your disclosures${propertyAddress ? ` for ${propertyAddress}` : ''}`,
       email_body: review.email_body || '',
+      email_body_html: renderEmailHtml(review.email_body || ''),
       ps_comment: psComment,
       findings: { material, minor, internal },
     };
@@ -445,6 +494,7 @@ exports.handler = async function (event) {
       material_count: 0,
       email_subject: '',
       email_body: '',
+      email_body_html: '',
       ps_comment: `Disclosure review could not complete: ${err.message}`,
       findings: { material: [], minor: [], internal: [] },
     });

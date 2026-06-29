@@ -402,8 +402,11 @@ exports.handler = async function (event) {
   try { body = JSON.parse(event.body || '{}'); }
   catch { console.error('[compliance-check] invalid JSON body'); return { statusCode: 400 }; }
 
-  const { complianceList, propertyAddress = '', callbackUrl } = body;
+  const { complianceList, propertyAddress = '', callbackUrl, ref = '' } = body;
   const callback = callbackUrl || CALLBACK_URL_ENV;
+  // `ref` is an opaque passthrough (e.g. the deal's Google Doc ID or PS run id).
+  // We never read it — we just echo it back in the callback so the async result
+  // can be routed to the right deal's doc/run by the catch-hook Zap.
 
   // Accept `documents` as an array of {url|base64}, OR as a plain URL string, OR a
   // single object, OR a `documentUrl` string — so a simple Zapier mapping (just the
@@ -444,6 +447,7 @@ exports.handler = async function (event) {
       (na.length ? `NOT APPLICABLE / ELSEWHERE:\n${bullets(na, (x) => `${x.item}: ${x.note}`)}\n` : '');
 
     const payload = {
+      ref,
       property_address: address,
       documents_status: status,
       documents_required_count: requiredCount,
@@ -462,6 +466,7 @@ exports.handler = async function (event) {
   } catch (err) {
     console.error('[compliance-check] ERROR:', err.message);
     await sendCallback(callback, {
+      ref,
       property_address: propertyAddress || '',
       documents_status: 'error',
       documents_required_count: 0,
