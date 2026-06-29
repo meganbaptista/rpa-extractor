@@ -373,7 +373,9 @@ function renderEmailHtml(bodyText) {
         .map((block) => `<p style="margin:0 0 1em 0">${escapeHtml(block).replace(/\n/g, '<br>')}</p>`)
         .join('\n')
     : '';
-  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:11pt;color:#000">\n${blocks}\n${SIGNATURE_HTML}\n</div>`;
+  // 13px Arial == Gmail's "Normal" size, so the body matches a hand-typed
+  // Gmail message. (11pt was rendering noticeably larger than Gmail default.)
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#000">\n${blocks}\n${SIGNATURE_HTML}\n</div>`;
 }
 
 // ----------------------------------------------------------------------------
