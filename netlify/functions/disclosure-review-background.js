@@ -234,7 +234,11 @@ Your ONE job: read the seller's answers below and flag explanations that a buyer
 
 Pair each "Yes" disclosure with its matching "Please explain here" answer (they share a code like C12, or a section like 7A). Judge each explanation for: vagueness (no where/when/extent), missing resolution (issue noted but not whether fixed/permitted), missing permits on improvements, missing dates, internal inconsistency across answers, and material facts that read as incomplete (water/drainage, soil/slope, active pest treatment, deaths, litigation, unpermitted work, neighbor disputes).
 
-LOCATOR: for EVERY finding, capture where it lives so the seller and the team can jump straight to it. Read it off the question label — the form (TDS, SPQ, ESD, CSPQ, VLQ) plus the question code (like C12) or section (like 7A), e.g. "SPQ C12" or "TDS Section II". This matters MOST for "material" findings, because those are the ones that go to the seller — every material finding MUST carry a locator. If a material finding draws on more than one answer, list each locator (e.g. "SPQ C7, C9" or "SPQ C7; TDS II"). Only use an empty string when the underlying question genuinely has no code or section in its label.
+LOCATOR: for EVERY finding, capture where it lives so the seller and the team can jump straight to it. The question labels carry a CODE but usually NOT the form name (e.g. the label reads "C8: Are you aware of any flooding, drainage, or grading problems?"). Derive the form from the code using this scheme, and do NOT guess the form just because a code's letter happens to resemble a form's initials:
+- A code that is a LETTER followed by a number (C8, C12, A3, B2, ...) is a Transfer Disclosure Statement item (TDS Section II, the "Are you (Seller) aware of..." checklist). Write it as "TDS C8".
+- A code that STARTS WITH A NUMBER, usually with a trailing letter (10A, 18E, 7A, ...), is a Seller Property Questionnaire item. Write it as "SPQ 18E".
+- If the label itself names a form (TDS, SPQ, ESD, CSPQ, VLQ), use that name exactly as written. If a code fits neither pattern and the label names no form, give the bare code and do NOT invent a form.
+Always pair the form with the code, e.g. "TDS C8" or "SPQ 18E". This matters MOST for "material" findings, because those are the ones that go to the seller — every material finding MUST carry a locator. If a material finding draws on more than one answer, list each locator (e.g. "TDS C8, C9" or "SPQ 18E; TDS C7"). Only use an empty string when the underlying question genuinely has no code in its label.
 
 Tier EVERY finding into exactly one of:
 - "material": a vague or incomplete answer that carries real liability, renegotiation, or buyer-cancellation risk if it goes out as-is (e.g. water intrusion / drainage / a spring, active termite or pest treatment, unpermitted structural work, unresolved damage). These are worth clarifying with the seller before finalizing.
@@ -245,7 +249,7 @@ Be calibrated: most answers are fine. Only call something "material" if a carefu
 
 Then write a short, friendly clarification email to the seller that includes ONLY the material items, phrased as easy questions grouped by topic. Plain and warm.
 GREETING: open with a greeting on its own line addressed to the sellers by FIRST name only, e.g. "Hi Chase and Kelly,". Use only the first names of the people listed under SELLERS below (join two with "and", three or more with commas and a final "and"). If a seller is a trust, estate, or other entity, use its short name or just "Hi there,". NEVER address the email to an agent, a team, the brokerage, or a property address.
-SECTION REFERENCES: for each topic in the email, put its locator in parentheses right after the topic heading, e.g. "Unpermitted work (SPQ C12):", so the seller and the listing team can find the exact question. If a finding has no locator, omit the parentheses for that one.
+SECTION REFERENCES: for each topic in the email, put its locator in parentheses right after the topic heading, e.g. "Drainage (TDS C8):", so the seller and the listing team can find the exact question. Use the same form-from-code mapping described under LOCATOR. If a finding has no locator, omit the parentheses for that one.
 LINE BREAKS: do NOT hard-wrap text. Write each paragraph (the greeting, the intro, each topic's question, the closing) as ONE continuous line with no line breaks inside it — let the email client wrap it. Use a single newline only between a topic heading and its question, and a blank line (two newlines) only to separate blocks. Never break a sentence across lines.
 CRITICAL STYLE RULE: do NOT use em dashes (the "—" character) anywhere in the email or your output; use periods, commas, or parentheses instead. SIGN-OFF: close the email with exactly "Thanks!" on its own line and nothing after it. Do NOT use "Warm regards", "Best", a team name, or any signature block.
 
@@ -257,7 +261,7 @@ ${qa}
 Respond with ONLY a single JSON object (no markdown fences, no prose before or after) of this shape:
 {
   "overall_status": "clarifications_recommended" | "looks_complete",
-  "material": [ { "topic": "short label", "section": "form + question locator, e.g. 'SPQ C12' (empty string if none)", "seller_wrote": "the seller's words", "why": "one sentence on the risk", "ask": "the clarifying question to the seller" } ],
+  "material": [ { "topic": "short label", "section": "form + question locator, e.g. 'TDS C8' or 'SPQ 18E' (empty string if none)", "seller_wrote": "the seller's words", "why": "one sentence on the risk", "ask": "the clarifying question to the seller" } ],
   "minor": [ { "topic": "...", "section": "locator or empty string", "note": "one sentence" } ],
   "internal": [ { "topic": "...", "section": "locator or empty string", "note": "one sentence for the team" } ],
   "email_subject": "subject line, no em dashes",
