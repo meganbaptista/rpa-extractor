@@ -57,7 +57,11 @@ function blobsConfig(name) {
 }
 
 // ----------------------------------------------------------------------------
-// Opus 4.8 call (adaptive thinking, high effort). Retries on 429/529.
+// Opus 4.8 call (adaptive thinking, medium effort). STREAMED: a long analysis
+// can exceed Node fetch's (undici) 300s headers timeout on a non-streamed
+// request, which surfaces as "fetch failed". Streaming delivers SSE events
+// immediately, so the headers arrive right away and a multi-minute generation
+// never trips the timeout. Retries on 429/529.
 // ----------------------------------------------------------------------------
 async function callClaude(content, maxTokens, attempt = 0) {
   const MAX_RETRIES = 4;
@@ -74,6 +78,7 @@ async function callClaude(content, maxTokens, attempt = 0) {
       // medium effort: cuts thinking tokens + runtime vs high; watch that the
       // signature audit (FX vs Need) stays accurate on the next real packet.
       output_config: { effort: 'medium' },
+      stream: true,
       messages: [{ role: 'user', content }],
     }),
   });
@@ -87,9 +92,37 @@ async function callClaude(content, maxTokens, attempt = 0) {
   }
   if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
 
-  const data = await response.json();
-  if (data.stop_reason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
-  return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+  // Accumulate the text output from the SSE stream. thinking_delta (display
+  // omitted) is ignored; we only want the text blocks (the JSON result).
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let text = '';
+  let stopReason = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      let evt;
+      try { evt = JSON.parse(payload); } catch { continue; }
+      if (evt.type === 'content_block_delta' && evt.delta && evt.delta.type === 'text_delta') {
+        text += evt.delta.text;
+      } else if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
+        stopReason = evt.delta.stop_reason;
+      } else if (evt.type === 'error') {
+        throw new Error(`Claude stream error: ${JSON.stringify(evt.error || {}).slice(0, 200)}`);
+      }
+    }
+  }
+  if (stopReason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
+  return text;
 }
 
 function parseJson(raw) {
@@ -103,7 +136,8 @@ function parseJson(raw) {
 // ----------------------------------------------------------------------------
 const ANALYZE_PROMPT =
   'This PDF is a combined package of California real estate disclosure forms that have been returned SIGNED. Do TWO things and return ONE JSON object.\n\n' +
-  '1) SPLIT MAP. Identify every distinct CAR disclosure/report form whose OWN pages are physically in this package (a form counts only if its own pages are here, NOT if it is merely referenced inside another form). For each form return: "code" (the standard CAR code, e.g. TDS, SPQ, SBSA, AVID, FHDS, LPD, WBSA, ESD), "name" (the full form name), "revision" (the printed revision date in M/YY, or "" if none), and "pages" (the array of 1-indexed page numbers in THIS PDF that belong to that form, in order). Use each form\'s header/footer, its form code, and its "Page X of Y" line to find its exact page span; a form is usually a contiguous run of pages. Every page of the PDF should belong to exactly one form when possible.\n\n' +
+  '1) SPLIT MAP. Identify every distinct CAR disclosure/report form whose OWN pages are physically in this package (a form counts only if its own pages are here, NOT if it is merely referenced inside another form). For each form return: "code" (the standard CAR code, e.g. TDS, SPQ, SBSA, AVID, FHDS, LPD, WBSA, ESD), "name" (the full form name), "revision" (the printed revision date in M/YY, or "" if none), and "pages" (the array of 1-indexed page numbers in THIS PDF that belong to that form, in order). Use each form\'s header/footer, its form code, and its "Page X of Y" line to find its exact page span; a form is usually a contiguous run of pages. Every page of the PDF should belong to exactly one form when possible.\n' +
+  'AVID side: an Agent Visual Inspection Disclosure (AVID) can be the listing agent\'s or the buyer\'s agent\'s. Set "code" to "AVID-LA" when completed by the LISTING (seller\'s) agent and "AVID-BA" when completed by the BUYER\'S agent. Read the agent name and brokerage printed on the AVID, then match that brokerage to a side using whatever evidence the package provides, in this order: (a) an agency-relationship / agency-confirmation form if one is present (clearest); (b) OTHERWISE, the listing brokerage recurs throughout a seller-disclosure package — on the other disclosure forms\' agent lines, the seller\'s RCSD, and brokerage-branded local-area / affiliated-business disclosures — so if the AVID\'s brokerage matches that recurring listing brokerage it is AVID-LA, and if it matches a different, clearly buyer-side brokerage it is AVID-BA. You do NOT need the agency form when the brokerage can be matched this way. If both AVIDs are present, return each as its own form with its own code. Only when the AVID\'s agent/brokerage cannot be matched to either side from ANY evidence in the package, use plain "AVID" rather than guessing.\n\n' +
   '2) SIGNATURE AUDIT. For EACH form determine who has signed/initialed everywhere that form requires. The four possible parties are: B = Buyer, S = Seller, BA = Buyer\'s Agent, LA = Listing/Seller\'s Agent. Return per form:\n' +
   '   - "required_signers": the subset of ["B","S","BA","LA"] this form actually requires to sign or initial (judge from the form\'s own signature and initial lines; NOT every form needs all four).\n' +
   '   - "present_signers": the subset of required_signers who have ACTUALLY completed their signature AND every initial they are required to on that form. A party counts as present ONLY if all of their required marks are done; if any required initial or signature for that party is missing, do NOT include them.\n' +
