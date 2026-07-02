@@ -58,6 +58,15 @@ async function getAccessToken() {
   const creds = loadCreds();
   const header = { alg: 'RS256', typ: 'JWT' };
   const claim = { iss: creds.client_email, scope: DRIVE_SCOPE, aud: TOKEN_URL, iat: now, exp: now + 3600 };
+  // Domain-wide delegation: when GOOGLE_IMPERSONATE_SUBJECT is set (a Workspace
+  // user email), the SA mints its token AS that user, so files it creates are
+  // owned by that user's Drive (which has storage quota). Without this, a service
+  // account cannot create files in My Drive: "Service Accounts do not have storage
+  // quota." Requires authorizing the SA's client_id + the drive scope in the
+  // Workspace Admin console (Security > API Controls > Domain-wide Delegation).
+  // Unset -> no impersonation (unchanged behavior), so this is inert until configured.
+  const subject = process.env.GOOGLE_IMPERSONATE_SUBJECT;
+  if (subject) claim.sub = subject;
   const unsigned = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(claim))}`;
   const signer = crypto.createSign('RSA-SHA256');
   signer.update(unsigned);
