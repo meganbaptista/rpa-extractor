@@ -28,6 +28,10 @@ console.log('[disclosure-split] module loading');
 
 const { getStore } = require('@netlify/blobs');
 const { PDFDocument } = require('pdf-lib');
+// pdfjs (via pdf-parse) tolerates corrupt object refs that make pdf-lib copyPages
+// emit BLANK pages on real disclosure PDFs — same renderer the RPA extractor uses.
+const { CanvasFactory } = require('pdf-parse/worker');
+const { PDFParse } = require('pdf-parse');
 const drive = require('./lib/drive');
 const { EVENTS, makeEvent, publish } = require('./lib/events');
 
@@ -39,6 +43,10 @@ const DONE_STORE = 'disclosure-split-done';
 
 // Fixed party order for the filename status suffix.
 const SIGNER_ORDER = ['B', 'S', 'BA', 'LA'];
+
+// Rasterization settings for robust splitting (see renderAllPages).
+const RENDER_SCALE = 2.0;      // 2x = ~144dpi, legible for a signed form
+const MAX_RENDER_PAGES = 120;  // safety cap on pages rendered from one packet
 
 console.log('[disclosure-split] module fully loaded, handler ready');
 
@@ -144,6 +152,34 @@ function uniqueName(base, taken) {
   return name;
 }
 
+// Rasterize every page of the PDF to a PNG via pdfjs (tolerant of the corrupt
+// object refs that make pdf-lib copyPages emit blank pages). Returns [{pageNumber, png}].
+async function renderAllPages(buffer) {
+  const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
+  try {
+    const result = await parser.getScreenshot({ scale: RENDER_SCALE, first: MAX_RENDER_PAGES });
+    return (result.pages || [])
+      .filter((p) => p.data)
+      .map((p) => ({ pageNumber: p.pageNumber, png: Buffer.from(p.data) }));
+  } finally {
+    await parser.destroy();
+  }
+}
+
+// Build an image-based PDF from the given 1-indexed page numbers, in order.
+async function buildImagePdf(pageImages, pageNums) {
+  const out = await PDFDocument.create();
+  for (const n of pageNums) {
+    const img = pageImages.find((p) => p.pageNumber === n);
+    if (!img) continue;
+    const png = await out.embedPng(img.png);
+    const page = out.addPage([png.width, png.height]);
+    page.drawImage(png, { x: 0, y: 0, width: png.width, height: png.height });
+  }
+  if (out.getPageCount() === 0) return null;
+  return Buffer.from(await out.save());
+}
+
 // ----------------------------------------------------------------------------
 exports.handler = async function (event) {
   let envelope;
@@ -211,17 +247,16 @@ exports.handler = async function (event) {
       throw new Error('no forms with page ranges identified — leaving original in place for manual handling');
     }
 
-    // 3) Load the source once; prepare the extractor.
+    // 3) Get page count (pdf-lib parses fine even with the corrupt refs) and
+    //    rasterize every page ONCE. We build each split file from page images
+    //    rather than pdf-lib copyPages, which emitted blank pages on this packet.
     const srcDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
     const pageCount = srcDoc.getPageCount();
-    async function extract(pages) {
-      const out = await PDFDocument.create();
-      const idx = pages.map((n) => n - 1).filter((i) => i >= 0 && i < pageCount);
-      if (!idx.length) return null;
-      const copied = await out.copyPages(srcDoc, idx);
-      copied.forEach((p) => out.addPage(p));
-      return Buffer.from(await out.save());
-    }
+    console.log(`[disclosure-split] rasterizing ${pageCount} page(s) for robust splitting...`);
+    const pageImages = await renderAllPages(buffer);
+    console.log(`[disclosure-split] rendered ${pageImages.length} page image(s)`);
+    if (!pageImages.length) throw new Error('page rasterization produced no images — cannot split');
+    const extract = (pages) => buildImagePdf(pageImages, pages);
 
     // Name-collision set = existing files already in the property folder.
     const existing = await drive.listChildren(propertyFolderId, { excludeFolders: true }).catch(() => []);

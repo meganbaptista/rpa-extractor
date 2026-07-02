@@ -158,7 +158,7 @@ exports.handler = async function (event) {
       firstFileId = firstNonFolder ? firstNonFolder.id : null;
       return {
         file_count: files.length,
-        files: files.map((f) => ({ name: f.name, mimeType: f.mimeType })),
+        files: files.map((f) => ({ name: f.name, mimeType: f.mimeType, size: f.size })),
       };
     })
   );
