@@ -60,6 +60,10 @@ async function getAccessToken(creds) {
     iat: now,
     exp: now + 3600,
   };
+  // Mirror lib/drive.js: domain-wide delegation — impersonate a Workspace user so
+  // uploads land in that user's Drive (which has storage). Inert unless the env var is set.
+  const subject = process.env.GOOGLE_IMPERSONATE_SUBJECT;
+  if (subject) claim.sub = subject;
   const unsigned = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(claim))}`;
   const signer = crypto.createSign('RSA-SHA256');
   signer.update(unsigned);
