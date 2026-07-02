@@ -71,7 +71,9 @@ async function callClaude(content, maxTokens, attempt = 0) {
       model: MODEL,
       max_tokens: maxTokens || 20000,
       thinking: { type: 'adaptive', display: 'omitted' },
-      output_config: { effort: 'high' },
+      // medium effort: cuts thinking tokens + runtime vs high; watch that the
+      // signature audit (FX vs Need) stays accurate on the next real packet.
+      output_config: { effort: 'medium' },
       messages: [{ role: 'user', content }],
     }),
   });

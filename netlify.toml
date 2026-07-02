@@ -2,7 +2,8 @@
   node_bundler = "esbuild"
   external_node_modules = ["pdfjs-dist"]
 
-# Disclosure Intake Pipeline — the watcher runs every 10 minutes, scans each
-# "Incoming" folder, and emits a disclosure.uploaded event per new PDF.
+# Disclosure Intake Pipeline — the watcher runs every 2 minutes, scans each
+# "Incoming" folder, and emits a disclosure.uploaded event per new PDF. (The
+# poller has no AI cost — just a Drive listing — so a tight interval is cheap.)
 [functions."disclosure-watch-poller"]
-  schedule = "*/10 * * * *"
+  schedule = "*/2 * * * *"
