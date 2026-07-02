@@ -32,6 +32,13 @@ const SEEN_STORE = 'disclosure-intake-seen';
 // The folder name that marks a drop zone. Overridable if the convention changes.
 const INCOMING_FOLDER_NAME = process.env.INCOMING_FOLDER_NAME || 'Incoming';
 
+// The top-level clients root. Real structure is:
+//   00 MTC CLIENTS / <Agent> / 00 ESCROW / <Property> / Incoming / <file>
+// so the AGENT folder is whatever sits directly beneath this root on a deal's
+// path (there can be container layers like "00 ESCROW" in between). Matched
+// case-insensitively. Overridable if the root is ever renamed.
+const CLIENTS_ROOT_NAME = process.env.CLIENTS_ROOT_FOLDER_NAME || '00 MTC CLIENTS';
+
 function seenStore() {
   return getStore({
     name: SEEN_STORE,
@@ -65,16 +72,38 @@ async function scanIncoming({ dryRun = false } = {}) {
     return m;
   }
 
+  // Walk from a folder up to the clients root, returning [self, ...ancestors, root].
+  async function ancestorChain(startId) {
+    const chain = [];
+    let cur = startId;
+    let guard = 0;
+    while (cur && guard++ < 10) {
+      const m = await metaOf(cur);
+      if (!m) break;
+      chain.push(m);
+      if (String(m.name).trim().toLowerCase() === CLIENTS_ROOT_NAME.toLowerCase()) break;
+      cur = (m.parents && m.parents[0]) || null;
+    }
+    return chain;
+  }
+
   const incomingFolders = await drive.findFoldersByName(INCOMING_FOLDER_NAME);
   summary.incomingFolders = incomingFolders.length;
 
   for (const inc of incomingFolders) {
     try {
       const propertyFolderId = (inc.parents && inc.parents[0]) || null;
-      const property = propertyFolderId ? await metaOf(propertyFolderId) : null;
-      const agent = property && property.parents && property.parents[0]
-        ? await metaOf(property.parents[0])
-        : null;
+      const chain = propertyFolderId ? await ancestorChain(propertyFolderId) : [];
+      const property = chain[0] || null;
+      // Agent = the folder directly beneath the clients root on this deal's path
+      // (skips container layers like "00 ESCROW").
+      let agent = null;
+      const rootIdx = chain.findIndex(
+        (m) => String(m.name).trim().toLowerCase() === CLIENTS_ROOT_NAME.toLowerCase()
+      );
+      if (rootIdx > 0) agent = chain[rootIdx - 1];
+      // Full path (root -> ... -> property) for logging/context.
+      const ancestryPath = chain.slice().reverse().map((m) => m.name);
 
       const files = await drive.listChildren(inc.id, { excludeFolders: true });
       for (const f of files) {
@@ -84,8 +113,12 @@ async function scanIncoming({ dryRun = false } = {}) {
           continue;
         }
         const key = `${f.id}:${f.modifiedTime}`;
-        const already = await store.get(key, { type: 'json' }).catch(() => null);
-        if (already) { summary.skippedSeen++; continue; }
+        // Dry run is a pure preview: don't consult (or skip on) the seen store,
+        // so you can inspect the event for a file that was already emitted.
+        if (!dryRun) {
+          const already = await store.get(key, { type: 'json' }).catch(() => null);
+          if (already) { summary.skippedSeen++; continue; }
+        }
 
         const event = makeEvent(EVENTS.DISCLOSURE_UPLOADED, {
           id: key,
@@ -103,8 +136,7 @@ async function scanIncoming({ dryRun = false } = {}) {
             propertyFolderId,
             propertyFolderName: property ? property.name : null,
             agentFolderName: agent ? agent.name : null,
-            path: [agent && agent.name, property && property.name, INCOMING_FOLDER_NAME, f.name]
-              .filter(Boolean).join(' / '),
+            path: [...ancestryPath, INCOMING_FOLDER_NAME, f.name].filter(Boolean).join(' / '),
           },
         });
 
