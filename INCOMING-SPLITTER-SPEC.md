@@ -1,5 +1,7 @@
 # Incoming Disclosure Splitter — Build Spec (V1)
 
+> **This is now Consumer #1 of the event pipeline.** Read `DISCLOSURE-INTAKE-PIPELINE.md` first — the file watching, the `disclosure.uploaded` event, and the Drive service live there. This doc covers only what the splitter does once it receives the event: identify forms, audit signatures, split, name, file. It is triggered by the event envelope (`source.fileId`, `location.propertyFolderId`), NOT by watching Drive itself.
+
 Status: **spec / not built.** Written 2026-07-02, decisions confirmed same day (✅).
 Follows the repo pattern (Netlify function + Google service account). Read "REUSE" (§3) first — most of the engine already exists.
 
