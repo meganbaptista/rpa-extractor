@@ -170,8 +170,9 @@ exports.handler = async function (event) {
     return { statusCode: 400 };
   }
 
-  const done = getStore(blobsConfig(DONE_STORE));
+  console.log(`[disclosure-split] received ${eventId} file="${source.fileName || fileId}" -> property ${propertyFolderId}`);
   try {
+    const done = getStore(blobsConfig(DONE_STORE));
     if (await done.get(eventId, { type: 'json' }).catch(() => null)) {
       console.log(`[disclosure-split] already processed ${eventId}, skipping`);
       return { statusCode: 200 };
@@ -179,17 +180,22 @@ exports.handler = async function (event) {
 
     // 1) Download + sanity-check the PDF.
     const buffer = await drive.download(fileId);
+    console.log(`[disclosure-split] downloaded ${buffer.length} bytes`);
     if (!(buffer && buffer.length >= 4 && buffer.subarray(0, 4).equals(PDF_MAGIC))) {
       throw new Error(`downloaded file is not a PDF (${source.fileName || fileId})`);
     }
     if (buffer.length > MAX_DOC_BYTES) throw new Error(`file too large (${buffer.length}B)`);
 
     // 2) Analyze: split map + signature audit.
+    console.log('[disclosure-split] analyzing with Opus (split map + signature audit)...');
     const content = [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') }, title: source.fileName || 'disclosures.pdf' },
       { type: 'text', text: ANALYZE_PROMPT },
     ];
-    const parsed = parseJson(await callClaude(content, 20000));
+    // High-effort adaptive thinking spends tokens reasoning about form boundaries
+    // + the signature audit BEFORE the JSON, so give it a comfortable ceiling
+    // (a 20k ceiling truncated mid-output and hit max_tokens).
+    const parsed = parseJson(await callClaude(content, 48000));
     const forms = (Array.isArray(parsed.forms) ? parsed.forms : [])
       .map((f) => ({
         code: clean(f.code),
