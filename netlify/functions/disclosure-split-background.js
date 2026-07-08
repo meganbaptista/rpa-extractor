@@ -153,13 +153,14 @@ function parseJson(raw) {
 const ANALYZE_PROMPT =
   'This PDF is a combined package of California real estate disclosure forms that have been returned SIGNED. Do TWO things and return ONE JSON object.\n\n' +
   '1) SPLIT MAP. Identify every distinct CAR disclosure/report form whose OWN pages are physically in this package (a form counts only if its own pages are here, NOT if it is merely referenced inside another form). For each form return: "code" (the standard CAR code, e.g. TDS, SPQ, SBSA, AVID, FHDS, LPD, WBSA, ESD), "name" (the full form name), "revision" (the printed revision date in M/YY, or "" if none), and "pages" (the array of 1-indexed page numbers in THIS PDF that belong to that form, in order). Use each form\'s header/footer, its form code, and its "Page X of Y" line to find its exact page span; a form is usually a contiguous run of pages. Every page of the PDF should belong to exactly one form when possible.\n' +
-  'AVID side: an Agent Visual Inspection Disclosure (AVID) can be the listing agent\'s or the buyer\'s agent\'s. Set "code" to "AVID-LA" when completed by the LISTING (seller\'s) agent and "AVID-BA" when completed by the BUYER\'S agent. Read the agent name and brokerage printed on the AVID, then match that brokerage to a side using whatever evidence the package provides, in this order: (a) an agency-relationship / agency-confirmation form if one is present (clearest); (b) OTHERWISE, the listing brokerage recurs throughout a seller-disclosure package — on the other disclosure forms\' agent lines, the seller\'s RCSD, and brokerage-branded local-area / affiliated-business disclosures — so if the AVID\'s brokerage matches that recurring listing brokerage it is AVID-LA, and if it matches a different, clearly buyer-side brokerage it is AVID-BA. You do NOT need the agency form when the brokerage can be matched this way. If both AVIDs are present, return each as its own form with its own code. Only when the AVID\'s agent/brokerage cannot be matched to either side from ANY evidence in the package, use plain "AVID" rather than guessing.\n\n' +
+  'AVID side: an Agent Visual Inspection Disclosure (AVID) can be the listing agent\'s or the buyer\'s agent\'s. Set "code" to "AVID-LA" when completed by the LISTING (seller\'s) agent and "AVID-BA" when completed by the BUYER\'S agent. Read the agent name and brokerage printed on the AVID, then match that brokerage to a side using whatever evidence the package provides, in this order: (a) an agency-relationship / agency-confirmation form if one is present (clearest); (b) OTHERWISE, the listing brokerage recurs throughout a seller-disclosure package — on the other disclosure forms\' agent lines, the seller\'s RCSD, and brokerage-branded local-area / affiliated-business disclosures — so if the AVID\'s brokerage matches that recurring listing brokerage it is AVID-LA, and if it matches a different, clearly buyer-side brokerage it is AVID-BA. You do NOT need the agency form when the brokerage can be matched this way. If both AVIDs are present, return each as its own form with its own code. Only when the AVID\'s agent/brokerage cannot be matched to either side from ANY evidence in the package, use plain "AVID" rather than guessing.\n' +
+  'TOA (Text Overflow Addendum): a C.A.R. Form TOA is a continuation sheet for whatever form ran out of space in a field. Its body starts by naming the PARENT form\'s code in square brackets, e.g. "[SPQ]" or "[TDS]", followed by the paragraph number it continues. For each TOA set "code" to "TOA" and ALSO return "parent_code" = that bracketed CAR code (e.g. "SPQ"); use "" if no bracketed code is printed. Return the TOA as its own form here with its own pages — it is reattached to its parent downstream. For every NON-TOA form, set "parent_code" to "".\n\n' +
   '2) SIGNATURE AUDIT. For EACH form determine who has signed/initialed everywhere that form requires. The four possible parties are: B = Buyer, S = Seller, BA = Buyer\'s Agent, LA = Listing/Seller\'s Agent. Return per form:\n' +
   '   - "required_signers": the subset of ["B","S","BA","LA"] this form actually requires to sign or initial (judge from the form\'s own signature and initial lines; NOT every form needs all four).\n' +
   '   - "present_signers": the subset of required_signers who have ACTUALLY completed their signature AND every initial they are required to on that form. A party counts as present ONLY if all of their required marks are done; if any required initial or signature for that party is missing, do NOT include them.\n' +
   'Judge by how a party actually signed: a wet signature, a DocuSign/e-sign block, or initials all count. A pre-printed or typed party name (e.g. a typed "Seller" name that is a trust or LLC) is NOT a signature.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences):\n' +
-  '{"forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25","pages":[3,4,5],"required_signers":["S","B","BA","LA"],"present_signers":["S","B","BA","LA"]}]}';
+  '{"forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25","pages":[3,4,5],"parent_code":"","required_signers":["S","B","BA","LA"],"present_signers":["S","B","BA","LA"]},{"code":"TOA","name":"Text Overflow Addendum","revision":"6/23","pages":[6],"parent_code":"SPQ","required_signers":["S","B"],"present_signers":["S","B"]}]}';
 
 // Map a signer value (token or word) to one of B/S/BA/LA, else null.
 function toToken(v) {
@@ -189,6 +190,40 @@ function statusSuffix(form) {
 // it clean and slash-free).
 function clean(s) {
   return String(s || '').replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// A Text Overflow Addendum (C.A.R. Form TOA) is a continuation sheet for another
+// form, not a standalone document.
+function isTOA(f) {
+  return /(^|\s)TOA(\s|$|\d)/i.test(f.code || '') || /text overflow addendum/i.test(f.name || '');
+}
+
+// Fold each TOA into its parent form's page range so they file as one document.
+// Parent = the form whose code matches the TOA's parent_code; if that's blank or
+// absent, the form whose pages end immediately before the TOA (it physically
+// follows the form it continues). A TOA with no locatable parent is left as its
+// own form. Returns the surviving (non-merged) forms, page ranges re-sorted.
+function mergeAddenda(allForms) {
+  const parents = allForms.filter((f) => !isTOA(f));
+  const toas = allForms.filter((f) => isTOA(f));
+  if (!toas.length || !parents.length) return allForms;
+
+  for (const toa of toas) {
+    const pc = clean(toa.parent_code).toUpperCase();
+    let parent = pc ? parents.find((f) => clean(f.code).toUpperCase() === pc) : null;
+    if (!parent) {
+      const firstToaPage = Math.min(...toa.pages);
+      parent = parents
+        .filter((f) => Math.max(...f.pages) < firstToaPage)
+        .sort((a, b) => Math.max(...b.pages) - Math.max(...a.pages))[0] || null;
+    }
+    if (parent) {
+      parent.pages = [...new Set([...parent.pages, ...toa.pages])].sort((a, b) => a - b);
+      toa._merged = true;
+      console.log(`[disclosure-split] merged TOA (pages ${toa.pages.join(',')}) into ${parent.code || parent.name}`);
+    }
+  }
+  return allForms.filter((f) => !f._merged);
 }
 
 // Build "<CODE> - <Name> - <STATUS>.pdf", appending " (2)", " (3)"... if that
@@ -313,16 +348,27 @@ exports.handler = async function (event) {
     // + the signature audit BEFORE the JSON, so give it a comfortable ceiling
     // (a 20k ceiling truncated mid-output and hit max_tokens).
     const parsed = parseJson(await callClaude(content, 48000));
-    const forms = (Array.isArray(parsed.forms) ? parsed.forms : [])
+    const mappedForms = (Array.isArray(parsed.forms) ? parsed.forms : [])
       .map((f) => ({
         code: clean(f.code),
         name: clean(f.name),
         revision: String(f.revision || '').trim(),
         pages: (Array.isArray(f.pages) ? f.pages : []).map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 1),
+        parent_code: clean(f.parent_code),
         required_signers: f.required_signers,
         present_signers: f.present_signers,
       }))
       .filter((f) => (f.code || f.name) && f.pages.length);
+
+    // Reattach Text Overflow Addenda to their parent form. A TOA is a
+    // continuation sheet whose body names its parent's CAR code in brackets
+    // (e.g. "[SPQ]"); the model returns that as parent_code. Append the TOA's
+    // pages to that parent so they file as ONE document (the merged file keeps
+    // the parent's name + signature status). A TOA whose parent isn't in the
+    // packet stays standalone. Fallback when parent_code is blank: the form
+    // whose pages end immediately before the TOA (a TOA physically follows the
+    // form it continues).
+    const forms = mergeAddenda(mappedForms);
 
     if (!forms.length) {
       throw new Error('no forms with page ranges identified — leaving original in place for manual handling');
