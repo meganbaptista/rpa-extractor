@@ -22,14 +22,22 @@
 // Signature reading here is document-level (Opus reads the PDF). A crisp-render
 // pass (like disclosure-intake's stage A/B for scanned checkboxes) can be added
 // later if wet-signed scans need more accuracy.
+//
+// SPLITTING IS VECTOR-FIRST (see buildFormPdf). Each form file is built by
+// copying the REAL PDF pages, so interactive form data (checkbox states, typed
+// explanations), signatures, and searchable text all survive into the split
+// copy. Only pages whose content is unresolvable (the corrupt-object-ref case
+// that historically made pdf-lib copyPages emit blank pages) fall back to a
+// rasterized image, so nothing is ever silently blanked.
 // ============================================================================
 
 console.log('[disclosure-split] module loading');
 
 const { getStore } = require('@netlify/blobs');
-const { PDFDocument } = require('pdf-lib');
+const { PDFDocument, PDFArray, PDFRef } = require('pdf-lib');
 // pdfjs (via pdf-parse) tolerates corrupt object refs that make pdf-lib copyPages
-// emit BLANK pages on real disclosure PDFs — same renderer the RPA extractor uses.
+// emit BLANK pages — used only as a per-page fallback for pages that can't be
+// vector-copied. Same renderer the RPA extractor uses.
 const { CanvasFactory } = require('pdf-parse/worker');
 const { PDFParse } = require('pdf-parse');
 const drive = require('./lib/drive');
@@ -44,9 +52,17 @@ const DONE_STORE = 'disclosure-split-done';
 // Fixed party order for the filename status suffix.
 const SIGNER_ORDER = ['B', 'S', 'BA', 'LA'];
 
-// Rasterization settings for robust splitting (see renderAllPages).
+// Rasterization settings for the per-page image fallback (see renderAllPages).
 const RENDER_SCALE = 2.0;      // 2x = ~144dpi, legible for a signed form
 const MAX_RENDER_PAGES = 120;  // safety cap on pages rendered from one packet
+
+// A source page whose content stream(s) resolve to fewer than this many (raw,
+// still-encoded) bytes has no drawable content — the corrupt-object-ref case
+// that makes copyPages emit a blank page. Any real form page carries hundreds+
+// of content bytes (the template lines/labels), well above this floor, so the
+// check cleanly separates "corrupt/blank" from "real page" and never images a
+// page that actually has form content. Those pages take the raster fallback.
+const MIN_CONTENT_BYTES = 8;
 
 console.log('[disclosure-split] module fully loaded, handler ready');
 
@@ -189,7 +205,9 @@ function uniqueName(base, taken) {
 }
 
 // Rasterize every page of the PDF to a PNG via pdfjs (tolerant of the corrupt
-// object refs that make pdf-lib copyPages emit blank pages). Returns [{pageNumber, png}].
+// object refs that make pdf-lib copyPages emit blank pages). Used only as the
+// per-page / whole-form fallback for pages that can't be vector-copied.
+// Returns [{pageNumber, png}].
 async function renderAllPages(buffer) {
   const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
   try {
@@ -202,18 +220,45 @@ async function renderAllPages(buffer) {
   }
 }
 
+// Draw one rasterized page image onto a fresh page of `out`, sized to the image.
+async function addImagePage(out, img) {
+  const png = await out.embedPng(img.png);
+  const page = out.addPage([png.width, png.height]);
+  page.drawImage(png, { x: 0, y: 0, width: png.width, height: png.height });
+}
+
 // Build an image-based PDF from the given 1-indexed page numbers, in order.
+// Used as the whole-form fallback when the vector copy fails outright.
 async function buildImagePdf(pageImages, pageNums) {
   const out = await PDFDocument.create();
   for (const n of pageNums) {
     const img = pageImages.find((p) => p.pageNumber === n);
     if (!img) continue;
-    const png = await out.embedPng(img.png);
-    const page = out.addPage([png.width, png.height]);
-    page.drawImage(png, { x: 0, y: 0, width: png.width, height: png.height });
+    await addImagePage(out, img);
   }
   if (out.getPageCount() === 0) return null;
   return Buffer.from(await out.save());
+}
+
+// Total raw (still-encoded) byte length of a source page's content stream(s).
+// Returns 0 if the Contents entry is missing or any ref fails to resolve — i.e.
+// the page has nothing to draw. `pageIndex` is 0-indexed.
+function sourceContentBytes(srcDoc, pageIndex) {
+  try {
+    const ctx = srcDoc.context;
+    const resolve = (o) => (o instanceof PDFRef ? ctx.lookup(o) : o);
+    let contents = resolve(srcDoc.getPage(pageIndex).node.Contents());
+    if (!contents) return 0;
+    const streams = contents instanceof PDFArray ? contents.asArray() : [contents];
+    let total = 0;
+    for (const s of streams) {
+      const stream = resolve(s);
+      if (stream && stream.contents) total += stream.contents.length;
+    }
+    return total;
+  } catch {
+    return 0;
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -284,15 +329,62 @@ exports.handler = async function (event) {
     }
 
     // 3) Get page count (pdf-lib parses fine even with the corrupt refs) and
-    //    rasterize every page ONCE. We build each split file from page images
-    //    rather than pdf-lib copyPages, which emitted blank pages on this packet.
+    //    flag any page whose content is unresolvable/empty — those can't be
+    //    vector-copied (they'd blank), so they take the raster fallback. Page
+    //    images are rendered LAZILY: a clean packet skips rasterization entirely
+    //    and every form is built from the real (searchable, form-preserving) PDF
+    //    pages. Only when a page needs the fallback do we rasterize.
     const srcDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
     const pageCount = srcDoc.getPageCount();
-    console.log(`[disclosure-split] rasterizing ${pageCount} page(s) for robust splitting...`);
-    const pageImages = await renderAllPages(buffer);
-    console.log(`[disclosure-split] rendered ${pageImages.length} page image(s)`);
-    if (!pageImages.length) throw new Error('page rasterization produced no images — cannot split');
-    const extract = (pages) => buildImagePdf(pageImages, pages);
+    const blankPages = new Set();
+    for (let p = 1; p <= pageCount; p++) {
+      if (sourceContentBytes(srcDoc, p - 1) < MIN_CONTENT_BYTES) blankPages.add(p);
+    }
+    if (blankPages.size) {
+      console.log(`[disclosure-split] ${blankPages.size} page(s) have unresolvable content -> raster fallback for those: ${[...blankPages].join(',')}`);
+    }
+
+    // Memoized rasterizer: renders the whole packet once, on first need.
+    let _pageImages = null;
+    const getImages = async () => {
+      if (_pageImages) return _pageImages;
+      console.log(`[disclosure-split] rasterizing ${pageCount} page(s) for fallback...`);
+      _pageImages = await renderAllPages(buffer);
+      console.log(`[disclosure-split] rendered ${_pageImages.length} fallback image(s)`);
+      return _pageImages;
+    };
+
+    // Build one form's PDF from the given 1-indexed page numbers, in order.
+    // Vector-copies every page that can be, images only the ones flagged blank.
+    // On any hard failure, falls back to an all-image build so we never emit a
+    // broken/empty file.
+    const buildFormPdf = async (pageNums) => {
+      try {
+        const out = await PDFDocument.create();
+        const vectorNums = pageNums.filter((n) => !blankPages.has(n));
+        const needImage = pageNums.some((n) => blankPages.has(n));
+        const images = needImage ? await getImages() : [];
+        const copied = vectorNums.length
+          ? await out.copyPages(srcDoc, vectorNums.map((n) => n - 1))
+          : [];
+        const copiedByN = new Map();
+        vectorNums.forEach((n, i) => copiedByN.set(n, copied[i]));
+        for (const n of pageNums) {
+          if (copiedByN.has(n)) {
+            out.addPage(copiedByN.get(n));
+          } else {
+            const img = images.find((p) => p.pageNumber === n);
+            if (img) await addImagePage(out, img);
+          }
+        }
+        if (out.getPageCount() === 0) return null;
+        return Buffer.from(await out.save());
+      } catch (err) {
+        console.warn(`[disclosure-split] vector split failed (${err.message}); using image fallback`);
+        return buildImagePdf(await getImages(), pageNums);
+      }
+    };
+    const extract = (pages) => buildFormPdf(pages);
 
     // Name-collision set = existing files already in the property folder.
     const existing = await drive.listChildren(propertyFolderId, { excludeFolders: true }).catch(() => []);
