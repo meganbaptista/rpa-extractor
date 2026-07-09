@@ -159,7 +159,7 @@ const ANALYZE_PROMPT =
   'MLS printout and Property Profile: two NON-CAR documents that commonly ride along inside a signed disclosure package. Each is a distinct form — carve it out and DO NOT leave it unassigned.\n' +
   '  - MLS printout: an MLS listing detail sheet for the subject property. Tells: an MLS report header/footer such as "Customer Full", "Agent Full" or "Client Full", a "Listing ID" or "MLS #", a "Printed:" timestamp, the MLS/association name, listing photos, and "Facts & Features" / Interior / Exterior bullet sections. Set "code" to "" (it has no CAR code) and "name" to exactly "MLS".\n' +
   '  - Property Profile: a title- or data-vendor property report for the subject property (e.g. a CoreLogic "Property Details" report, or a title company profile). Tells: an APN and/or CLIP, and sections like OWNER INFORMATION, COMMUNITY INSIGHTS, LOCATION INFORMATION, TAX INFORMATION, ASSESSMENT & TAX, LAST MARKET SALE & SALES HISTORY, MORTGAGE HISTORY, PROPERTY MAP. Set "code" to "" and "name" to exactly "Property Profile".\n' +
-  '  Both usually span SEVERAL pages. Follow the document\'s own page counter (e.g. a "Page 1/4" ... "Page 4/4" footer) and its repeated header/footer through to its LAST page — never return just its first page. Neither carries CAR signature lines: their only marks are initials, typically a DocuSign initial/signature tag in a top corner of the first page. So for these two ONLY, set "required_signers" to the parties that have an initial or signature TAG/BLOCK printed on the document (whether filled in or left empty), and "present_signers" to those who actually initialed. If the document carries no such tag or block anywhere, set "required_signers" to ["B"] and "present_signers" to [].\n\n' +
+  '  Both usually span SEVERAL pages. Follow the document\'s own page counter (e.g. a "Page 1/4" ... "Page 4/4" footer) and its repeated header/footer through to its LAST page — never return just its first page. Neither carries CAR signature lines: their only marks are initials, typically a DocuSign initial/signature tag in a top corner of the first page, and WHO initials varies (the seller, the buyers, or both). So for these two ONLY, do not reason about who was required to sign. Just report who actually marked it: set "present_signers" to every party that left ANY initial or signature mark anywhere on the document, and set "required_signers" to that exact same set. If there is no initial or signature mark anywhere on the document, set BOTH to [].\n\n' +
   '2) SIGNATURE AUDIT. For EACH form determine who has signed/initialed everywhere that form requires. The four possible parties are: B = Buyer, S = Seller, BA = Buyer\'s Agent, LA = Listing/Seller\'s Agent. Return per form:\n' +
   '   - "required_signers": the subset of ["B","S","BA","LA"] this form actually requires to sign or initial (judge from the form\'s own signature and initial lines; NOT every form needs all four).\n' +
   '   - "present_signers": the subset of required_signers who have ACTUALLY completed their signature AND every initial they are required to on that form. A party counts as present ONLY if all of their required marks are done; if any required initial or signature for that party is missing, do NOT include them.\n' +
@@ -182,8 +182,22 @@ function normSigners(arr) {
   return SIGNER_ORDER.filter((t) => set.has(t));
 }
 
+// The MLS printout and the Property Profile have no CAR signature lines — their
+// only mark is an initial tag in a corner of page 1, and who initials varies by
+// package (seller, buyers, or both). So they get a presence test, not an audit:
+// ANY initial at all means the doc was delivered and acknowledged -> FX. This is
+// decided here rather than left to the model's required/present sets, which can
+// over-list required parties on a form that never required them.
+const MARK_ONLY_DOCS = new Set(['mls', 'property profile']);
+function isMarkOnlyDoc(form) {
+  return !clean(form.code) && MARK_ONLY_DOCS.has(clean(form.name).toLowerCase());
+}
+
 // FX when every required signer is present; else Need<missing, in fixed order>.
 function statusSuffix(form) {
+  if (isMarkOnlyDoc(form)) {
+    return normSigners(form.present_signers).length ? 'FX' : 'NeedB';
+  }
   const required = normSigners(form.required_signers);
   const present = new Set(normSigners(form.present_signers));
   const missing = required.filter((t) => !present.has(t));

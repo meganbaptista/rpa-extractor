@@ -74,7 +74,7 @@ Netlify Scheduled Function (cron ~*/10 min). Lists `Incoming` folders, finds unp
   - `MLS` — the MLS listing detail sheet ("Customer/Agent/Client Full", Listing ID, `Printed:` stamp).
   - `Property Profile` — the title/data-vendor report (CoreLogic "Property Details"; APN/CLIP, Owner Information, Assessment & Tax, Mortgage History).
 
-  MLS and Property Profile carry no CAR signature lines — their only marks are DocuSign initial tags in a top corner of page 1, and both run several pages (follow the doc's own `Page 1/4` counter to its last page). `required_signers` is therefore judged from the initial/signature **tags printed on the doc** (filled or empty), so an initialed copy resolves to `FX` through the normal audit. A copy with no tags anywhere falls back to `required_signers: ["B"]` -> `NeedB`.
+  MLS and Property Profile carry no CAR signature lines — their only marks are DocuSign initial tags in a top corner of page 1, and both run several pages (follow the doc's own `Page 1/4` counter to its last page). Because who initials them varies by package (seller, buyers, or both), they get a **presence test, not a signature audit** ✅: **any initial at all -> `FX`**, no initial anywhere -> `NeedB`. That rule is enforced in `statusSuffix()` (see `MARK_ONLY_DOCS`), not left to the model's `required_signers` — a model that over-lists required parties can't drag an initialed doc to `Need`.
 - Cover emails / junk pages -> `unrecognized_pages` -> `Unsorted - review.pdf`, flagged.
 - Received form revision older than the Form Versions sheet -> note in the summary (reuse intake version-check).
 - Non-contiguous form pages -> flag, do not guess.
