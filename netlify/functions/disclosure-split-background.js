@@ -154,7 +154,8 @@ const ANALYZE_PROMPT =
   'This PDF is a combined package of California real estate disclosure forms that have been returned SIGNED. Do TWO things and return ONE JSON object.\n\n' +
   '1) SPLIT MAP. Identify every distinct CAR disclosure/report form whose OWN pages are physically in this package (a form counts only if its own pages are here, NOT if it is merely referenced inside another form). For each form return: "code" (the standard CAR code, e.g. TDS, SPQ, SBSA, AVID, FHDS, LPD, WBSA, ESD), "name" (the full form name), "revision" (the printed revision date in M/YY, or "" if none), and "pages" (the array of 1-indexed page numbers in THIS PDF that belong to that form, in order). Use each form\'s header/footer, its form code, and its "Page X of Y" line to find its exact page span; a form is usually a contiguous run of pages. Every page of the PDF should belong to exactly one form when possible.\n' +
   'AVID side: an Agent Visual Inspection Disclosure (AVID) can be the listing agent\'s or the buyer\'s agent\'s. Set "code" to "AVID-LA" when completed by the LISTING (seller\'s) agent and "AVID-BA" when completed by the BUYER\'S agent. Read the agent name and brokerage printed on the AVID, then match that brokerage to a side using whatever evidence the package provides, in this order: (a) an agency-relationship / agency-confirmation form if one is present (clearest); (b) OTHERWISE, the listing brokerage recurs throughout a seller-disclosure package — on the other disclosure forms\' agent lines, the seller\'s RCSD, and brokerage-branded local-area / affiliated-business disclosures — so if the AVID\'s brokerage matches that recurring listing brokerage it is AVID-LA, and if it matches a different, clearly buyer-side brokerage it is AVID-BA. You do NOT need the agency form when the brokerage can be matched this way. If both AVIDs are present, return each as its own form with its own code. Only when the AVID\'s agent/brokerage cannot be matched to either side from ANY evidence in the package, use plain "AVID" rather than guessing.\n' +
-  'TOA (Text Overflow Addendum): a C.A.R. Form TOA is a continuation sheet for whatever form ran out of space in a field. Its body starts by naming the PARENT form\'s code in square brackets, e.g. "[SPQ]" or "[TDS]", followed by the paragraph number it continues. For each TOA set "code" to "TOA" and ALSO return "parent_code" = that bracketed CAR code (e.g. "SPQ"); use "" if no bracketed code is printed. Return the TOA as its own form here with its own pages — it is reattached to its parent downstream. For every NON-TOA form, set "parent_code" to "".\n' +
+  'TOA (Text Overflow Addendum): a C.A.R. Form TOA is a continuation sheet for whatever form ran out of space in a field. Its body starts by naming the PARENT form\'s code in square brackets, e.g. "[SPQ]" or "[TDS]", followed by the paragraph number it continues. For each TOA set "code" to "TOA" and ALSO return "parent_code" = that bracketed CAR code (e.g. "SPQ"); use "" if no bracketed code is printed. Return the TOA as its own form here with its own pages — it is reattached to its parent downstream.\n' +
+  'ADDENDUM (an amendment or continuation that is NOT text overflow): identify the PARENT form it amends or continues, the same way. Two kinds. (a) A C.A.R. Form ADM: its header reads "ADDENDUM No. ___" and "(C.A.R. Form ADM...)". Read the checkbox row near the top to see what it amends — "Purchase Agreement", "Transfer Disclosure Statement", a lease, or "Other ___" — and confirm against the section codes referenced in its body. Set "code" to "ADM", "name" to "Addendum", "parent_code" to the parent\'s CAR code (use "TDS" for the Transfer Disclosure Statement, "SPQ" for the Seller Property Questionnaire, "RPA" for the Purchase Agreement), and "addendum_no" to the number printed after "ADDENDUM No." (e.g. "1"; use "" if blank). (b) A custom continuation sheet with NO CAR code whose title is "Addendum to <form>" (e.g. "Addendum to Seller Property Questionnaire") and whose body is keyed to that form\'s sections — set "code" to "", keep its printed "name", set "parent_code" to that parent form\'s CAR code (e.g. "SPQ"), and leave "addendum_no" as "" (these are not numbered). Return each addendum as its OWN form with its own pages and its own signature audit — do NOT fold it into another form (only TOA overflow sheets are merged downstream). For every form that is neither a TOA nor an addendum, set both "parent_code" and "addendum_no" to "".\n' +
   'Booklet receipt: a page that acknowledges RECEIPT of the environmental-hazards / earthquake-safety booklet(s) (the "Homeowner\'s Guide to Environmental Hazards and Earthquake Safety", and/or the HERS / lead-paint booklets) IS a distinct form — the standard C.A.R. receipt OR a custom brokerage equivalent (e.g. a "Receipt for Links to Booklets" page, or any page acknowledging receipt of those booklets). Carve it out as its own form and DO NOT leave it unassigned: set "code" to "" (it has no standard short CAR code) and "name" to exactly "EQ Booklet Receipt". CRITICAL: the informational BOOKLET itself (the multi-page guide) is NOT this receipt — only a signed/signable acknowledgment-of-receipt page is.\n' +
   'MLS printout and Property Profile: two NON-CAR documents that commonly ride along inside a signed disclosure package. Each is a distinct form — carve it out and DO NOT leave it unassigned.\n' +
   '  - MLS printout: an MLS listing detail sheet for the subject property. Tells: an MLS report header/footer such as "Customer Full", "Agent Full" or "Client Full", a "Listing ID" or "MLS #", a "Printed:" timestamp, the MLS/association name, listing photos, and "Facts & Features" / Interior / Exterior bullet sections. Set "code" to "" (it has no CAR code) and "name" to exactly "MLS".\n' +
@@ -165,7 +166,7 @@ const ANALYZE_PROMPT =
   '   - "present_signers": the subset of required_signers who have ACTUALLY completed their signature AND every initial they are required to on that form. A party counts as present ONLY if all of their required marks are done; if any required initial or signature for that party is missing, do NOT include them.\n' +
   'Judge by how a party actually signed: a wet signature, a DocuSign/e-sign block, or initials all count. A pre-printed or typed party name (e.g. a typed "Seller" name that is a trust or LLC) is NOT a signature.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences):\n' +
-  '{"forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25","pages":[3,4,5],"parent_code":"","required_signers":["S","B","BA","LA"],"present_signers":["S","B","BA","LA"]},{"code":"TOA","name":"Text Overflow Addendum","revision":"6/23","pages":[6],"parent_code":"SPQ","required_signers":["S","B"],"present_signers":["S","B"]}]}';
+  '{"forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25","pages":[3,4,5],"parent_code":"","addendum_no":"","required_signers":["S","B","BA","LA"],"present_signers":["S","B","BA","LA"]},{"code":"TOA","name":"Text Overflow Addendum","revision":"6/23","pages":[6],"parent_code":"SPQ","addendum_no":"","required_signers":["S","B"],"present_signers":["S","B"]},{"code":"ADM","name":"Addendum","revision":"12/21","pages":[7],"parent_code":"TDS","addendum_no":"1","required_signers":["S","B"],"present_signers":["S","B"]}]}';
 
 // Map a signer value (token or word) to one of B/S/BA/LA, else null.
 function toToken(v) {
@@ -243,6 +244,35 @@ function mergeAddenda(allForms) {
     }
   }
   return allForms.filter((f) => !f._merged);
+}
+
+// A non-TOA addendum: a C.A.R. Form ADM, or a custom "Addendum to <form>"
+// continuation sheet. Unlike a TOA (which is merged into its parent), these are
+// distinct signed documents kept as their own file — but RENAMED to lead with
+// their parent's CAR code so they sort next to the parent in Drive and their
+// parent is visible in the name. TOA is explicitly excluded (it's merged, not
+// relabeled).
+function isAddendum(f) {
+  if (isTOA(f)) return false;
+  const code = clean(f.code).toUpperCase();
+  const name = clean(f.name).toLowerCase();
+  return code === 'ADM' || /\baddendum\b/.test(name);
+}
+
+// The filename base (before the " - <STATUS>" suffix). For an addendum with a
+// resolved parent, "<PARENT_CODE> - Addendum[ No. N]" so it files beside the
+// parent (e.g. "TDS - Addendum No. 1", "SPQ - Addendum"). Otherwise the normal
+// "<CODE> - <Name>" label. A parent-less addendum keeps its own label rather
+// than guessing (no regression on the ambiguous case).
+function formLabel(form) {
+  if (isAddendum(form)) {
+    const parent = clean(form.parent_code).toUpperCase();
+    if (parent) {
+      const no = clean(form.addendum_no);
+      return no ? `${parent} - Addendum No. ${no}` : `${parent} - Addendum`;
+    }
+  }
+  return [form.code, form.name].filter(Boolean).join(' - ');
 }
 
 // Build "<CODE> - <Name> - <STATUS>.pdf", appending " (2)", " (3)"... if that
@@ -374,6 +404,7 @@ exports.handler = async function (event) {
         revision: String(f.revision || '').trim(),
         pages: (Array.isArray(f.pages) ? f.pages : []).map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 1),
         parent_code: clean(f.parent_code),
+        addendum_no: String(f.addendum_no || '').trim(),
         required_signers: f.required_signers,
         present_signers: f.present_signers,
       }))
@@ -461,7 +492,7 @@ exports.handler = async function (event) {
     for (const form of forms) {
       form.pages.forEach((p) => coveredPages.add(p));
       const status = statusSuffix(form);
-      const label = [form.code, form.name].filter(Boolean).join(' - ');
+      const label = formLabel(form);
       const base = `${label} - ${status}`;
       const filename = uniqueName(base, taken);
       const bytes = await extract(form.pages);
