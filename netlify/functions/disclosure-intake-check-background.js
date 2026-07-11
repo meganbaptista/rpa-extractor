@@ -44,6 +44,7 @@ console.log('[disclosure-intake] module loading');
 const zlib = require('zlib');
 const { getStore } = require('@netlify/blobs');
 const { canonicalAddress } = require('./lib/address');
+const usageLog = require('./lib/usage-log');
 // Crisp-render dependencies (same stack the RPA extractor uses): pdf-lib to slice out
 // the Q&A pages, and pdf-parse (pdfjs under the hood) with its CanvasFactory polyfill to
 // rasterize them server-side so Netlify Functions don't need the native canvas package.
@@ -506,6 +507,7 @@ async function callClaude(content, maxTokens, attempt = 0) {
   if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
 
   const data = await response.json();
+  await usageLog.logUsage({ fn: 'disclosure-intake', model: MODEL, effort: 'high', usage: data.usage });
   if (data.stop_reason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
   return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
 }

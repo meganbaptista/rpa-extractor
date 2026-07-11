@@ -36,6 +36,7 @@ console.log('[compliance-check] module loading');
 
 const zlib = require('zlib');
 const { canonicalAddress } = require('./lib/address');
+const usageLog = require('./lib/usage-log');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-opus-4-8';
@@ -277,6 +278,7 @@ async function callClaude(content, maxTokens, attempt = 0) {
   }
   if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
   const data = await response.json();
+  await usageLog.logUsage({ fn: 'compliance-check', model: MODEL, effort: 'high', usage: data.usage });
   if (data.stop_reason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
   return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
 }

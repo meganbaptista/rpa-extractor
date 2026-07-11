@@ -36,6 +36,7 @@
 console.log('[disclosure-review] module loading');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+const usageLog = require('./lib/usage-log');
 
 // Opus 4.8 — materiality is liability-sensitive judgment; use the top tier
 // (same quality bar as the signature audit). Adaptive thinking is configured in
@@ -310,6 +311,7 @@ async function callClaude(prompt, attempt = 0) {
   }
 
   const data = await response.json();
+  await usageLog.logUsage({ fn: 'disclosure-review', model: MODEL, effort: 'high', usage: data.usage });
   if (data.stop_reason === 'max_tokens') {
     throw new Error('Disclosure review hit max_tokens — output truncated. Raise max_tokens and re-run.');
   }

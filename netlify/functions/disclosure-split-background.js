@@ -42,6 +42,7 @@ const { CanvasFactory } = require('pdf-parse/worker');
 const { PDFParse } = require('pdf-parse');
 const drive = require('./lib/drive');
 const { EVENTS, makeEvent, publish } = require('./lib/events');
+const usageLog = require('./lib/usage-log');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-opus-4-8';
@@ -115,6 +116,9 @@ async function callClaude(content, maxTokens, attempt = 0) {
   let buf = '';
   let text = '';
   let stopReason = null;
+  // Usage arrives across SSE events: input/cache tokens on message_start, the
+  // (cumulative) output_tokens on message_delta. Accumulate for the ledger.
+  const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -130,13 +134,21 @@ async function callClaude(content, maxTokens, attempt = 0) {
       try { evt = JSON.parse(payload); } catch { continue; }
       if (evt.type === 'content_block_delta' && evt.delta && evt.delta.type === 'text_delta') {
         text += evt.delta.text;
-      } else if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
-        stopReason = evt.delta.stop_reason;
+      } else if (evt.type === 'message_start' && evt.message && evt.message.usage) {
+        const u = evt.message.usage;
+        usage.input_tokens = u.input_tokens || 0;
+        usage.output_tokens = u.output_tokens || 0;
+        usage.cache_read_input_tokens = u.cache_read_input_tokens || 0;
+        usage.cache_creation_input_tokens = u.cache_creation_input_tokens || 0;
+      } else if (evt.type === 'message_delta') {
+        if (evt.usage && typeof evt.usage.output_tokens === 'number') usage.output_tokens = evt.usage.output_tokens;
+        if (evt.delta && evt.delta.stop_reason) stopReason = evt.delta.stop_reason;
       } else if (evt.type === 'error') {
         throw new Error(`Claude stream error: ${JSON.stringify(evt.error || {}).slice(0, 200)}`);
       }
     }
   }
+  await usageLog.logUsage({ fn: 'disclosure-split', model: MODEL, effort: 'medium', usage });
   if (stopReason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
   return text;
 }
