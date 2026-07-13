@@ -1120,7 +1120,13 @@ async function reconcile(auditList, received) {
 
   // Reconcile reasons item-by-item over the whole audit list before emitting JSON;
   // give thinking + output ample room so it never truncates mid-answer.
-  return parseJson(await callClaude([{ type: 'text', text: prompt }], 16000, `reconcile | ${(received || []).length} received form(s)`));
+  // Name the forms, don't just count them. The count alone cannot distinguish "identify
+  // never found the TDS" from "identify found it and reconcile discarded it" — which are
+  // opposite bugs with opposite fixes. Netlify logs age out; the usage sheet does not, so
+  // this belongs in the Note where it survives.
+  const recvCodes = (received || []).map((f) => (f && (f.code || f.name)) || '?').join(', ');
+  return parseJson(await callClaude([{ type: 'text', text: prompt }], 16000,
+    `reconcile | ${(received || []).length} received form(s): ${recvCodes || '(none)'}`));
 }
 
 function bullets(list, fmt) {
