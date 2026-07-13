@@ -81,9 +81,15 @@ const MAX_DOC_BYTES = 28 * 1024 * 1024;
 // DIA: we technically don't need it. "Los Angeles County Local Area Disclosures":
 // not a county requirement; we add our own per-brokerage version. WFDA: our brokerage
 // supplies its own. All are ours to handle, so never request them from the listing side.
+// Forms we never chase the listing side for. The test is the SIGNATURE, not the deal:
+// if a form requires only the BUYER to sign, the listing side has nothing to send us, so
+// requesting it is noise. Add a form here when it is buyer-signature-only; keep deal- or
+// brokerage-specific exceptions in the per-property audit list instead, or a form we
+// genuinely need chased would be silently suppressed on every file.
 const PREPARED_BY_US_DEFAULTS = [
   'property profile', 'mls client', 'ba avid', 'receipt for reports', 'rfr',
   'dia', 'los angeles county local area', 'wfda',
+  'bhaa',
 ];
 function isPreparedByUs(name) {
   const n = String(name || '').toLowerCase();
@@ -639,23 +645,20 @@ const ANSWER_REVIEW_PROMPT =
   'Heater shown present but its type (Gas/Solar/Electric) box not checked; (c) Roof checked or its Type filled but ' +
   'the Age left blank; and any similar checked item whose type or age line is blank (Water Supply type, Gas Supply ' +
   'type). ALSO, the fill-in fields in the BOTTOM block of TDS page 1 are expected to be completed by the seller: ' +
+  'flag each of these as "detail_incomplete" whenever its line is left BLANK, even if no adjacent box is checked: ' +
   '"Exhaust Fan(s) in:" (location), "220 Volt Wiring in:" (location), "Fireplace(s) in:" (location), and "Roof(s): ' +
-  'Type" and "Age". Flag one of these ONLY when the TDS page 1 bottom block is actually VISIBLE in the images in ' +
-  'THIS request AND the line is genuinely empty.\n' +
-  'WHAT COUNTS AS BLANK: a line is BLANK only when the seller wrote NOTHING on it at all. Any writing the seller ' +
-  'put on the line is an ANSWER, including "None", "none", "N/A", "n/a", "-", "0", or "Unknown". Those are ' +
-  'COMPLETED answers: do NOT flag them as blank or incomplete. READ the line before you judge it.\n' +
-  'For EACH such flag return "form":"TDS", "item" = the item name including its TDS subsection (e.g. "II A Water ' +
-  'Heater", "II A Pool/Spa Heater", "II A Roof", "II A Exhaust Fan(s)"), "issue":"detail_incomplete", ' +
-  '"marked":"present", and "reason" = a one-sentence description of the specific blank detail YOU ACTUALLY SAW, ' +
-  'phrased to drop into a request. For the Section II CHECKLIST items (not the bottom fill-in block) do NOT flag an ' +
-  'item that is simply not checked / not present.\n' +
-  'ALSO check these REQUIRED HEADER FIELDS, each ONLY when the page carrying it is VISIBLE in the images in THIS ' +
-  'request, and flag it with "issue":"unanswered" ONLY when the field is genuinely empty: (1) the TDS disclosure ' +
-  'date, the "...AS OF (DATE) ____" line near the top of TDS page 1 (the date the seller completes the TDS, NOT a ' +
-  'signature or DocuSign date); return "form":"TDS", "item":"disclosure date". (2) the SPQ Assessor\'s Parcel ' +
-  'Number ("Assessor\'s Parcel No.") in the SPQ page 1 header; return "form":"SPQ", "item":"APN". If the TDS page 1 ' +
-  'header or the SPQ page 1 header is NOT among these images, say NOTHING about it.\n' +
+  'Type" and "Age". For EACH, return a flag with "form":"TDS", "item" = the item name including ' +
+  'its TDS subsection (e.g. "II A Water Heater", "II A Pool/Spa Heater", "II A Roof", "II A Exhaust Fan(s)"), ' +
+  '"issue":"detail_incomplete", "marked":"present", and ' +
+  '"reason" = the specific blank detail phrased to drop into a request, e.g. "the type (Gas/Solar/Electric) is left ' +
+  'blank", "the Age is left blank", or "the location is left blank". For the Section II CHECKLIST items (not the ' +
+  'bottom fill-in block) do NOT flag an item that is simply not checked / not present.\n' +
+  'ALSO check these REQUIRED HEADER FIELDS and flag any that are blank with "issue":"unanswered": (1) the TDS ' +
+  'disclosure date, the "...AS OF (DATE) ____" line near the top of TDS page 1 (the date the seller completes the ' +
+  'TDS, NOT a signature or DocuSign date); return "form":"TDS", "item":"disclosure date", "reason":"the disclosure ' +
+  'date near the top of page 1 is left blank". (2) the SPQ Assessor\'s Parcel Number ("Assessor\'s Parcel No.") in ' +
+  'the SPQ page 1 header; return "form":"SPQ", "item":"APN", "reason":"the Assessor\'s Parcel Number in the header ' +
+  'is left blank". Flag these only when the field is genuinely blank.\n' +
   'ALSO check the FHDS (Fire Hardening and Defensible Space Disclosure and Addendum, C.A.R. Form FHDS) if its pages ' +
   'are anywhere in the package (it may be embedded inside a combined packet). The required-complete standard is: the ' +
   'Section 2 fire-hardening compliance boxes are checked AND Section 3 is completed, specifically Section 3A is ' +
@@ -698,8 +701,6 @@ const ANSWER_REVIEW_PROMPT =
   'the HOA documents, the purchase agreement, the legal description, escrow instructions.\n' +
   'Keep each reason to ONE concise sentence, state FACTS only, do NOT use "appears", "may", or "possibly", and do ' +
   'NOT use em or en dashes in any field.\n' +
-  'NEVER echo an example string from these instructions as a finding. Every "reason" must describe what you ' +
-  'ACTUALLY OBSERVED on a page in front of you. If you did not see the page, do not produce the flag at all.\n' +
   'ALSO return key_answers for the facts we cross-check against our own records: "spq_7e" = the marked answer to ' +
   'SPQ question 7E (one of "yes" / "no" / "blank", or "na" if there is no SPQ in the package); "hoa_any_no" = ' +
   '"yes" if ANY HOA / common-interest question (TDS Section C items C12/C13/C14, SPQ 6G, SPQ Section 14) is marked ' +
@@ -871,48 +872,6 @@ function parseAnswerReview(raw) {
   return { responseFlags, keyAnswers };
 }
 
-// ----------------------------------------------------------------------------
-// BATCH-SCOPE GUARD.
-// The image answer-review runs the SAME global ANSWER_REVIEW_PROMPT against EACH batch of
-// Q&A page images. That prompt carries package-wide checks (the TDS disclosure date, the
-// TDS page-1 bottom fill-in block, the SPQ APN header, the TDS Section C HOA items). A
-// batch that does not happen to contain those pages was still being told to check them:
-// unable to see the page, the model emitted a "left blank" flag echoing the prompt's own
-// example wording. On a 50-page delivery that splits into 4 batches, 3 of them produced
-// false blanks for fields that were in fact filled in. Every batch must therefore be told,
-// explicitly, that it is looking at a SUBSET and may only speak to what it can see.
-function batchScopeNote(index, total, labels) {
-  return (
-    'SCOPE OF THIS REQUEST — READ THIS FIRST.\n' +
-    `The images below are only PART of the delivery: batch ${index + 1} of ${total}. ` +
-    `They are these pages, and ONLY these pages: ${labels.join('; ')}.\n` +
-    'The rest of the package exists and is being reviewed in separate requests. It is NOT missing.\n' +
-    'ABSOLUTE RULE: report ONLY on what is VISIBLE in the images in THIS request. If a form, page, section, ' +
-    'question, or header field is not present in these images, you MUST NOT flag it, MUST NOT assume it is blank ' +
-    'or missing, and MUST NOT guess at its contents. Not seeing something is NOT evidence that it is blank. When ' +
-    'you are unsure whether an item is in these images, leave it out.\n' +
-    'This governs EVERY check in the instructions that follow, including the TDS disclosure date, the TDS Section ' +
-    'II page-1 fill-in block (Exhaust Fan(s), 220 Volt Wiring, Fireplace(s), Roof Type and Age), the SPQ APN ' +
-    'header field, the TDS Section C HOA items, the FHDS checks, and the seller signature check. Run each of those ' +
-    'ONLY if the page that carries it is among these images.\n' +
-    'Set every key_answers field you cannot determine from these pages to "na".\n\n'
-  );
-}
-
-// Flags are gathered across batches, so the same finding can arrive more than once. Keep
-// the first occurrence per (form, item, issue).
-function dedupeFlags(flags) {
-  const seen = new Set();
-  const out = [];
-  for (const f of flags || []) {
-    const key = `${(f.form || '').toLowerCase()}|${(f.item || '').toLowerCase()}|${(f.issue || '').toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(f);
-  }
-  return out;
-}
-
 // First non-"na" value wins per field (the SPQ/TDS usually land in one batch).
 function mergeKeyAnswers(acc, next) {
   if (!next) return acc;
@@ -960,14 +919,13 @@ async function reviewAnswers(docs) {
   let responseFlags = [];
   const keyAnswers = { ...EMPTY_KEY_ANSWERS };
   for (let i = 0; i < batches.length; i++) {
+    // labels is for the usage-sheet Note only — it is NOT sent to the model, so this
+    // stays a pure logging change and the review behaviour is untouched.
     const labels = batches[i].map((img) => img.name || 'page');
-    // Scope note FIRST, so the model reads "you are seeing a subset" before the images and
-    // before the global checklist. Without it, batches that lack TDS page 1 invent blanks.
-    const content = [{ type: 'text', text: batchScopeNote(i, batches.length, labels) }];
-    for (const img of batches[i]) {
-      content.push({ type: 'text', text: `${img.name || 'page'}:` });
-      content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: img.base64 } });
-    }
+    const content = batches[i].map((img) => ({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: img.base64 },
+    }));
     content.push({ type: 'text', text: ANSWER_REVIEW_PROMPT });
     // Record WHICH pages were reviewed, not just how many. classifyQAPages is a model
     // call and is NOT deterministic (same 46-page file, three runs, two different page
@@ -979,7 +937,7 @@ async function reviewAnswers(docs) {
     mergeKeyAnswers(keyAnswers, parsed.keyAnswers);
     console.log(`[disclosure-intake] answer-review image batch ${i + 1}/${batches.length} (${batches[i].length} page[s]): ${parsed.responseFlags.length} flag(s)`);
   }
-  return { responseFlags: dedupeFlags(responseFlags), keyAnswers, dropped: [] };
+  return { responseFlags, keyAnswers, dropped: [] };
 }
 
 // Document-block answer review (fallback): sends the whole PDF(s) to the model and lets
