@@ -639,20 +639,23 @@ const ANSWER_REVIEW_PROMPT =
   'Heater shown present but its type (Gas/Solar/Electric) box not checked; (c) Roof checked or its Type filled but ' +
   'the Age left blank; and any similar checked item whose type or age line is blank (Water Supply type, Gas Supply ' +
   'type). ALSO, the fill-in fields in the BOTTOM block of TDS page 1 are expected to be completed by the seller: ' +
-  'flag each of these as "detail_incomplete" whenever its line is left BLANK, even if no adjacent box is checked: ' +
   '"Exhaust Fan(s) in:" (location), "220 Volt Wiring in:" (location), "Fireplace(s) in:" (location), and "Roof(s): ' +
-  'Type" and "Age". For EACH, return a flag with "form":"TDS", "item" = the item name including ' +
-  'its TDS subsection (e.g. "II A Water Heater", "II A Pool/Spa Heater", "II A Roof", "II A Exhaust Fan(s)"), ' +
-  '"issue":"detail_incomplete", "marked":"present", and ' +
-  '"reason" = the specific blank detail phrased to drop into a request, e.g. "the type (Gas/Solar/Electric) is left ' +
-  'blank", "the Age is left blank", or "the location is left blank". For the Section II CHECKLIST items (not the ' +
-  'bottom fill-in block) do NOT flag an item that is simply not checked / not present.\n' +
-  'ALSO check these REQUIRED HEADER FIELDS and flag any that are blank with "issue":"unanswered": (1) the TDS ' +
-  'disclosure date, the "...AS OF (DATE) ____" line near the top of TDS page 1 (the date the seller completes the ' +
-  'TDS, NOT a signature or DocuSign date); return "form":"TDS", "item":"disclosure date", "reason":"the disclosure ' +
-  'date near the top of page 1 is left blank". (2) the SPQ Assessor\'s Parcel Number ("Assessor\'s Parcel No.") in ' +
-  'the SPQ page 1 header; return "form":"SPQ", "item":"APN", "reason":"the Assessor\'s Parcel Number in the header ' +
-  'is left blank". Flag these only when the field is genuinely blank.\n' +
+  'Type" and "Age". Flag one of these ONLY when the TDS page 1 bottom block is actually VISIBLE in the images in ' +
+  'THIS request AND the line is genuinely empty.\n' +
+  'WHAT COUNTS AS BLANK: a line is BLANK only when the seller wrote NOTHING on it at all. Any writing the seller ' +
+  'put on the line is an ANSWER, including "None", "none", "N/A", "n/a", "-", "0", or "Unknown". Those are ' +
+  'COMPLETED answers: do NOT flag them as blank or incomplete. READ the line before you judge it.\n' +
+  'For EACH such flag return "form":"TDS", "item" = the item name including its TDS subsection (e.g. "II A Water ' +
+  'Heater", "II A Pool/Spa Heater", "II A Roof", "II A Exhaust Fan(s)"), "issue":"detail_incomplete", ' +
+  '"marked":"present", and "reason" = a one-sentence description of the specific blank detail YOU ACTUALLY SAW, ' +
+  'phrased to drop into a request. For the Section II CHECKLIST items (not the bottom fill-in block) do NOT flag an ' +
+  'item that is simply not checked / not present.\n' +
+  'ALSO check these REQUIRED HEADER FIELDS, each ONLY when the page carrying it is VISIBLE in the images in THIS ' +
+  'request, and flag it with "issue":"unanswered" ONLY when the field is genuinely empty: (1) the TDS disclosure ' +
+  'date, the "...AS OF (DATE) ____" line near the top of TDS page 1 (the date the seller completes the TDS, NOT a ' +
+  'signature or DocuSign date); return "form":"TDS", "item":"disclosure date". (2) the SPQ Assessor\'s Parcel ' +
+  'Number ("Assessor\'s Parcel No.") in the SPQ page 1 header; return "form":"SPQ", "item":"APN". If the TDS page 1 ' +
+  'header or the SPQ page 1 header is NOT among these images, say NOTHING about it.\n' +
   'ALSO check the FHDS (Fire Hardening and Defensible Space Disclosure and Addendum, C.A.R. Form FHDS) if its pages ' +
   'are anywhere in the package (it may be embedded inside a combined packet). The required-complete standard is: the ' +
   'Section 2 fire-hardening compliance boxes are checked AND Section 3 is completed, specifically Section 3A is ' +
@@ -695,6 +698,8 @@ const ANSWER_REVIEW_PROMPT =
   'the HOA documents, the purchase agreement, the legal description, escrow instructions.\n' +
   'Keep each reason to ONE concise sentence, state FACTS only, do NOT use "appears", "may", or "possibly", and do ' +
   'NOT use em or en dashes in any field.\n' +
+  'NEVER echo an example string from these instructions as a finding. Every "reason" must describe what you ' +
+  'ACTUALLY OBSERVED on a page in front of you. If you did not see the page, do not produce the flag at all.\n' +
   'ALSO return key_answers for the facts we cross-check against our own records: "spq_7e" = the marked answer to ' +
   'SPQ question 7E (one of "yes" / "no" / "blank", or "na" if there is no SPQ in the package); "hoa_any_no" = ' +
   '"yes" if ANY HOA / common-interest question (TDS Section C items C12/C13/C14, SPQ 6G, SPQ Section 14) is marked ' +
@@ -737,6 +742,10 @@ async function identifyForms(docs) {
       const forms = Array.isArray(parsed.forms) ? parsed.forms
         .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim() }))
         .filter((f) => f.code || f.name) : [];
+      // What identify actually RETURNED. Without this the ledger records that a costly
+      // call happened and nothing about its output, so a bad identification is invisible
+      // until a human spots a wrong "request from listing side" list days later.
+      console.log(`[disclosure-intake] identify returned ${forms.length} form(s): ${forms.map((f) => f.code || f.name).join(', ') || '(none)'}`);
       return { propertyAddress: String(parsed.property_address || '').trim(), forms, dropped };
     } catch (err) {
       const tooLarge = /\b413\b|request_too_large|too\s*large/i.test(err.message || '');
@@ -862,6 +871,48 @@ function parseAnswerReview(raw) {
   return { responseFlags, keyAnswers };
 }
 
+// ----------------------------------------------------------------------------
+// BATCH-SCOPE GUARD.
+// The image answer-review runs the SAME global ANSWER_REVIEW_PROMPT against EACH batch of
+// Q&A page images. That prompt carries package-wide checks (the TDS disclosure date, the
+// TDS page-1 bottom fill-in block, the SPQ APN header, the TDS Section C HOA items). A
+// batch that does not happen to contain those pages was still being told to check them:
+// unable to see the page, the model emitted a "left blank" flag echoing the prompt's own
+// example wording. On a 50-page delivery that splits into 4 batches, 3 of them produced
+// false blanks for fields that were in fact filled in. Every batch must therefore be told,
+// explicitly, that it is looking at a SUBSET and may only speak to what it can see.
+function batchScopeNote(index, total, labels) {
+  return (
+    'SCOPE OF THIS REQUEST — READ THIS FIRST.\n' +
+    `The images below are only PART of the delivery: batch ${index + 1} of ${total}. ` +
+    `They are these pages, and ONLY these pages: ${labels.join('; ')}.\n` +
+    'The rest of the package exists and is being reviewed in separate requests. It is NOT missing.\n' +
+    'ABSOLUTE RULE: report ONLY on what is VISIBLE in the images in THIS request. If a form, page, section, ' +
+    'question, or header field is not present in these images, you MUST NOT flag it, MUST NOT assume it is blank ' +
+    'or missing, and MUST NOT guess at its contents. Not seeing something is NOT evidence that it is blank. When ' +
+    'you are unsure whether an item is in these images, leave it out.\n' +
+    'This governs EVERY check in the instructions that follow, including the TDS disclosure date, the TDS Section ' +
+    'II page-1 fill-in block (Exhaust Fan(s), 220 Volt Wiring, Fireplace(s), Roof Type and Age), the SPQ APN ' +
+    'header field, the TDS Section C HOA items, the FHDS checks, and the seller signature check. Run each of those ' +
+    'ONLY if the page that carries it is among these images.\n' +
+    'Set every key_answers field you cannot determine from these pages to "na".\n\n'
+  );
+}
+
+// Flags are gathered across batches, so the same finding can arrive more than once. Keep
+// the first occurrence per (form, item, issue).
+function dedupeFlags(flags) {
+  const seen = new Set();
+  const out = [];
+  for (const f of flags || []) {
+    const key = `${(f.form || '').toLowerCase()}|${(f.item || '').toLowerCase()}|${(f.issue || '').toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(f);
+  }
+  return out;
+}
+
 // First non-"na" value wins per field (the SPQ/TDS usually land in one batch).
 function mergeKeyAnswers(acc, next) {
   if (!next) return acc;
@@ -909,18 +960,26 @@ async function reviewAnswers(docs) {
   let responseFlags = [];
   const keyAnswers = { ...EMPTY_KEY_ANSWERS };
   for (let i = 0; i < batches.length; i++) {
-    const content = batches[i].map((img) => ({
-      type: 'image',
-      source: { type: 'base64', media_type: 'image/png', data: img.base64 },
-    }));
+    const labels = batches[i].map((img) => img.name || 'page');
+    // Scope note FIRST, so the model reads "you are seeing a subset" before the images and
+    // before the global checklist. Without it, batches that lack TDS page 1 invent blanks.
+    const content = [{ type: 'text', text: batchScopeNote(i, batches.length, labels) }];
+    for (const img of batches[i]) {
+      content.push({ type: 'text', text: `${img.name || 'page'}:` });
+      content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: img.base64 } });
+    }
     content.push({ type: 'text', text: ANSWER_REVIEW_PROMPT });
-    const raw = await callClaude(content, 48000, `answer-review-images | batch ${i + 1}/${batches.length} | ${batches[i].length} page(s)`);
+    // Record WHICH pages were reviewed, not just how many. classifyQAPages is a model
+    // call and is NOT deterministic (same 46-page file, three runs, two different page
+    // sets), so "11 page(s)" alone can't tell you afterwards whether the page carrying a
+    // given form was ever actually looked at.
+    const raw = await callClaude(content, 48000, `answer-review-images | batch ${i + 1}/${batches.length} | ${batches[i].length} page(s): ${labels.join(', ')}`);
     const parsed = parseAnswerReview(raw);
     if (parsed.responseFlags.length) responseFlags = responseFlags.concat(parsed.responseFlags);
     mergeKeyAnswers(keyAnswers, parsed.keyAnswers);
     console.log(`[disclosure-intake] answer-review image batch ${i + 1}/${batches.length} (${batches[i].length} page[s]): ${parsed.responseFlags.length} flag(s)`);
   }
-  return { responseFlags, keyAnswers, dropped: [] };
+  return { responseFlags: dedupeFlags(responseFlags), keyAnswers, dropped: [] };
 }
 
 // Document-block answer review (fallback): sends the whole PDF(s) to the model and lets
@@ -1083,7 +1142,7 @@ async function sendCallback(callbackUrl, payload) {
 // Reconcile the accumulated received set for a deal against its audit list and
 // POST the result to the callback. Shared by single-delivery mode and finalize.
 // ----------------------------------------------------------------------------
-async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}, threadId = '') {
+async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}, threadId = '', droppedDocs = []) {
   let listText = (auditList && String(auditList).trim()) || '';
   if (!listText) listText = await fetchAuditListByAddress(address);
   if (!listText) throw new Error(`No audit list for "${address}" — pass auditList in the body, or add a matching row to the AUDIT_LIST_CSV_URL sheet.`);
@@ -1314,10 +1373,26 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     chaseEmailBody = stripDashes(chaseEmailBody);
   }
 
+  // A dropped document is SILENT data loss: the 413 backstop discards the biggest doc to
+  // make the request fit, and that is almost always the disclosure package itself. Every
+  // form in it then reads as "never received" and gets chased from the listing side. This
+  // must surface in the output the human actually reads, not only in an ephemeral log.
+  const droppedList = Array.isArray(droppedDocs) ? droppedDocs.filter(Boolean) : [];
+  const droppedAlert = droppedList.length
+    ? `WARNING: ${droppedList.length} document(s) were too large to send to the model and were NOT reviewed: `
+      + `${droppedList.join(', ')}. Any form inside them is reported as missing. Re-run with these split up before trusting this result.`
+    : '';
+  if (droppedList.length) console.error(`[disclosure-intake] ${address}: ${droppedAlert}`);
+
   const payload = {
     property_address: address,
     gmail_thread_id: threadId,
+    // NOTE: overall_status is deliberately left alone. Zapier/Process Street may filter on
+    // its existing values, so a new enum could break the downstream flow silently. The
+    // drop is surfaced as its own field instead; map dropped_alert into the email/PS card.
     overall_status: overall,
+    dropped_docs_text: droppedList.join(', '),
+    dropped_alert: droppedAlert,
     still_needed_count: stillNeeded.length,
     response_flags_count: flags.length,
     outdated_count: outdated.length,
@@ -1447,7 +1522,7 @@ exports.handler = async function (event) {
     const received = mergeForms(prior.received, newForms);
     await store.setJSON(key, { address, received, updatedAt: Date.now() });
     console.log(`[disclosure-intake] ${address}: ${received.length} form(s) received so far (was ${prior.received.length})`);
-    await reconcileAndCallback(address, received, auditList, callback, newFlags, newKeyAnswers, gmailThreadId);
+    await reconcileAndCallback(address, received, auditList, callback, newFlags, newKeyAnswers, gmailThreadId, dropped);
     return { statusCode: 200 };
   } catch (err) {
     console.error('[disclosure-intake] ERROR:', err.message);
