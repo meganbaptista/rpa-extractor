@@ -293,17 +293,30 @@ function findOutdatedForms(received, versions) {
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04"
 const PDF_MAGIC = Buffer.from('%PDF');
 
-// Filenames inside the zip we never want to send to the model (big non-disclosure
-// reports + invoices). Mirrors the Zapier Code-step BLOCK list, plus invoice.
+// Filenames we never want to send to the model (big non-disclosure reports +
+// invoices). Mirrors the Zapier Code-step BLOCK list, plus invoice.
 const BLOCK_NAME = /(previous\s*home\s*inspection|home\s*inspection|inspection\s*report|\binspection\b|termite|wood\s*destroying|sewer|\broof\b|chimney|\bpool\b|\bspa\b|hvac|geolog|\bsoils?\b|\bsurvey\b|appraisal|invoice|\bphotos?\b)/i;
 
-// Disclosure/advisory forms whose names legitimately contain "inspection" — these
-// must NEVER be blocked. AVID = Agent Visual Inspection Disclosure; BIA/BIW = Buyer's
-// Inspection Advisory/Waiver. The override wins over BLOCK_NAME.
-const NEVER_BLOCK = /(\bavid\b|agent\s*visual\s*inspection|buyer'?s?\s*inspection\s*(advisory|waiver)|inspection\s*(advisory|waiver)|\bbia\b|\bbiw\b)/i;
+// Informational booklets. These are pure boilerplate: IDENTIFY_PROMPT explicitly
+// tells the model the booklet itself is NOT a receipt and must not be counted, and
+// CLASSIFY_PROMPT excludes booklet pages from the Q&A pass. So every page of one is
+// input tokens spent to be ignored — a single 200-page guide can dominate the whole
+// run's cost. The signed RECEIPT for a booklet is a real audit item and is rescued
+// by NEVER_BLOCK below.
+const BOOKLET_NAME = /(homeowner'?s?\s*guide|environmental\s*hazards?|earthquake\s*safety|combined\s*hazards?\s*book|protect\s*your\s*family|lead[-\s]*based\s*paint\s*pamphlet|\bbooklet\b|\bpamphlet\b)/i;
+
+// Names that must NEVER be blocked, even when they match a pattern above. The
+// override wins over BLOCK_NAME and BOOKLET_NAME.
+//   - AVID = Agent Visual Inspection Disclosure; BIA/BIW = Buyer's Inspection
+//     Advisory/Waiver — disclosure forms whose names contain "inspection".
+//   - receipt / acknowledgment — the booklet RECEIPT is a presence check on the
+//     audit list. "Receipt for Links to Booklets" matches BOOKLET_NAME and must
+//     still reach the model.
+const NEVER_BLOCK = /(\bavid\b|agent\s*visual\s*inspection|buyer'?s?\s*inspection\s*(advisory|waiver)|inspection\s*(advisory|waiver)|\bbia\b|\bbiw\b|receipt|acknowledg)/i;
 
 function isBlockedName(name) {
-  return BLOCK_NAME.test(name || '') && !NEVER_BLOCK.test(name || '');
+  const n = name || '';
+  return (BLOCK_NAME.test(n) || BOOKLET_NAME.test(n)) && !NEVER_BLOCK.test(n);
 }
 
 function looksZip(buf, name, contentType) {
@@ -467,6 +480,12 @@ async function loadDocuments(documents) {
         console.warn(`[disclosure-intake] ${name} is not a PDF or zip, skipping | ${describeBuffer(buf, contentType)}`);
         continue;
       }
+      // Non-disclosure reports and informational booklets are worthless to every
+      // downstream pass and are the single biggest driver of input-token cost. The
+      // zip branch above has always filtered them; the single-attachment path did
+      // not, so anything emailed as a loose attachment (the common case) bypassed
+      // the blocklist entirely and was billed in full.
+      if (isBlockedName(name)) { console.log(`[disclosure-intake] ${name} blocked (non-disclosure), skipping`); continue; }
       if (buf.length > MAX_DOC_BYTES) { console.warn(`[disclosure-intake] ${name} too large (${buf.length}B), skipping`); continue; }
       out.push({ name, base64: buf.toString('base64') });
     } catch (err) {
@@ -480,7 +499,18 @@ async function loadDocuments(documents) {
 // Anthropic call (Opus 4.8, adaptive thinking). content is the message content
 // array. Returns the joined text. Retries on 429/529.
 // ----------------------------------------------------------------------------
-async function callClaude(content, maxTokens, attempt = 0) {
+// Usage-sheet Note for a doc-bearing call: which step, and exactly which documents
+// (with sizes) rode along. Without this a costly row in the sheet is anonymous and
+// tracking it back to a property means digging through function logs.
+function docsNote(step, docs) {
+  const parts = (docs || []).map((d) => {
+    const kb = Math.round(((d.base64 || '').length * 0.75) / 1024);
+    return `${d.name} (${kb}KB)`;
+  });
+  return `${step} | ${parts.length} doc(s): ${parts.join('; ')}`;
+}
+
+async function callClaude(content, maxTokens, note = '', attempt = 0) {
   const MAX_RETRIES = 4;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
@@ -502,12 +532,12 @@ async function callClaude(content, maxTokens, attempt = 0) {
     const delay = retryAfter ? Math.min(parseFloat(retryAfter) * 1000, 30000) : Math.min(1000 * Math.pow(2, attempt), 30000);
     console.log(`[disclosure-intake] ${response.status}, retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
     await sleep(delay);
-    return callClaude(content, maxTokens, attempt + 1);
+    return callClaude(content, maxTokens, note, attempt + 1);
   }
   if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
 
   const data = await response.json();
-  await usageLog.logUsage({ fn: 'disclosure-intake', model: MODEL, effort: 'high', usage: data.usage });
+  await usageLog.logUsage({ fn: 'disclosure-intake', model: MODEL, effort: 'high', usage: data.usage, note });
   if (data.stop_reason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
   return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
 }
@@ -702,7 +732,7 @@ async function identifyForms(docs) {
       // Form-ID + revision + address only now (the answer review is a separate pass),
       // so the output is small. Keep a comfortable ceiling for adaptive thinking over a
       // multi-form packet.
-      const raw = await callClaude(content, 24000);
+      const raw = await callClaude(content, 24000, docsNote('identify', working));
       const parsed = parseJson(raw);
       const forms = Array.isArray(parsed.forms) ? parsed.forms
         .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim() }))
@@ -777,14 +807,14 @@ async function buildSubPdf(buffer, pageNumbers) {
 }
 
 // Stage A: ask the model which page numbers carry seller-answered content.
-async function classifyQAPages(thumbs) {
+async function classifyQAPages(thumbs, label = '') {
   const content = [];
   for (const t of thumbs) {
     content.push({ type: 'text', text: `Page ${t.pageNumber}:` });
     content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: t.base64 } });
   }
   content.push({ type: 'text', text: CLASSIFY_PROMPT });
-  const raw = await callClaude(content, 8000);
+  const raw = await callClaude(content, 8000, `classify | ${label || 'doc'} | ${thumbs.length} page thumb(s)`);
   const parsed = parseJson(raw);
   return Array.isArray(parsed.qa_pages)
     ? parsed.qa_pages.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 1)
@@ -796,7 +826,7 @@ async function classifyQAPages(thumbs) {
 async function renderQAPageImages(buffer, name) {
   const thumbs = await renderAllPagesAsImages(buffer, QA_THUMB_SCALE, QA_MAX_RENDER_PAGES);
   if (!thumbs.length) return [];
-  const qaNums = await classifyQAPages(thumbs);
+  const qaNums = await classifyQAPages(thumbs, name);
   if (!qaNums.length) { console.log(`[disclosure-intake] ${name}: no Q&A pages classified`); return []; }
   const subBuf = await buildSubPdf(buffer, qaNums);
   const hi = await renderAllPagesAsImages(subBuf, QA_HIRES_SCALE, qaNums.length);
@@ -884,7 +914,7 @@ async function reviewAnswers(docs) {
       source: { type: 'base64', media_type: 'image/png', data: img.base64 },
     }));
     content.push({ type: 'text', text: ANSWER_REVIEW_PROMPT });
-    const raw = await callClaude(content, 48000);
+    const raw = await callClaude(content, 48000, `answer-review-images | batch ${i + 1}/${batches.length} | ${batches[i].length} page(s)`);
     const parsed = parseAnswerReview(raw);
     if (parsed.responseFlags.length) responseFlags = responseFlags.concat(parsed.responseFlags);
     mergeKeyAnswers(keyAnswers, parsed.keyAnswers);
@@ -909,7 +939,7 @@ async function reviewAnswersFromDocuments(docs) {
     try {
       // Generous ceiling: this is the heavy reasoning pass (read every marked answer,
       // pair Yes with explanation, run the contradiction checks) before a small JSON.
-      const raw = await callClaude(content, 48000);
+      const raw = await callClaude(content, 48000, docsNote('answer-review-docs', working));
       const { responseFlags, keyAnswers } = parseAnswerReview(raw);
       return { responseFlags, keyAnswers, dropped };
     } catch (err) {
@@ -1031,7 +1061,7 @@ async function reconcile(auditList, received) {
 
   // Reconcile reasons item-by-item over the whole audit list before emitting JSON;
   // give thinking + output ample room so it never truncates mid-answer.
-  return parseJson(await callClaude([{ type: 'text', text: prompt }], 16000));
+  return parseJson(await callClaude([{ type: 'text', text: prompt }], 16000, `reconcile | ${(received || []).length} received form(s)`));
 }
 
 function bullets(list, fmt) {
