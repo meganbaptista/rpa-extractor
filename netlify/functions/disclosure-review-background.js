@@ -350,12 +350,22 @@ function escapeHtml(s) {
 
 // Turn the model's plain-text body into HTML: blank lines (\n\n) become
 // paragraph breaks; single newlines become <br>. No signature appended.
+// A block whose first line is a topic heading (ends in ":" and is followed by
+// more lines, e.g. "Roof:" / "Remodeling and permits (SPQ 7A; TDS C4):") gets
+// that heading bolded. The greeting and closing have no following lines, so
+// they stay unbolded.
 function renderEmailHtml(bodyText) {
   const body = String(bodyText || '').trim();
   const blocks = body
     ? body
         .split(/\n{2,}/)
-        .map((block) => `<p style="margin:0 0 1em 0">${escapeHtml(block).replace(/\n/g, '<br>')}</p>`)
+        .map((block) => {
+          const lines = block.split('\n').map((line) => escapeHtml(line));
+          if (lines.length > 1 && /:\s*$/.test(lines[0])) {
+            lines[0] = `<strong>${lines[0]}</strong>`;
+          }
+          return `<p style="margin:0 0 1em 0">${lines.join('<br>')}</p>`;
+        })
         .join('\n')
     : '';
   // 13px Arial == Gmail's "Normal" size, so the body matches a hand-typed
