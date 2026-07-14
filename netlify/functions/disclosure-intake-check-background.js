@@ -93,7 +93,22 @@ const PREPARED_BY_US_DEFAULTS = [
   'property profile', 'mls client', 'ba avid', 'receipt for reports', 'rfr',
   'dia', 'los angeles county local area', 'wfda',
   'bhaa',
+  // OUR brokerage's affiliate disclosure is ours to produce, so it belongs here and is never
+  // chased from the listing side. See COOPERATING_BROKER_LABEL: an affiliate disclosure that
+  // ARRIVES in the delivery is the other side's and must not be mistaken for this one.
+  'brokerage affiliate', 'affiliated business',
 ];
+
+// A brokerage affiliate / affiliated business disclosure that ARRIVES in a delivery belongs to the
+// COOPERATING (listing-side) broker. It is NOT our brokerage's own affiliate disclosure, and
+// matching it to our compliance-list item marked "Brokerage Affiliate Disclosures (Anvil Real
+// Estate)" as satisfied by a document that has nothing to do with Anvil. They are two different
+// documents from two different brokerages that happen to share a form name.
+//
+// So they are decoupled: what arrives is listed under its own label, and OUR item stays in
+// PREPARED BY US where it can still be produced.
+const COOPERATING_BROKER_LABEL = 'Cooperating Broker Disclosures';
+const isBrokerageAffiliate = (name) => /brokerage\s*affiliate|affiliated\s*business\b/i.test(String(name || ''));
 function isPreparedByUs(name) {
   const n = String(name || '').toLowerCase();
   const keys = PREPARED_BY_US_DEFAULTS.concat(
@@ -626,10 +641,21 @@ const ANSWER_REVIEW_PROMPT =
   'form itself, but an explanation for that ITEM exists elsewhere in this package, you MUST NOT report it as having ' +
   'no explanation, and you MUST NOT treat it as satisfied either. One item-level summary does not automatically ' +
   'satisfy every Yes sub-item under it, and that judgment is a human\'s to make, not yours. Instead raise ' +
-  '"issue":"explanation_on_addendum", set "document" to the name/title of the sheet where you found it, and set ' +
-  '"reason" to a SHORT quote of what that entry actually says. Do this per Yes sub-item. Only use ' +
-  '"yes_no_explanation" when there is genuinely no explanation ANYWHERE in the package, on the form or on any ' +
-  'separate sheet;\n' +
+  '"issue":"explanation_on_addendum", set "document" to the name/title of the sheet where you found it, set ' +
+  '"addendum_item" to the entry number EXACTLY as printed on that sheet (e.g. "7", "14", or "C" for the TDS ' +
+  'section), and set "reason" to a SHORT VERBATIM quote of what that entry actually says. Do this per Yes ' +
+  'sub-item. Only use "yes_no_explanation" when there is genuinely no explanation ANYWHERE in the package, on the ' +
+  'form or on any separate sheet;\n' +
+  'NEVER invent an addendum entry. You may only raise "explanation_on_addendum" for a sub-item whose ITEM NUMBER ' +
+  'actually appears on the sheet: if the sheet lists entries 5, 7, 8, 11, 13 and 14, then SPQ 6G has NO entry ' +
+  '(there is no 6) and MUST be reported as "yes_no_explanation", not as explained. Do not stretch a nearby entry to ' +
+  'cover a sub-item it does not address. If in doubt, use "yes_no_explanation": asking a seller to explain ' +
+  'something they already explained is recoverable, but silently treating an unanswered question as answered is ' +
+  'not;\n' +
+  'ALSO return "addendum_entries": list EVERY entry you can see on any separate explanations sheet in this package, ' +
+  'as {"form":"SPQ|TDS","item":"<entry number exactly as printed, e.g. 7 or C>","text":"<verbatim text>"}. List ' +
+  'them all, even ones no Yes sub-item needs. Return [] if there is no such sheet in this package. Every ' +
+  '"explanation_on_addendum" you raise MUST correspond to one of these entries;\n' +
   '(c) a sub-item that HAS a written explanation but whose box is marked NO or left BLANK: a seller writes an ' +
   'explanation only when the answer is Yes, so the mark should be Yes. Set "issue":"answer_contradicts_package", ' +
   '"discrepancy_type":"incorrect", "marked" = the marked answer (No or blank), "should_be":"Yes", and "reason":"an ' +
@@ -730,6 +756,7 @@ const ANSWER_REVIEW_PROMPT =
   'in the package.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
   '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_on_addendum|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect; for explanation_on_addendum, a short quote of the addendum entry>","other_form":"<for inconsistent>","document":"<for document; for explanation_on_addendum, the sheet it was found on>","source":"<for transaction>"}],' +
+  '"addendum_entries":[{"form":"SPQ","item":"7","text":"<verbatim text of that entry>"}],' +
   '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na","fire_clearance":"yes|no|blank|na","fire_clearance_item":"17F","fhds":"yes|no|na"}}';
 
 const EMPTY_KEY_ANSWERS = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '', fhds: 'na' };
@@ -1107,8 +1134,16 @@ function parseAnswerReview(raw) {
       other_form: String(r.other_form || '').trim(),
       document: String(r.document || '').trim(),
       source: String(r.source || '').trim(),
+      addendum_item: String(r.addendum_item || '').trim(),
     }))
     .filter((r) => r.form || r.item || r.reason || r.other_form || r.document || r.source) : [];
+  const addendumEntries = Array.isArray(parsed.addendum_entries) ? parsed.addendum_entries
+    .map((e) => ({
+      form: String(e.form || '').trim().toUpperCase(),
+      item: String(e.item || '').trim(),
+      text: String(e.text || '').trim(),
+    }))
+    .filter((e) => e.item) : [];
   const ka = parsed.key_answers || {};
   const keyAnswers = {
     spq_7e: String(ka.spq_7e || 'na').toLowerCase().trim(),
@@ -1117,7 +1152,63 @@ function parseAnswerReview(raw) {
     fire_clearance_item: String(ka.fire_clearance_item || '').trim(),
     fhds: String(ka.fhds || 'na').toLowerCase().trim(),
   };
-  return { responseFlags, keyAnswers };
+  return { responseFlags: validateAddendumFlags(responseFlags, addendumEntries), keyAnswers, addendumEntries };
+}
+
+// The entry a sub-item would be explained under, as the addendum numbers them: the SPQ numbers at
+// the ITEM level ("7A" -> 7, "14B" -> 14), the TDS explanations sheet by SECTION letter
+// ("C2" -> C, "C12" -> C).
+function addendumKey(item) {
+  const s = String(item || '').trim();
+  const digits = s.match(/^(\d+)/);
+  if (digits) return digits[1];
+  const letters = s.match(/^([A-Za-z]+)/);
+  return letters ? letters[1].toUpperCase() : '';
+}
+
+// Do not take the model's word for it that an explanation exists.
+//
+// On 8 Willow Way the sheet carried SPQ entries 5, 7, 8, 11, 13 and 14 — there is NO entry 6 — yet
+// the review claimed SPQ 6G was "explained on a separate addendum" and routed it to VERIFY. It
+// invented the match. That is the one direction this routing must never fail in: a false CHASE is
+// recoverable (the seller replies "see the addendum"), but a false PASS parks a genuinely
+// unanswered disclosure question on a 17-line VERIFY list a human is skimming, and it reaches a
+// buyer unanswered.
+//
+// So the model must first ENUMERATE the entries on the sheet (addendum_entries), and every
+// explanation_on_addendum must cite one. Here we check that the cited entry actually exists and
+// actually corresponds to the sub-item's number. If it does not, the flag is DOWNGRADED to
+// yes_no_explanation, which chases the seller. Default to asking.
+function validateAddendumFlags(flags, entries) {
+  const byForm = new Map();
+  for (const e of entries) {
+    const key = `${e.form}|${addendumKey(e.item)}`;
+    if (!byForm.has(key)) byForm.set(key, e);
+  }
+  return flags.map((f) => {
+    if (f.issue !== 'explanation_on_addendum') return f;
+    const form = String(f.form || '').trim().toUpperCase();
+    const wanted = addendumKey(f.item);
+    const cited = f.addendum_item ? addendumKey(f.addendum_item) : '';
+    const entry = byForm.get(`${form}|${wanted}`);
+    // Valid only when the sheet really has an entry under this sub-item's number, and the entry
+    // the model cited is that same one (it may not borrow entry 5 to explain 6G).
+    const ok = !!entry && !!wanted && (!cited || cited === wanted);
+    if (ok) return f;
+    const ref = [f.form, f.item].filter(Boolean).join(' ');
+    console.warn(`[disclosure-intake] ${ref}: claimed an addendum explanation`
+      + `${cited ? ` (cited entry "${f.addendum_item}")` : ' (cited no entry)'}`
+      + `, but the sheet has no entry "${wanted}" for ${form || 'that form'}`
+      + ` [entries seen: ${entries.map((e) => `${e.form} ${e.item}`).join(', ') || 'none'}]`
+      + ' — DOWNGRADED to yes_no_explanation, so the seller is asked for it.');
+    return {
+      ...f,
+      issue: 'yes_no_explanation',
+      document: '',
+      addendum_item: '',
+      reason: `marked Yes but no explanation is provided, on the form or on the separate explanations sheet`,
+    };
+  });
 }
 
 // First non-"na" value wins per field (the SPQ/TDS usually land in one batch).
@@ -1497,7 +1588,20 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     return name;
   };
 
-  const present = (Array.isArray(result.present) ? result.present : []).map((n) => fmtSfls(n, false));
+  const presentRaw = (Array.isArray(result.present) ? result.present : []).map((n) => fmtSfls(n, false));
+
+  // Reconcile matched the affiliate disclosure that ARRIVED against our own compliance-list item,
+  // so RECEIVED read "Brokerage Affiliate Disclosures (Anvil Real Estate)" for a document that came
+  // from the OTHER side's brokerage. Decouple them: what arrived is the cooperating broker's, and
+  // our own item goes back to PREPARED BY US (see affiliateClaimed below).
+  const affiliateClaimed = presentRaw.filter(isBrokerageAffiliate);
+  const present = presentRaw.filter((x) => !isBrokerageAffiliate(x));
+  if (affiliateClaimed.length) {
+    present.push(COOPERATING_BROKER_LABEL);
+    console.log(`[disclosure-intake] received affiliate disclosure(s) relabelled as `
+      + `"${COOPERATING_BROKER_LABEL}" (they are the listing side's, not ours): ${affiliateClaimed.join(', ')}`);
+  }
+
   let verify = Array.isArray(result.verify) ? result.verify : [];
   const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
 
@@ -1593,13 +1697,13 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // count, the chase email, and the status; prepared-by-us items stay visible in
   // the PS comment as our own to-do.
   const stillNeededAll = (Array.isArray(result.still_needed) ? result.still_needed : []).map((n) => fmtSfls(n, true));
-  const preparedByUs = stillNeededAll.filter(isPreparedByUs);
-  // Brokerage Affiliate Disclosures ("if any" items requested at opening): if not in the
-  // package we assume the brokerage has none, so never re-request — move to not_applicable.
-  const isAssumeNone = (name) => /brokerage\s*affiliate|affiliated\s*business\b/i.test(String(name || ''));
-  const assumeNone = stillNeededAll.filter((x) => !isPreparedByUs(x) && isAssumeNone(x));
-  for (const x of assumeNone) na.push({ item: x, note: 'Requested at opening; if not provided, assume the brokerage has none on file.' });
-  const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x) && !isAssumeNone(x));
+  // OUR brokerage's affiliate disclosure is ours to produce, so it sits in PREPARED BY US whether
+  // reconcile thought it was still needed OR wrongly counted the listing side's copy as satisfying
+  // it (affiliateClaimed). It is never chased from the listing side either way.
+  const preparedByUs = Array.from(new Set(
+    stillNeededAll.filter(isPreparedByUs).concat(affiliateClaimed)
+  ));
+  const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x));
   // Anything to follow up on with the listing side = missing docs OR response flags
   // OR outdated form versions.
   const followupCount = stillNeeded.length + flags.length + outdated.length;
@@ -1675,14 +1779,19 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     `Disclosure intake — ${address}\n` +
     `Status: ${overall} | ${present.length} of the required disclosures received; ${stillNeeded.length} to request, ${flags.length} response(s) to clarify\n\n` +
     (biwAlert ? `** ${biwAlert} **\n\n` : '') +
-    `TO REQUEST FROM LISTING SIDE:\n${bullets(stillNeeded, (x) => x)}\n\n` +
+    // Order is deliberate: everything that needs a DECISION comes first (what is wrong, what a
+    // human must judge, what to confirm), then what to chase, then the reference lists. VERIFY in
+    // particular must sit high: the addendum-explanation routing sends real work there (17 items
+    // on 8 Willow Way), and buried under the reference lists it gets skimmed, which is exactly
+    // how a genuinely unexplained answer would slip through.
     (outdated.length ? `OUTDATED VERSIONS (request current):\n${bullets(outdated, outdatedLine)}\n\n` : '') +
     (reviseFlags.length ? `RESPONSES TO REVISE:\n${bullets(reviseFlags, reviseLine)}\n\n` : '') +
+    (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
     (confirmFlags.length ? `RESPONSES TO CONFIRM:\n${bullets(confirmFlags, confirmLine)}\n\n` : '') +
+    `TO REQUEST FROM LISTING SIDE:\n${bullets(stillNeeded, (x) => x)}\n\n` +
     `RECEIVED:\n${bullets(present, (x) => x)}\n\n` +
     (preparedByUs.length ? `PREPARED BY US (do not request):\n${bullets(preparedByUs, (x) => x)}\n\n` : '') +
     (confirmedReadings.length ? `CONFIRMED (we checked these):\n${bullets(confirmedReadings, (x) => x)}\n\n` : '') +
-    (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
     (na.length ? `NOT APPLICABLE / LATER:\n${bullets(na, (x) => `${x.item}: ${x.note}`)}\n` : '');
 
   // Ready-to-send chase email. Zap B drops this into a Gmail draft when followup_count
