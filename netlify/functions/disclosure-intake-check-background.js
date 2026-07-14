@@ -42,6 +42,7 @@
 console.log('[disclosure-intake] module loading');
 
 const zlib = require('zlib');
+const crypto = require('crypto');
 const { getStore } = require('@netlify/blobs');
 const { canonicalAddress } = require('./lib/address');
 const usageLog = require('./lib/usage-log');
@@ -69,6 +70,9 @@ const FORM_VERSIONS_CSV_URL = process.env.FORM_VERSIONS_CSV_URL || '';
 
 // Per-deal accumulation lives here, keyed by normalized property address.
 const STATE_STORE = 'disclosure-intake-state';
+
+// Memoized identify() results live here, keyed by a hash of the documents themselves.
+const IDENTIFY_CACHE_STORE = 'disclosure-intake-identify-cache';
 
 // Safety cap on a single document we will pull into memory / send to the model.
 const MAX_DOC_BYTES = 28 * 1024 * 1024;
@@ -719,7 +723,87 @@ const ANSWER_REVIEW_PROMPT =
 
 const EMPTY_KEY_ANSWERS = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '', fhds: 'na' };
 
+// ----------------------------------------------------------------------------
+// IDENTIFY MEMOIZATION — the most expensive call in the pipeline, cached on content.
+//
+// identify() sends every document to Opus as a full PDF and reads it end to end (form IDs,
+// revisions, the address, AND the key_answers cross-checks). The usage ledger for
+// 2026-07-12..14 puts it at 48% of ALL spend: 19 calls, ~162k input tokens each, ~$0.85 a call.
+//
+// It also runs FIRST, before the renderer. So when the renderer was OOM-killed, Netlify
+// retried the function from the top and identify was billed AGAIN — having already succeeded.
+// One packet (attachments.zip) ran identify 12 times with a byte-identical 174,444-token
+// payload between 07-13T23:41 and 07-14T01:23: $10.94 spent, ~$10.03 of it pure duplicate,
+// 32% of the entire three-day bill, for zero additional output.
+//
+// The OOM is fixed, but the SHAPE of that failure is permanent: any crash downstream of
+// identify re-bills identify. So memoize it on a hash of the document bytes. A retry, or a
+// re-drop of the same packet, is then free. A genuinely new packet is unaffected.
+//
+// The key covers the model, the prompt and every document's name+bytes, so changing the
+// prompt or the model invalidates the cache on its own — no manual bust needed. Every cache
+// operation is swallowed on failure: a broken cache must never fail a disclosure run, it
+// just means we pay for the call like before.
+const IDENTIFY_CACHE_VERSION = 'v1';
+
+function identifyCacheKey(docs) {
+  const h = crypto.createHash('sha256');
+  h.update(IDENTIFY_CACHE_VERSION);
+  h.update(MODEL);
+  h.update(IDENTIFY_PROMPT);
+  // Sorted, so the same packet keys the same regardless of document order (identifyForms
+  // re-sorts by size internally, and upstream ordering is not guaranteed stable).
+  const fingerprints = docs
+    .map((d) => crypto.createHash('sha256').update(String(d.name || '')).update('\0').update(d.base64 || '').digest('hex'))
+    .sort();
+  for (const fp of fingerprints) h.update(fp);
+  return `identify:${h.digest('hex')}`;
+}
+
+async function readIdentifyCache(key) {
+  try {
+    const store = getStore(blobsConfig(IDENTIFY_CACHE_STORE));
+    return await store.get(key, { type: 'json' });
+  } catch (err) {
+    console.warn(`[disclosure-intake] identify cache read failed (non-fatal): ${err.message}`);
+    return null;
+  }
+}
+
+async function writeIdentifyCache(key, result) {
+  try {
+    const store = getStore(blobsConfig(IDENTIFY_CACHE_STORE));
+    await store.setJSON(key, { ...result, cachedAt: new Date().toISOString() });
+  } catch (err) {
+    console.warn(`[disclosure-intake] identify cache write failed (non-fatal): ${err.message}`);
+  }
+}
+
 async function identifyForms(docs) {
+  const key = identifyCacheKey(docs);
+
+  const cached = await readIdentifyCache(key);
+  if (cached && Array.isArray(cached.forms) && cached.forms.length) {
+    console.log(`[disclosure-intake] identify CACHE HIT (${key.slice(9, 21)}, cached ${cached.cachedAt}) — `
+      + `skipped a ~$0.85 Opus call over ${docs.length} doc(s): ${cached.forms.map((f) => f.code || f.name).join(', ')}`);
+    return { propertyAddress: cached.propertyAddress || '', forms: cached.forms, dropped: cached.dropped || [] };
+  }
+
+  const result = await identifyFormsUncached(docs);
+
+  // Cache only a real, non-empty identification. An empty result means the model found
+  // nothing or the size-shedding loop ran out of documents; caching that would make a bad
+  // run permanent for this packet, and re-running an empty one is cheap by comparison.
+  if (result && Array.isArray(result.forms) && result.forms.length) {
+    await writeIdentifyCache(key, result);
+    console.log(`[disclosure-intake] identify cached (${key.slice(9, 21)}) — a retry of this packet is now free`);
+  } else {
+    console.log('[disclosure-intake] identify returned no forms — NOT cached, so a re-run can still succeed');
+  }
+  return result;
+}
+
+async function identifyFormsUncached(docs) {
   // Backstop: Claude caps a request at ~32MB / 100 pages. If a large file (e.g. an
   // inspection report that slipped past the Zapier filter) makes the combined request
   // too large (413), drop the single biggest doc and retry, rather than failing the
