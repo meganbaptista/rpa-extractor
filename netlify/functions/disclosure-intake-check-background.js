@@ -771,7 +771,11 @@ async function identifyForms(docs) {
 // images. Falls back to the document-block path if rendering/classification yields nothing.
 // ----------------------------------------------------------------------------
 const QA_THUMB_SCALE = 0.7;                 // stage A: small thumbnails, just enough to classify
-const QA_HIRES_SCALE = 2.5;                 // stage B: ~1980px tall, sharp enough to resolve a checkbox
+// stage B. Was 2.5, which renders ~1980px tall — but the API caps images at 1568px on the
+// long edge and downscales anything bigger BEFORE the model sees it. So 2.5 bought no extra
+// sharpness at all; it just cost memory (a factor in the OOM) and tokens. 1.9 lands at
+// ~1505px: under the cap, so it reaches the model at full fidelity, un-downscaled.
+const QA_HIRES_SCALE = 1.9;
 const QA_MAX_RENDER_PAGES = 60;             // safety cap on pages rendered from one document
 const QA_MAX_BATCH_B64 = 18 * 1024 * 1024;  // keep each review request well under the 32MB cap
 const QA_MAX_BATCH_IMAGES = 20;
@@ -822,33 +826,49 @@ try {
 
 // Render pages of a PDF to PNG base64 via pdf-parse. scale multiplies the 72dpi base;
 // maxPages caps render work. Returns [{ pageNumber, base64 }].
-async function renderAllPagesAsImages(buffer, scale, maxPages) {
-  const parser = new PDFParse({
-    data: new Uint8Array(buffer),
-    CanvasFactory,
-    ...(STANDARD_FONT_DATA_URL ? { standardFontDataUrl: STANDARD_FONT_DATA_URL } : {}),
-  });
-  try {
-    const options = { scale: (typeof scale === 'number' && scale > 0) ? scale : 1.0 };
-    if (maxPages) options.first = maxPages;
-    const result = await parser.getScreenshot(options);
-    return (result.pages || [])
-      .filter((p) => p.data)
-      .map((p) => ({ pageNumber: p.pageNumber, base64: Buffer.from(p.data).toString('base64') }));
-  } finally {
-    await parser.destroy();
+// ----------------------------------------------------------------------------
+// CHUNKED RENDERING — why this is not one big getScreenshot() call any more.
+//
+// It used to render every page of a document in ONE call and hold the whole result in
+// memory. That fitted inside the 1GB Lambda only because pdf.js had NO standard font data
+// and was silently skipping the non-embedded fonts (i.e. only because of the bug). The
+// moment standardFontDataUrl resolved and pdf.js actually loaded and rasterised those
+// fonts, a 46-page render blew the ceiling and the function was OOM-killed mid-render:
+// no stack, no error, just `Duration:` and a retry. Three retries, three kills.
+//
+// So: render at most RENDER_CHUNK_PAGES pages per parser, then destroy the parser to free
+// its canvases before the next chunk. `partial` renders exactly the pages asked for, so we
+// never rasterise a page we do not need.
+const RENDER_CHUNK_PAGES = 8;
+
+async function renderPagesAsImages(buffer, pageNumbers, scale) {
+  const out = [];
+  const s = (typeof scale === 'number' && scale > 0) ? scale : 1.0;
+  for (let i = 0; i < pageNumbers.length; i += RENDER_CHUNK_PAGES) {
+    const chunk = pageNumbers.slice(i, i + RENDER_CHUNK_PAGES);
+    const parser = new PDFParse({
+      data: new Uint8Array(buffer),
+      CanvasFactory,
+      ...(STANDARD_FONT_DATA_URL ? { standardFontDataUrl: STANDARD_FONT_DATA_URL } : {}),
+    });
+    try {
+      const result = await parser.getScreenshot({ scale: s, partial: chunk });
+      for (const p of (result.pages || [])) {
+        if (p.data) out.push({ pageNumber: p.pageNumber, base64: Buffer.from(p.data).toString('base64') });
+      }
+    } finally {
+      await parser.destroy();   // frees the canvases before the next chunk
+    }
   }
+  return out;
 }
 
-// Build a new PDF containing only the given 1-indexed pages, preserving order.
-async function buildSubPdf(buffer, pageNumbers) {
-  const src = await PDFDocument.load(buffer, { ignoreEncryption: true });
-  const out = await PDFDocument.create();
-  const idx = pageNumbers.map((n) => n - 1).filter((i) => i >= 0 && i < src.getPageCount());
-  const copied = await out.copyPages(src, idx);
-  copied.forEach((p) => out.addPage(p));
-  const bytes = await out.save();
-  return Buffer.from(bytes);
+// Render every page (up to maxPages). Kept for callers that want the whole document.
+async function renderAllPagesAsImages(buffer, scale, maxPages) {
+  const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+  const total = Math.min(doc.getPageCount(), maxPages || doc.getPageCount());
+  const pages = Array.from({ length: total }, (_, i) => i + 1);
+  return renderPagesAsImages(buffer, pages, scale);
 }
 
 // Stage A: ask the model which page numbers carry seller-answered content.
@@ -869,14 +889,19 @@ async function classifyQAPages(thumbs, label = '') {
 // Render one document's Q&A pages to crisp PNGs (stage A classify + stage B hi-res).
 // Returns [] when the doc has no Q&A pages (e.g. an NHD report or booklet).
 async function renderQAPageImages(buffer, name) {
-  const thumbs = await renderAllPagesAsImages(buffer, QA_THUMB_SCALE, QA_MAX_RENDER_PAGES);
+  let thumbs = await renderAllPagesAsImages(buffer, QA_THUMB_SCALE, QA_MAX_RENDER_PAGES);
   if (!thumbs.length) return [];
   const qaNums = await classifyQAPages(thumbs, name);
+  thumbs = null;   // drop ~46 thumbnails before rendering the hi-res pass
   if (!qaNums.length) { console.log(`[disclosure-intake] ${name}: no Q&A pages classified`); return []; }
-  const subBuf = await buildSubPdf(buffer, qaNums);
-  const hi = await renderAllPagesAsImages(subBuf, QA_HIRES_SCALE, qaNums.length);
-  console.log(`[disclosure-intake] ${name}: rendered ${hi.length} Q&A page(s) hi-res (pages ${qaNums.join(', ')})`);
-  return hi.map((p, i) => ({ name: `${name} qa-p${qaNums[i] != null ? qaNums[i] : p.pageNumber}`, base64: p.base64 }));
+
+  // Render the Q&A pages straight from the original buffer. buildSubPdf() is gone: it
+  // filtered out-of-range page numbers, which shifted the sub-PDF's pages relative to
+  // qaNums, so every image after a dropped page got labelled with the WRONG page number.
+  // `partial` renders exactly these pages and each one reports its own true pageNumber.
+  const hi = await renderPagesAsImages(buffer, qaNums, QA_HIRES_SCALE);
+  console.log(`[disclosure-intake] ${name}: rendered ${hi.length} Q&A page(s) hi-res (pages ${hi.map((p) => p.pageNumber).join(', ')})`);
+  return hi.map((p) => ({ name: `${name} qa-p${p.pageNumber}`, base64: p.base64 }));
 }
 
 // Parse the answer-review JSON into the { responseFlags, keyAnswers } shape callers expect.
