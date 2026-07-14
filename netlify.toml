@@ -11,8 +11,13 @@
   # but every seller-entered value is Helvetica-BoldOblique, NOT embedded. So in the Lambda
   # the form renders perfectly and the ANSWERS vanish — the model is handed a blank TDS and
   # truthfully reports "left blank". It never reproduces locally because macOS supplies
-  # Helvetica. @napi-rs/canvas is a native binary and must not be bundled either.
-  external_node_modules = ["pdfjs-dist", "pdf-parse", "@napi-rs/canvas"]
+  # Helvetica.
+  #
+  # DO NOT add @napi-rs/canvas here. Tried 2026-07-13: the function loaded, identify
+  # succeeded, then the process died at 52s with NO error logged — the signature of a
+  # native crash, because externalising it stops Netlify bundling its .node binding.
+  # Leave the native canvas bundled; only pdf-parse needs to be external.
+  external_node_modules = ["pdfjs-dist", "pdf-parse"]
 
 # Disclosure Intake Pipeline — the watcher runs every 2 minutes, scans each
 # "Incoming" folder, and emits a disclosure.uploaded event per new PDF. (The
