@@ -1,6 +1,18 @@
 [functions]
   node_bundler = "esbuild"
-  external_node_modules = ["pdfjs-dist"]
+  # pdf-parse MUST be external, not bundled. It locates pdf.js's standard font data
+  # relative to its own module path:
+  #     standardFontDataUrl = new URL('legacy/build/standard_fonts/', <its module URL>)
+  # esbuild rewrites that path to the build output dir, where standard_fonts/ does not
+  # exist, so pdf.js gets NO standard font data. Fonts EMBEDDED in a PDF still draw, but
+  # NON-embedded ones (the standard-14: Helvetica, Times, Courier) draw as NOTHING.
+  #
+  # On the C.A.R. disclosure PDFs the blank form is embedded (HelveticaWorld, ZDingbats)
+  # but every seller-entered value is Helvetica-BoldOblique, NOT embedded. So in the Lambda
+  # the form renders perfectly and the ANSWERS vanish — the model is handed a blank TDS and
+  # truthfully reports "left blank". It never reproduces locally because macOS supplies
+  # Helvetica. @napi-rs/canvas is a native binary and must not be bundled either.
+  external_node_modules = ["pdfjs-dist", "pdf-parse", "@napi-rs/canvas"]
 
 # Disclosure Intake Pipeline — the watcher runs every 2 minutes, scans each
 # "Incoming" folder, and emits a disclosure.uploaded event per new PDF. (The
