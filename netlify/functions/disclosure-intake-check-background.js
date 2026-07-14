@@ -1485,6 +1485,9 @@ async function reconcile(auditList, received) {
 // Escapes &, < and > so a stray angle bracket in a seller's text cannot break the markup. Leaves
 // apostrophes and quotes as real characters (never &#39;) — Megan's standing rule for anything
 // that lands in a draft.
+// Handles both bullet styles: the PS comment uses "•", the chase email uses "- ".
+const BULLET = /^[•\-]\s+/;
+
 function commentToHtml(text) {
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const out = [];
@@ -1493,9 +1496,9 @@ function commentToHtml(text) {
   for (const raw of String(text || '').split('\n')) {
     const line = raw.trim();
     if (!line) { closeList(); continue; }
-    if (line.startsWith('•')) {
+    if (BULLET.test(line)) {
       if (!inList) { out.push('<ul style="margin:0 0 12px 0;padding-left:22px">'); inList = true; }
-      out.push(`<li style="margin:0 0 4px 0">${esc(line.replace(/^•\s*/, ''))}</li>`);
+      out.push(`<li style="margin:0 0 4px 0">${esc(line.replace(BULLET, ''))}</li>`);
       continue;
     }
     closeList();
@@ -1879,6 +1882,11 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     ps_comment_md: commentToMarkdown(stripDashes(psComment)),
     chase_email_subject: chaseEmailSubject,
     chase_email_body: chaseEmailBody,
+    // The draft goes out as an HTML email, where a newline is only whitespace, so the plain body
+    // arrives as one unbroken paragraph. Map THIS into the Gmail draft with Body Type = html.
+    // Empty (not an empty <p>) when there is nothing to chase, so the Zap's followup_count check
+    // still behaves.
+    chase_email_body_html: chaseEmailBody ? commentToHtml(chaseEmailBody) : '',
     result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, confirmed: confirmedReadings, verify, not_applicable: na, response_flags: flags, outdated_versions: outdated },
   };
 
