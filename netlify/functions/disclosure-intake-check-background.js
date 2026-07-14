@@ -45,10 +45,9 @@ const zlib = require('zlib');
 const { getStore } = require('@netlify/blobs');
 const { canonicalAddress } = require('./lib/address');
 const usageLog = require('./lib/usage-log');
-// Crisp-render dependencies (same stack the RPA extractor uses): pdf-lib to slice out
-// the Q&A pages, and pdf-parse (pdfjs under the hood) with its CanvasFactory polyfill to
-// rasterize them server-side so Netlify Functions don't need the native canvas package.
-const { PDFDocument } = require('pdf-lib');
+// Crisp-render dependency: pdf-parse (pdfjs under the hood) with its CanvasFactory polyfill,
+// which rasterizes pages server-side so Netlify Functions don't need the native canvas package.
+// pdf-lib is deliberately NOT used here any more — see pdfPageCount() for why.
 const { CanvasFactory } = require('pdf-parse/worker');
 const { PDFParse } = require('pdf-parse');
 
@@ -839,7 +838,16 @@ try {
 // So: render at most RENDER_CHUNK_PAGES pages per parser, then destroy the parser to free
 // its canvases before the next chunk. `partial` renders exactly the pages asked for, so we
 // never rasterise a page we do not need.
-const RENDER_CHUNK_PAGES = 8;
+//
+// Chunk size measured against a real 80-page packet (peak RSS, 1GB Lambda ceiling):
+//   all pages in one parser (the old code) → 1148MB  ← the OOM, reproduced
+//   chunks of 8                            →  770MB
+//   chunks of 4                            →  670MB  ← here: ~350MB headroom, costs ~0.5s
+//   chunks of 2                            →  645MB  (diminishing returns, slower)
+// NOTE the peak lands in the THUMBNAIL pass, not the hi-res one: 60 thumbnails are only
+// ~15MB of PNG but pdfjs's own working set is what climbs. So chunk size — not
+// QA_HIRES_SCALE — is the lever that actually governs whether this function survives.
+const RENDER_CHUNK_PAGES = 4;
 
 async function renderPagesAsImages(buffer, pageNumbers, scale) {
   const out = [];
@@ -863,10 +871,41 @@ async function renderPagesAsImages(buffer, pageNumbers, scale) {
   return out;
 }
 
+// Count pages with pdfjs, NOT pdf-lib.
+//
+// This used to be `PDFDocument.load(buffer).getPageCount()`. pdf-lib THROWS on PDFs with
+// corrupt object refs ("Expected instance of PDFDict, but got instance of undefined") — and
+// real seller-disclosure packets have them routinely (same corruption class as the RPA
+// `Invalid object ref` packets in CLAUDE.md §4c). One in six of the packets on hand does it.
+//
+// The throw was caught upstream in reviewAnswers(), so it never crashed — it did something
+// worse. The doc silently contributed ZERO images, and the review fell back to the
+// document-block path: the very path whose blank-looking renders produce the bogus
+// "left blank" flags this crisp-image renderer exists to eliminate. So the packets that most
+// need crisp rendering were precisely the ones that never got it, quietly.
+//
+// pdfjs tolerates the corruption and reads these files fine (the 80-page packet pdf-lib
+// choked on counts and renders correctly). It's already our renderer, so this also drops a
+// dependency rather than adding one.
+async function pdfPageCount(buffer) {
+  const parser = new PDFParse({
+    data: new Uint8Array(buffer),
+    CanvasFactory,
+    ...(STANDARD_FONT_DATA_URL ? { standardFontDataUrl: STANDARD_FONT_DATA_URL } : {}),
+  });
+  try {
+    const info = await parser.getInfo();
+    return Number(info.total) || 0;
+  } finally {
+    await parser.destroy();
+  }
+}
+
 // Render every page (up to maxPages). Kept for callers that want the whole document.
 async function renderAllPagesAsImages(buffer, scale, maxPages) {
-  const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-  const total = Math.min(doc.getPageCount(), maxPages || doc.getPageCount());
+  const count = await pdfPageCount(buffer);
+  if (!count) return [];
+  const total = Math.min(count, maxPages || count);
   const pages = Array.from({ length: total }, (_, i) => i + 1);
   return renderPagesAsImages(buffer, pages, scale);
 }
