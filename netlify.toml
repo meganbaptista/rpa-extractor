@@ -1,23 +1,14 @@
 [functions]
   node_bundler = "esbuild"
-  # pdf-parse MUST be external, not bundled. It locates pdf.js's standard font data
-  # relative to its own module path:
-  #     standardFontDataUrl = new URL('legacy/build/standard_fonts/', <its module URL>)
-  # esbuild rewrites that path to the build output dir, where standard_fonts/ does not
-  # exist, so pdf.js gets NO standard font data. Fonts EMBEDDED in a PDF still draw, but
-  # NON-embedded ones (the standard-14: Helvetica, Times, Courier) draw as NOTHING.
+  # DO NOT externalise pdf-parse or @napi-rs/canvas here. Both were tried 2026-07-13 and
+  # both killed the function: it loaded, identify succeeded, then the process died ~52s in
+  # with NO error logged (a native crash below the JS layer — externalising stops Netlify
+  # bundling the canvas .node binding). Keep this list as-is.
   #
-  # On the C.A.R. disclosure PDFs the blank form is embedded (HelveticaWorld, ZDingbats)
-  # but every seller-entered value is Helvetica-BoldOblique, NOT embedded. So in the Lambda
-  # the form renders perfectly and the ANSWERS vanish — the model is handed a blank TDS and
-  # truthfully reports "left blank". It never reproduces locally because macOS supplies
-  # Helvetica.
-  #
-  # DO NOT add @napi-rs/canvas here. Tried 2026-07-13: the function loaded, identify
-  # succeeded, then the process died at 52s with NO error logged — the signature of a
-  # native crash, because externalising it stops Netlify bundling its .node binding.
-  # Leave the native canvas bundled; only pdf-parse needs to be external.
-  external_node_modules = ["pdfjs-dist", "pdf-parse"]
+  # The standard-font problem it was trying to solve is real, but it is fixed IN CODE by
+  # passing standardFontDataUrl explicitly (see renderAllPagesAsImages), resolved through
+  # pdfjs-dist — which IS external, so its standard_fonts/ directory exists on disk.
+  external_node_modules = ["pdfjs-dist"]
 
 # Disclosure Intake Pipeline — the watcher runs every 2 minutes, scans each
 # "Incoming" folder, and emits a disclosure.uploaded event per new PDF. (The

@@ -789,10 +789,45 @@ const CLASSIFY_PROMPT =
   'Inspection Disclosure (AVID) narrative, receipts, cover sheets, and signature-only pages. Respond with ONLY this ' +
   'JSON, no prose: {"qa_pages":[1,2,3]} listing the 1-indexed page numbers, in order.';
 
+// ----------------------------------------------------------------------------
+// STANDARD FONT DATA — the reason the audit reported filled fields as blank.
+//
+// pdf-parse points pdf.js at its standard fonts relative to its OWN module path
+// (`new URL('legacy/build/standard_fonts/', <its module URL>)`). esbuild bundles
+// pdf-parse into the function, which rewrites that path to the build output dir, where
+// standard_fonts/ does not exist. pdf.js then has NO standard font data.
+//
+// Fonts EMBEDDED in a PDF still draw. Fonts that are NOT embedded (the standard 14 —
+// Helvetica, Times, Courier) draw as NOTHING. On the C.A.R. disclosures the blank form is
+// embedded (HelveticaWorld, ZDingbats) but EVERY seller-entered value is
+// Helvetica-BoldOblique, which is NOT embedded. So the Lambda renders a pristine blank
+// TDS, hands it to the model, and the model truthfully reports "left blank". It never
+// reproduces on a Mac, which supplies Helvetica itself.
+//
+// Fixing this via netlify.toml `external_node_modules` was tried and CRASHED the function
+// (native canvas binding stops being bundled; silent death ~52s in, no error logged). So
+// resolve it here instead, through pdfjs-dist — which IS external, so its standard_fonts/
+// really exists on disk in the Lambda. Falls back to undefined (previous behaviour) if it
+// cannot be resolved, so a bad path can never take the pipeline down.
+let STANDARD_FONT_DATA_URL;
+try {
+  const path = require('path');
+  const pdfjsPkg = require.resolve('pdfjs-dist/package.json');
+  const dir = path.join(path.dirname(pdfjsPkg), 'standard_fonts') + path.sep;
+  STANDARD_FONT_DATA_URL = require('fs').existsSync(dir) ? dir : undefined;
+  console.log(`[disclosure-intake] standardFontDataUrl = ${STANDARD_FONT_DATA_URL || 'NOT FOUND — non-embedded fonts will render blank'}`);
+} catch (err) {
+  console.warn(`[disclosure-intake] could not resolve pdfjs standard_fonts: ${err.message}`);
+}
+
 // Render pages of a PDF to PNG base64 via pdf-parse. scale multiplies the 72dpi base;
 // maxPages caps render work. Returns [{ pageNumber, base64 }].
 async function renderAllPagesAsImages(buffer, scale, maxPages) {
-  const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
+  const parser = new PDFParse({
+    data: new Uint8Array(buffer),
+    CanvasFactory,
+    ...(STANDARD_FONT_DATA_URL ? { standardFontDataUrl: STANDARD_FONT_DATA_URL } : {}),
+  });
   try {
     const options = { scale: (typeof scale === 'number' && scale > 0) ? scale : 1.0 };
     if (maxPages) options.first = maxPages;
