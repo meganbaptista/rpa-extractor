@@ -1258,20 +1258,57 @@ async function identifyAndReview(batch) {
   };
 }
 
+// A seller's explanations sheet is EVIDENCE FOR OTHER FORMS, not a form in its own right, so it
+// must be in the SAME request as the form it explains or it may as well not exist.
+//
+// Batching splits documents by payload size. On 8 Willow Way that put the SPQ alone in batch 2/2
+// while the sheet carrying its explanations stayed in batch 1/2. The review then read the SPQ's
+// Yes answers, found no explanation anywhere IN THAT REQUEST, and would have chased the seller
+// for answers they had already written and signed. Cross-document reasoning cannot survive a
+// batching rule that only thinks about bytes.
+//
+// So carry these sheets into EVERY batch. They run one or two pages, and the duplicate tokens
+// cost far less than sending a seller a list of questions they already answered.
+//
+// LIMITATION: detection is by filename ("... Explanations ...", which is what sellers and their
+// agents actually title these). A sheet named something else is not detected and the old split
+// behaviour applies to it.
+const EXPLANATION_SHEET_MAX_B64 = 4 * 1024 * 1024;
+const isExplanationSheet = (d) => /explanation/i.test(String(d.name || ''))
+  && (d.base64 || '').length <= EXPLANATION_SHEET_MAX_B64;
+
 async function identifyFormsChunked(docs) {
   if (docs.length <= 1) return identifyAndReview(docs);
   const MAX_BATCH_B64 = 18 * 1024 * 1024; // keep each request well under the 32MB cap
   const MAX_BATCH_DOCS = 10;              // and bounded on page/doc count
+
+  const sheets = docs.filter(isExplanationSheet);
+  const sheetsSize = sheets.reduce((n, d) => n + (d.base64 || '').length, 0);
+  // Only replicate when the sheets are genuinely small; otherwise they would eat the request
+  // budget and force more batches than they save.
+  const carry = sheets.length && sheetsSize <= MAX_BATCH_B64 / 2 && sheets.length < MAX_BATCH_DOCS;
+  const rest = carry ? docs.filter((d) => !isExplanationSheet(d)) : docs;
+  const budgetB64 = carry ? MAX_BATCH_B64 - sheetsSize : MAX_BATCH_B64;
+  const budgetDocs = carry ? MAX_BATCH_DOCS - sheets.length : MAX_BATCH_DOCS;
+
   const batches = [];
   let cur = [], curSize = 0;
-  for (const d of docs) {
+  for (const d of rest) {
     const sz = (d.base64 || '').length;
-    if (cur.length && (cur.length >= MAX_BATCH_DOCS || curSize + sz > MAX_BATCH_B64)) {
+    if (cur.length && (cur.length >= budgetDocs || curSize + sz > budgetB64)) {
       batches.push(cur); cur = []; curSize = 0;
     }
     cur.push(d); curSize += sz;
   }
   if (cur.length) batches.push(cur);
+  if (!batches.length && carry) batches.push([]);   // sheets only: still review them
+
+  if (carry) {
+    for (let i = 0; i < batches.length; i++) batches[i] = batches[i].concat(sheets);
+    console.log(`[disclosure-intake] carrying ${sheets.length} explanation sheet(s) into all `
+      + `${batches.length} batch(es) so every form is reviewed alongside its explanations: `
+      + sheets.map((d) => d.name).join(', '));
+  }
 
   let allForms = [], address = '', dropped = [], responseFlags = [];
   const keyAnswers = { ...EMPTY_KEY_ANSWERS };
@@ -1340,6 +1377,62 @@ async function reconcile(auditList, received) {
   const recvCodes = (received || []).map((f) => (f && (f.code || f.name)) || '?').join(', ');
   return parseJson(await callClaude([{ type: 'text', text: prompt }], 16000,
     `reconcile | ${(received || []).length} received form(s): ${recvCodes || '(none)'}`));
+}
+
+// Render the plain-text comment as HTML.
+//
+// WHY: the destination renders HTML, where a newline is just whitespace, so ps_comment's line
+// breaks collapsed and the whole report arrived as one unreadable wall of text. The workaround
+// downstream was a Zapier Code step that split on COMMAS to force line breaks — which then
+// shattered every value that legitimately contains one: the property address, "2,836 sqft", and
+// every quoted seller explanation. (Same failure as the legacy "Buyer Names (separate)" Split
+// Text step that shreds entity names, per CLAUDE.md section 5.)
+//
+// Emitting real markup fixes the cause. Nothing downstream has to split on anything, so no value
+// can ever be shattered for containing a comma.
+//
+// Escapes &, < and > so a stray angle bracket in a seller's text cannot break the markup. Leaves
+// apostrophes and quotes as real characters (never &#39;) — Megan's standing rule for anything
+// that lands in a draft.
+function commentToHtml(text) {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const out = [];
+  let inList = false;
+  const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line) { closeList(); continue; }
+    if (line.startsWith('•')) {
+      if (!inList) { out.push('<ul style="margin:0 0 12px 0;padding-left:22px">'); inList = true; }
+      out.push(`<li style="margin:0 0 4px 0">${esc(line.replace(/^•\s*/, ''))}</li>`);
+      continue;
+    }
+    closeList();
+    if (isHeading(line)) {
+      out.push(`<p style="margin:16px 0 6px 0"><strong>${esc(line)}</strong></p>`);
+    } else {
+      out.push(`<p style="margin:0 0 8px 0">${esc(line)}</p>`);
+    }
+  }
+  closeList();
+  return out.join('\n');
+}
+
+// Is this line a section heading? "RESPONSES TO REVISE:", "PREPARED BY US (do not request):".
+// Several capitals then a colon, so "Status: outstanding ..." is not one.
+const isHeading = (line) => /:$/.test(line) && /^[A-Z][A-Z\s]{2,}/.test(line);
+
+// Same report as Markdown, for Process Street (which renders **bold** and keeps line breaks).
+// PS is the better destination than the Gmail draft: it preserves the newlines the HTML body
+// collapsed. Bullets stay as literal • characters, which PS already renders correctly.
+function commentToMarkdown(text) {
+  return String(text || '')
+    .split('\n')
+    .map((raw) => {
+      const line = raw.trim();
+      return isHeading(line) ? `**${line}**` : raw;
+    })
+    .join('\n');
 }
 
 function bullets(list, fmt) {
@@ -1654,12 +1747,27 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     prepared_by_us_text: preparedByUs.join(', '),
     response_flags_text: flags.map(flagLine).join('; '),
     outdated_versions_text: outdated.map(outdatedLine).join('; '),
+    // Newline-joined variants. Map these instead of the *_text fields above when the destination
+    // wants one item per line: nothing downstream then has to split on a separator, so a value
+    // containing a comma (an address, "2,836 sqft", a trust name, a quoted explanation) survives
+    // intact. The *_text fields are left exactly as they were so existing mappings keep working.
+    still_needed_lines: stillNeeded.join('\n'),
+    prepared_by_us_lines: preparedByUs.join('\n'),
+    response_flags_lines: flags.map(flagLine).join('\n'),
+    outdated_versions_lines: outdated.map(outdatedLine).join('\n'),
+    verify_lines: verify.map((v) => `${v.item}: ${v.note}`).join('\n'),
     biw_found: biwFound ? 'yes' : 'no',
     biw_alert: biwAlert,
     context_debug: debugContext,
     versions_debug: versionsDebug,
     summary: result.summary || '',
     ps_comment: psComment,
+    // Same report as HTML, for a destination that renders HTML (a Gmail draft body), where the
+    // plain version's newlines collapse into one wall of text. Dashes stripped, per the standing
+    // no-em-dash rule, since this is what lands in the draft.
+    ps_comment_html: commentToHtml(stripDashes(psComment)),
+    // Same report as Markdown, for Process Street: bold section headings, newlines preserved.
+    ps_comment_md: commentToMarkdown(stripDashes(psComment)),
     chase_email_subject: chaseEmailSubject,
     chase_email_body: chaseEmailBody,
     result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, confirmed: confirmedReadings, verify, not_applicable: na, response_flags: flags, outdated_versions: outdated },
