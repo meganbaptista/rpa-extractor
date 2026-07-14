@@ -619,6 +619,17 @@ const ANSWER_REVIEW_PROMPT =
   'several sub-items in a row are marked Yes but only ONE explanation is written, do NOT assume that one explanation ' +
   'covers the others. Determine which sub-item the explanation actually addresses, and flag every OTHER Yes sub-item ' +
   'as missing its explanation, naming the exact sub-item;\n' +
+  '(b2) SEPARATE EXPLANATION ADDENDUM. Sellers often write their explanations on a separate sheet instead of on the ' +
+  'form ("Attach additional sheets if necessary" is printed on the TDS itself). That sheet is usually titled ' +
+  'something like "Disclosure / Questionnaire Explanations", and it numbers its entries at the ITEM level (e.g. "7.", ' +
+  '"8.", "14.") while the SPQ asks at the SUB-item level (7A, 7B, 7C). If a Yes sub-item has NO explanation on the ' +
+  'form itself, but an explanation for that ITEM exists elsewhere in this package, you MUST NOT report it as having ' +
+  'no explanation, and you MUST NOT treat it as satisfied either. One item-level summary does not automatically ' +
+  'satisfy every Yes sub-item under it, and that judgment is a human\'s to make, not yours. Instead raise ' +
+  '"issue":"explanation_on_addendum", set "document" to the name/title of the sheet where you found it, and set ' +
+  '"reason" to a SHORT quote of what that entry actually says. Do this per Yes sub-item. Only use ' +
+  '"yes_no_explanation" when there is genuinely no explanation ANYWHERE in the package, on the form or on any ' +
+  'separate sheet;\n' +
   '(c) a sub-item that HAS a written explanation but whose box is marked NO or left BLANK: a seller writes an ' +
   'explanation only when the answer is Yes, so the mark should be Yes. Set "issue":"answer_contradicts_package", ' +
   '"discrepancy_type":"incorrect", "marked" = the marked answer (No or blank), "should_be":"Yes", and "reason":"an ' +
@@ -718,7 +729,7 @@ const ANSWER_REVIEW_PROMPT =
   'if an FHDS is present but Section 2 boxes are left unchecked or Section 3 is not marked Yes, or "na" if no FHDS is ' +
   'in the package.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
-  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect>","other_form":"<for inconsistent>","document":"<for document>","source":"<for transaction>"}],' +
+  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_on_addendum|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect; for explanation_on_addendum, a short quote of the addendum entry>","other_form":"<for inconsistent>","document":"<for document; for explanation_on_addendum, the sheet it was found on>","source":"<for transaction>"}],' +
   '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na","fire_clearance":"yes|no|blank|na","fire_clearance_item":"17F","fhds":"yes|no|na"}}';
 
 const EMPTY_KEY_ANSWERS = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na', fire_clearance_item: '', fhds: 'na' };
@@ -994,6 +1005,25 @@ async function renderAllPagesAsImages(buffer, scale, maxPages) {
   return renderPagesAsImages(buffer, pages, scale);
 }
 
+// A document this size or smaller skips the classifier entirely and has EVERY page reviewed.
+//
+// WHY: classifyQAPages is a model call, and it is NOT deterministic. Measured on one 46-page
+// file, same prompt, three runs: [26,27,29,30,31,32,33,37,38,39,40] / [26,27,29,30,31,32,33,37,38]
+// / [26,27,29,30,31,32,33,37,38]. Pages 39-40 were audited once and silently skipped twice.
+// Which pages get audited is a coin flip.
+//
+// That gamble was survivable while an unseen page produced a FALSE FLAG (loud, a human caught
+// it). It stopped being survivable once the prompt was scoped to forbid flagging pages it cannot
+// see: now an unseen page produces SILENCE. On 8 Willow Way the TDS Section C page never reached
+// the model, so C2/C12/C13/C14 — all four marked Yes with a blank explanation line — drew no flag
+// at all. A silent miss on a document a buyer signs is worse than a false flag.
+//
+// The classifier exists to avoid rendering 60 pages of a big combined packet. It has no business
+// gambling on a 3-page TDS. So for a small single-form PDF, review every page: deterministic, and
+// CHEAPER (it also drops a classify call). Big packets still classify, but now record what was
+// skipped, so a miss can never be silent again.
+const QA_REVIEW_ALL_MAX_PAGES = 12;
+
 // Stage A: ask the model which page numbers carry seller-answered content.
 async function classifyQAPages(thumbs, label = '') {
   const content = [];
@@ -1011,12 +1041,44 @@ async function classifyQAPages(thumbs, label = '') {
 
 // Render one document's Q&A pages to crisp PNGs (stage A classify + stage B hi-res).
 // Returns [] when the doc has no Q&A pages (e.g. an NHD report or booklet).
+// Returns { images, selection } — selection is a one-line human-readable record of WHICH pages
+// were reviewed and which were skipped, so it can be carried into the usage ledger.
 async function renderQAPageImages(buffer, name) {
-  let thumbs = await renderAllPagesAsImages(buffer, QA_THUMB_SCALE, QA_MAX_RENDER_PAGES);
-  if (!thumbs.length) return [];
-  const qaNums = await classifyQAPages(thumbs, name);
-  thumbs = null;   // drop ~46 thumbnails before rendering the hi-res pass
-  if (!qaNums.length) { console.log(`[disclosure-intake] ${name}: no Q&A pages classified`); return []; }
+  const pageCount = await pdfPageCount(buffer);
+  if (!pageCount) return { images: [], selection: `${name}: unreadable (0 pages)` };
+
+  let qaNums;
+  let selection;
+
+  if (pageCount <= QA_REVIEW_ALL_MAX_PAGES) {
+    // Small single-form PDF (a TDS, an SPQ, a one-page explanations addendum): review it all.
+    // No classifier, so no coin flip, and nothing can be silently dropped.
+    qaNums = Array.from({ length: pageCount }, (_, i) => i + 1);
+    selection = `${name}: all ${pageCount}pp (classifier bypassed)`;
+  } else {
+    let thumbs = await renderAllPagesAsImages(buffer, QA_THUMB_SCALE, QA_MAX_RENDER_PAGES);
+    if (!thumbs.length) return { images: [], selection: `${name}: no pages rendered` };
+    const thumbNums = thumbs.map((t) => t.pageNumber);
+    qaNums = await classifyQAPages(thumbs, name);
+    thumbs = null;   // drop ~46 thumbnails before rendering the hi-res pass
+
+    // What the classifier THREW AWAY. Previously nothing recorded this, which is exactly how a
+    // dropped TDS page hid for weeks: the ledger showed a review had run and said nothing about
+    // the pages it never looked at.
+    const kept = new Set(qaNums);
+    const skipped = thumbNums.filter((n) => !kept.has(n));
+    selection = `${name}: reviewed ${qaNums.length}/${thumbNums.length}pp [${qaNums.join(',') || 'none'}]`
+      + (skipped.length ? ` SKIPPED [${skipped.join(',')}]` : '');
+    if (skipped.length) {
+      console.warn(`[disclosure-intake] ${name}: classifier SKIPPED ${skipped.length} page(s): ${skipped.join(', ')} `
+        + '— these were NOT audited. A form on a skipped page draws no flags, correct or otherwise.');
+    }
+  }
+
+  if (!qaNums.length) {
+    console.log(`[disclosure-intake] ${name}: no Q&A pages classified`);
+    return { images: [], selection };
+  }
 
   // Render the Q&A pages straight from the original buffer. buildSubPdf() is gone: it
   // filtered out-of-range page numbers, which shifted the sub-PDF's pages relative to
@@ -1024,7 +1086,10 @@ async function renderQAPageImages(buffer, name) {
   // `partial` renders exactly these pages and each one reports its own true pageNumber.
   const hi = await renderPagesAsImages(buffer, qaNums, QA_HIRES_SCALE);
   console.log(`[disclosure-intake] ${name}: rendered ${hi.length} Q&A page(s) hi-res (pages ${hi.map((p) => p.pageNumber).join(', ')})`);
-  return hi.map((p) => ({ name: `${name} qa-p${p.pageNumber}`, base64: p.base64 }));
+  return {
+    images: hi.map((p) => ({ name: `${name} qa-p${p.pageNumber}`, base64: p.base64 })),
+    selection,
+  };
 }
 
 // Parse the answer-review JSON into the { responseFlags, keyAnswers } shape callers expect.
@@ -1073,15 +1138,19 @@ function mergeKeyAnswers(acc, next) {
 // document-block review if nothing renders, so the review is never silently skipped.
 async function reviewAnswers(docs) {
   let qaImages = [];
+  const selections = [];
   for (const d of docs) {
     try {
       const buf = Buffer.from(d.base64 || '', 'base64');
-      const imgs = await renderQAPageImages(buf, d.name);
-      qaImages = qaImages.concat(imgs);
+      const { images, selection } = await renderQAPageImages(buf, d.name);
+      qaImages = qaImages.concat(images);
+      if (selection) selections.push(selection);
     } catch (err) {
       console.warn(`[disclosure-intake] Q&A render/classify failed for "${d.name}": ${err.message}`);
+      selections.push(`${d.name}: RENDER FAILED (${err.message.slice(0, 40)}) — not audited`);
     }
   }
+  console.log(`[disclosure-intake] page selection: ${selections.join(' | ') || '(none)'}`);
   if (!qaImages.length) {
     console.log('[disclosure-intake] no Q&A page images; falling back to document-block answer review');
     return reviewAnswersFromDocuments(docs);
@@ -1114,7 +1183,10 @@ async function reviewAnswers(docs) {
     // call and is NOT deterministic (same 46-page file, three runs, two different page
     // sets), so "11 page(s)" alone can't tell you afterwards whether the page carrying a
     // given form was ever actually looked at.
-    const raw = await callClaude(content, 48000, `answer-review-images | batch ${i + 1}/${batches.length} | ${batches[i].length} page(s): ${labels.join(', ')}`);
+    // The selection record rides along on batch 1 so the ledger row shows not just which pages
+    // WERE reviewed but which were skipped — a miss is then visible in the Sheet, not silent.
+    const selectionNote = i === 0 && selections.length ? ` || selection: ${selections.join(' ; ')}` : '';
+    const raw = await callClaude(content, 48000, `answer-review-images | batch ${i + 1}/${batches.length} | ${batches[i].length} page(s): ${labels.join(', ')}${selectionNote}`);
     const parsed = parseAnswerReview(raw);
     if (parsed.responseFlags.length) responseFlags = responseFlags.concat(parsed.responseFlags);
     mergeKeyAnswers(keyAnswers, parsed.keyAnswers);
@@ -1382,7 +1454,36 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   }
   verify = verifyKept;
 
-  const flags = Array.isArray(responseFlags) ? responseFlags : [];
+  // An explanation the seller DID write, but on a separate addendum sheet and at the ITEM level
+  // (one paragraph for SPQ 7) when the form asks per SUB-item (7A / 7B / 7C).
+  //
+  // Two things are both wrong here. Auto-accepting it is wrong: one summary must never satisfy a
+  // whole section on a document a buyer signs. But telling the seller "no explanation is
+  // provided" is ALSO wrong, and worse in practice: they DID provide one and they signed it, so
+  // we would be chasing them for work already done, and they would reply with the sheet.
+  //
+  // So it is neither a revise nor a confirm. It leaves the flag list entirely, which keeps it out
+  // of the chase email and out of followupCount, and becomes a VERIFY line, the section a human
+  // already reads. The pipeline never decides whether that paragraph covers the sub-item. A
+  // person does. That is the whole point.
+  const allFlags = Array.isArray(responseFlags) ? responseFlags : [];
+  const addendumFlags = allFlags.filter((f) => f.issue === 'explanation_on_addendum');
+  const flags = allFlags.filter((f) => f.issue !== 'explanation_on_addendum');
+  for (const f of addendumFlags) {
+    const noDash = (s) => String(s || '').replace(/\s*[—–]\s*/g, ', ').trim();
+    const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
+    const where = noDash(f.document);
+    const quote = noDash(f.reason);
+    verify.push({
+      item: ref,
+      note: `explanation found on a separate addendum${where ? ` (${where})` : ''}; verify it covers this sub-item`
+        + (quote ? `. It reads: "${quote}"` : ''),
+    });
+  }
+  if (addendumFlags.length) {
+    console.log(`[disclosure-intake] ${addendumFlags.length} item(s) explained on a separate addendum, routed to VERIFY `
+      + `(NOT chased from the seller): ${addendumFlags.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
+  }
 
   // Form-version currency: flag any received form whose printed revision is OLDER
   // than the current version listed in the Current Form Versions sheet, so we can
