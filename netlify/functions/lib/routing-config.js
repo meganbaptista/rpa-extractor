@@ -140,10 +140,9 @@ const ROSTER = [
       + 'the seller-signed disclosures attached). Requesting us to SEND CAR form VP / VOP / '
       + 'final walk-through. TC introduction on the OTHER side. Requesting us to get / send '
       + 'CAR-form disclosure items for the BUYER to sign (CAR forms, not escrow documents). '
-      + 'Glide link or requesting Glide. A client response to a '
+      + 'Glide link or requesting Glide. Skyslope checklist updates. A client response to a '
       + '"Seller Disclosure Package | [address]" email when we are on the BUYER side (these '
-      + 'carry a Buyer Disclosures tag). '
-      + '(Skyslope updates go to Lovely — resolved 2026-07-15.)',
+      + 'carry a Buyer Disclosures tag).',
   },
   {
     name: 'Allana',
@@ -169,8 +168,7 @@ const ROSTER = [
   {
     name: 'Lovely',
     personLabel: 'Lovely',
-    handles: 'Skyslope checklist updates. Emails from support@planetre.com. '
-      + '(NOTE: the source doc also lists both of these under Edelyn — see CONFLICTS.)',
+    handles: 'Skyslope checklist updates. Emails from support@planetre.com.',
   },
 ];
 
@@ -207,7 +205,7 @@ const ROUTING_NOTES = [
   'VP / VOP / final walk-through: if ATTACHED requesting the SELLER signature -> Ethan; if someone is requesting us to SEND the VP/VOP -> Edelyn.',
   'Disclosures: "for the SELLER to sign" or fully-executed-by-buyer packages we receive -> Ethan; "for the BUYER to sign" (package to send the buyer) -> Edelyn.',
   'CAR ADDENDUMS (California Association of Realtors forms) and ESCROW AMENDMENTS (escrow-company paperwork, e.g. a Glen Oaks header) are different documents but BOTH route to Jill.',
-  'Commission: the commission AMOUNT / amended-revised commission from an agent -> Belle; amended commission INSTRUCTIONS from escrow -> Megan; a commission QUESTION or concern -> see CONFLICTS (doc says Belle in one place, Megan in another).',
+  'Commission: the commission AMOUNT / amended-revised commission from an agent -> Belle; a commission QUESTION or concern -> Belle; amended commission INSTRUCTIONS from escrow -> Megan.',
   'Leases: CAR form "LR" -> Megan; but RLAS / SIP (leaseback or seller-in-possession after sale) -> Jill.',
   'Milestone receipts count only when in the NEWEST message (EMD received, funded, recorded/closed) and route to Belle; the same words quoted from an older message do not.',
 ];
@@ -217,11 +215,9 @@ const ROUTING_NOTES = [
 // they are resolved deliberately, not silently. Resolve by editing ROSTER /
 // SENDER_ROUTING / ROUTING_NOTES above, then delete the entry here.
 // ---------------------------------------------------------------------------
-const CONFLICTS = [
-  'Commission question/concern: page-1 list says Belle; the example chart says Megan.',
-  'BRBC (Buyer Rep Agreement): listed under both Megan and Allana.',
-  'support@planetre.com and Skyslope checklist updates: listed under both Edelyn and Lovely.',
-];
+// All three source-doc conflicts resolved 2026-07-15: commission question -> Belle,
+// BRBC -> Allana, PlanetRE + Skyslope -> Lovely.
+const CONFLICTS = [];
 
 // ---------------------------------------------------------------------------
 // MODES + MODELS (both default SAFE).
