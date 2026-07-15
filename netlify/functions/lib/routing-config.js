@@ -55,14 +55,26 @@ const CATEGORY_ROUTING = {
 };
 
 // ---------------------------------------------------------------------------
-// SIDE TAGS — Gmail labels that reveal whether we represent the BUYER or SELLER
-// on this deal. Read first; if none present, the classifier infers side from
-// content. (Per the doc: buyer-side disclosure responses "will have a Buyer
-// Disclosures tag".)  ◀── CONFIRM these tag names match Gmail if you use them.
+// SIDE TAGS — existing Gmail "sub-labels" that reveal whether we represent the
+// BUYER or SELLER on this deal. These are READ-ONLY SIGNALS: the router never
+// applies, removes, or touches them — it only reads their presence to decide
+// WHICH PERSON to tag. If a side tag is present the side is known for certain;
+// if not, the classifier infers side from content. Matched by exact name OR as
+// a nested sub-label path suffix (e.g. "Disclosures/Buyer Disclosures").
 // ---------------------------------------------------------------------------
 const SIDE_TAGS = {
   buyer: ['Buyer Disclosures'],
-  seller: ['Seller Disclosures'],
+  seller: ['Seller Signed Disclosures'],
+};
+
+// Whom a present side sub-label USUALLY means. Passed to the classifier as a
+// STRONG PRIOR (not a hard rule): a Buyer Disclosures label usually -> Edelyn,
+// a Seller Signed Disclosures label usually -> Ethan. The AI defers to this
+// unless the email content clearly points to someone else. To make it an
+// absolute rule instead, move the label into CATEGORY_ROUTING.
+const SIDE_TAG_ROUTING = {
+  buyer: 'Edelyn',
+  seller: 'Ethan',
 };
 
 // ---------------------------------------------------------------------------
@@ -202,6 +214,7 @@ const NO_TAG_RULES = [
 const ROUTING_NOTES = [
   'SENDER TYPE matters. The same words route differently from an Escrow Officer, an Agent, a DocuSign notification, or a Client (buyer/seller). Use the sender to disambiguate.',
   'BUYER vs SELLER side flips disclosure routing: buyer-side disclosure work -> Edelyn, seller-side disclosure work -> Ethan. Prefer a side tag if one is present; otherwise infer side from the content.',
+  'STRONG PRIOR from sub-labels: if a "Buyer Disclosures" sub-label is present the handler is USUALLY Edelyn; if a "Seller Signed Disclosures" sub-label is present it is USUALLY Ethan. Follow this unless the content clearly indicates a different person.',
   'VP / VOP / final walk-through: if ATTACHED requesting the SELLER signature -> Ethan; if someone is requesting us to SEND the VP/VOP -> Edelyn.',
   'Disclosures: "for the SELLER to sign" or fully-executed-by-buyer packages we receive -> Ethan; "for the BUYER to sign" (package to send the buyer) -> Edelyn.',
   'CAR ADDENDUMS (California Association of Realtors forms) and ESCROW AMENDMENTS (escrow-company paperwork, e.g. a Glen Oaks header) are different documents but BOTH route to Jill.',
@@ -268,12 +281,26 @@ function personForSender(fromHeader) {
   return null;
 }
 
+// True if any of the message's labels equals `tag`, or is a nested sub-label
+// ending in `.../tag` (Gmail stores nested labels as full slash-paths).
+function labelsInclude(labelNames, tag) {
+  const t = String(tag).toLowerCase();
+  return labelNames.some((n) => {
+    const ln = String(n).toLowerCase();
+    return ln === t || ln.endsWith('/' + t);
+  });
+}
+
 // Side implied by the message's current labels, or null if no side tag present.
 function sideFromLabels(labelNames = []) {
-  const set = new Set(labelNames.map((n) => String(n).toLowerCase()));
-  if (SIDE_TAGS.buyer.some((t) => set.has(t.toLowerCase()))) return 'buyer';
-  if (SIDE_TAGS.seller.some((t) => set.has(t.toLowerCase()))) return 'seller';
+  if (SIDE_TAGS.buyer.some((t) => labelsInclude(labelNames, t))) return 'buyer';
+  if (SIDE_TAGS.seller.some((t) => labelsInclude(labelNames, t))) return 'seller';
   return null;
+}
+
+// The person a present side sub-label usually implies (strong prior), or null.
+function personForSideTag(side) {
+  return side ? (SIDE_TAG_ROUTING[side] || null) : null;
 }
 
 module.exports = {
@@ -282,6 +309,7 @@ module.exports = {
   SKIP_BEHAVIOR,
   CATEGORY_ROUTING,
   SIDE_TAGS,
+  SIDE_TAG_ROUTING,
   SENDER_ROUTING,
   ROSTER,
   NO_TAG_RULES,
@@ -294,4 +322,5 @@ module.exports = {
   personForCategory,
   personForSender,
   sideFromLabels,
+  personForSideTag,
 };

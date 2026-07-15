@@ -84,8 +84,9 @@ async function route(message, labelNames = [], deps = {}) {
     return decision;
   }
 
-  // BRANCH B — the rulebook classifier.
-  const suggestion = await classify(message, { side });
+  // BRANCH B — the rulebook classifier. When a side sub-label is present, pass
+  // the person it usually implies (Edelyn/Ethan) as a strong prior.
+  const suggestion = await classify(message, { side, tagLean: config.personForSideTag(side) });
   decision.classifier = suggestion;
 
   // NO_TAG — a real but no-action email: clear it like a skip.

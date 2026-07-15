@@ -86,4 +86,21 @@ async function record({ message, decision, mode, applied, nowIso }) {
   return rec;
 }
 
-module.exports = { record, _internal: { buildRecord, summarize } };
+// Read back the most recent decision records, newest first. Keys are
+// `YYYY-MM-DD/messageId`, so sorting keys descending gives newest-first without
+// fetching every blob's body to compare timestamps. `limit` caps how many we
+// hydrate. Never throws — returns [] on any store error.
+async function recent({ limit = 200 } = {}) {
+  try {
+    const s = store();
+    const { blobs = [] } = await s.list();
+    const keys = blobs.map((b) => b.key).sort().reverse().slice(0, limit);
+    const recs = await Promise.all(keys.map((k) => s.get(k, { type: 'json' }).catch(() => null)));
+    return recs.filter(Boolean);
+  } catch (err) {
+    console.warn(`[shadow-log] recent() read failed: ${err.message}`);
+    return [];
+  }
+}
+
+module.exports = { record, recent, _internal: { buildRecord, summarize } };

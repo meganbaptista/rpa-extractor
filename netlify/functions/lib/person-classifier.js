@@ -83,11 +83,15 @@ RETURN assignee = UNSURE only when the email clearly needs a human but you canno
 Call the assign_person tool with your decision.`;
 }
 
-function buildInput({ subject, from, bodyText, newestText, sideHint }) {
+function buildInput({ subject, from, bodyText, newestText, sideHint, tagLean }) {
+  const sideLine = sideHint
+    ? `SIDE (from a sub-label on this email): ${sideHint}`
+      + (tagLean ? ` — this sub-label USUALLY means ${tagLean} handles it; follow that unless the content clearly points to someone else.` : '')
+    : 'SIDE: not tagged — infer from content if you can.';
   return [
     `SUBJECT: ${subject || '(none)'}`,
     `SENDER: ${from || '(unknown)'}`,
-    sideHint ? `SIDE (from an existing tag on this email): ${sideHint}` : 'SIDE: not tagged — infer from content if you can.',
+    sideLine,
     '',
     'NEWEST MESSAGE:',
     (newestText || bodyText || '').trim() || '(empty)',
@@ -138,12 +142,12 @@ async function callClassifier(system, tool, userText, note = '', attempt = 0) {
 //   message   — lib/gmail.js getMessage() shape.
 //   opts.side — 'buyer'|'seller' detected from labels (router passes it), or null.
 // Returns { assignee, person, personLabel, noTag, unsure, side, confidence, reason }.
-async function classify(message, { roster = cfg.ROSTER, side = null, note = '' } = {}) {
+async function classify(message, { roster = cfg.ROSTER, side = null, tagLean = null, note = '' } = {}) {
   if (!Array.isArray(roster) || roster.length === 0) {
     return { assignee: UNSURE, person: null, personLabel: null, noTag: false, unsure: true, side: side || 'unknown', confidence: 0, reason: 'roster is empty' };
   }
   const h = message.headers || {};
-  const userText = buildInput({ subject: h.subject, from: h.from, bodyText: message.bodyText, newestText: message.newestText, sideHint: side });
+  const userText = buildInput({ subject: h.subject, from: h.from, bodyText: message.bodyText, newestText: message.newestText, sideHint: side, tagLean });
   const out = await callClassifier(
     buildSystem(roster, cfg.ROUTING_NOTES, cfg.NO_TAG_RULES),
     buildTool(roster),
