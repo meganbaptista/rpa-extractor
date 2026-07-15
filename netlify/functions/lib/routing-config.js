@@ -116,8 +116,10 @@ const ROSTER = [
       + 'a "loan update" from the lender: loan approval received, conditions or ICD requested, '
       + 'underwriting or appraisal progress. (This is distinct from the physical loan DOCS '
       + 'arriving or signing logistics, which stay NO_TAG.) '
-      + 'Any change in close date / close-date revision, escrow closing audit response with '
-      + 'a changed close date. RLA / residential listing agreement / new listing, listing '
+      + 'Any email that STATES, CONFIRMS, or CHANGES a specific closing date (e.g. "we can '
+      + 'close Friday", "set to close on the 30th", a close-date revision, or an escrow '
+      + 'closing audit response with a changed close date) — so Belle can verify or update '
+      + 'the close date in Process Street. RLA / residential listing agreement / new listing, listing '
       + 'agreement received. Rejected offers. Inspection REPORTS/receipts when a PDF is '
       + 'attached or LINKED (general, termite, HVAC, roof, mold, plumbing, geo, etc.).',
   },
