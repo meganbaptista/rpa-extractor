@@ -1,73 +1,93 @@
 // netlify/functions/lib/person-classifier.js
 //
 // ============================================================================
-// V2 person-assignment classifier (Email Router — see EMAIL-ROUTER-SPEC.md).
+// Person-assignment classifier (Email Router — see EMAIL-ROUTER-SPEC.md).
 // ============================================================================
-// The V1 router stops at "Needs Attention" for Branch B (important, but no
-// category tells us who owns it). This is the V2 upgrade: given the team ROSTER
-// (from routing-config.js) and the email, decide WHICH teammate should handle
-// it — "this belongs to Jill" — or UNSURE, which falls back to Needs Attention.
+// This automates what Belle did by hand: read an INTAKE-REVIEW email and decide
+// WHO on the team should handle it (or NO_TAG / UNSURE). It renders the rulebook
+// in routing-config.js (per-person duties, sender-type + buyer/seller-side
+// rules, no-tag cases) into its prompt, so routing changes are config edits.
 //
-// It reads ONLY roster[].handles to decide, so the quality of that description is
-// the quality of the routing. Runs log-only while CLASSIFIER.mode === 'shadow'
-// (the router logs the suggestion but applies Needs Attention); flipping to
-// 'live' makes the router apply the suggested person label above the confidence
-// threshold. The classifier itself doesn't know the mode — it just suggests; the
-// router decides whether to act on it. That keeps this module pure + testable.
+// Output (forced tool):
+//   assignee   — a roster name, NO_TAG (no label, clear from queue), or UNSURE.
+//   side       — 'buyer' | 'seller' | 'unknown' (transparency for the shadow log).
+//   confidence — 0..1.
+//   reason     — one sentence.
+//
+// Side handling: the router passes a side detected from the message's labels
+// (SIDE_TAGS) when present; we pass it in as a hint. When absent the model
+// infers side from content. Runs log-only while CLASSIFIER.mode === 'shadow'.
+// NEVER throws on an empty roster (returns UNSURE), so the router can always call.
 // ============================================================================
 
 const usageLog = require('./usage-log');
-const { CLASSIFIER, ROSTER } = require('./routing-config');
+const cfg = require('./routing-config');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const NO_TAG = 'NO_TAG';
 const UNSURE = 'UNSURE';
 
 function buildTool(roster) {
   const names = roster.map((p) => p.name);
   return {
     name: 'assign_person',
-    description: 'Assign this email to the single teammate who should handle it, or UNSURE.',
+    description: 'Assign this email to the teammate who should handle it, or NO_TAG / UNSURE.',
     input_schema: {
       type: 'object',
       properties: {
         assignee: {
           type: 'string',
-          enum: [...names, UNSURE],
-          description: 'The teammate who should handle this email, or UNSURE if no one clearly fits.',
+          enum: [...names, NO_TAG, UNSURE],
+          description: `Who handles this email. Use ${NO_TAG} for a no-action email that `
+            + `matches a no-tag rule. Use ${UNSURE} only when it clearly needs a human but `
+            + `you cannot tell who — prefer a specific person when the rulebook fits.`,
+        },
+        side: {
+          type: 'string',
+          enum: ['buyer', 'seller', 'unknown'],
+          description: 'Which side of the deal this email concerns, if determinable.',
         },
         confidence: {
           type: 'number',
           minimum: 0,
           maximum: 1,
-          description: '0–1 certainty that `assignee` is correct. Use < 0.5 when torn between people.',
+          description: '0–1 certainty in `assignee`. Use < 0.5 when torn between people.',
         },
-        reason: { type: 'string', description: 'One sentence: which duties in their brief matched.' },
+        reason: { type: 'string', description: 'One sentence: which rule/duty matched.' },
       },
-      required: ['assignee', 'confidence', 'reason'],
+      required: ['assignee', 'side', 'confidence', 'reason'],
     },
   };
 }
 
-function buildSystem(roster) {
-  const brief = roster
-    .map((p, i) => `${i + 1}. ${p.name} — ${p.handles}`)
-    .join('\n');
-  return `You route real estate transaction emails to the right teammate on a transaction-coordination team.
+function buildSystem(roster, notes, noTagRules) {
+  const people = roster.map((p, i) => `${i + 1}. ${p.name}\n   ${p.handles}`).join('\n\n');
+  const noTag = noTagRules.map((r) => `- ${r}`).join('\n');
+  const rules = notes.map((r) => `- ${r}`).join('\n');
+  return `You route real estate transaction-coordination emails to the right teammate, exactly as our coordinator Belle was trained to. Read the NEWEST message (ignore quoted history except where a rule needs prior context) and decide who handles it.
 
-Here is the team and what each person handles:
-${brief}
+TEAM AND WHAT EACH PERSON HANDLES:
 
-Decide which SINGLE teammate should handle the email below, based only on what each person handles. If the email plausibly fits more than one person, pick the best fit and lower your confidence. If no one clearly fits, or the email is ambiguous, return assignee = "${UNSURE}". It is better to return ${UNSURE} than to guess — an unsure email is reviewed by a human, a wrong guess is misrouted.
+${people}
 
-Consider the sender, the subject, the deal stage, document types, and what is being asked. Call the assign_person tool with your answer.`;
+DISAMBIGUATION RULES (apply these, don't just keyword-match):
+${rules}
+
+RETURN assignee = NO_TAG (no label needed, no action) when the email matches one of these no-tag cases:
+${noTag}
+
+RETURN assignee = UNSURE only when the email clearly needs a human but you cannot tell who. Prefer a specific person whenever the rulebook fits. It is better to be UNSURE than to misroute, but NO_TAG is for genuinely no-action mail — do not use it to dodge a hard routing call.
+
+Call the assign_person tool with your decision.`;
 }
 
-function buildInput({ subject, from, bodyText, newestText }) {
+function buildInput({ subject, from, bodyText, newestText, sideHint }) {
   return [
     `SUBJECT: ${subject || '(none)'}`,
     `SENDER: ${from || '(unknown)'}`,
+    sideHint ? `SIDE (from an existing tag on this email): ${sideHint}` : 'SIDE: not tagged — infer from content if you can.',
     '',
     'NEWEST MESSAGE:',
     (newestText || bodyText || '').trim() || '(empty)',
@@ -82,17 +102,19 @@ async function callClassifier(system, tool, userText, note = '', attempt = 0) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
 
+  const body = {
+    model: cfg.CLASSIFIER.model,
+    max_tokens: 1024,
+    system,
+    tools: [tool],
+    tool_choice: { type: 'tool', name: tool.name },
+    messages: [{ role: 'user', content: userText }],
+  };
+
   const response = await fetch(ANTHROPIC_API_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: CLASSIFIER.model,
-      max_tokens: 1024,
-      system,
-      tools: [tool],
-      tool_choice: { type: 'tool', name: tool.name },
-      messages: [{ role: 'user', content: userText }],
-    }),
+    body: JSON.stringify(body),
   });
 
   if ((response.status === 429 || response.status === 529) && attempt < MAX_RETRIES) {
@@ -105,41 +127,42 @@ async function callClassifier(system, tool, userText, note = '', attempt = 0) {
   if (!response.ok) throw new Error(`person-classifier API error ${response.status}: ${await response.text()}`);
 
   const data = await response.json();
-  await usageLog.logUsage({ fn: 'person-classifier', model: CLASSIFIER.model, effort: CLASSIFIER.effort, usage: data.usage, note });
+  await usageLog.logUsage({ fn: 'person-classifier', model: cfg.CLASSIFIER.model, effort: cfg.CLASSIFIER.effort, usage: data.usage, note });
 
   const toolUse = (data.content || []).find((b) => b.type === 'tool_use' && b.name === tool.name);
   if (!toolUse) throw new Error('person-classifier returned no tool_use block');
   return toolUse.input;
 }
 
-// Public: suggest an assignee for ONE message. `message` is lib/gmail.js
-// getMessage() shape. `roster` defaults to config ROSTER (injectable for tests).
-// Returns a normalized suggestion — NEVER throws on an empty roster (nothing to
-// assign to → UNSURE), so the router can call it unconditionally.
-//   { person: string|null, personLabel: string|null, confidence: number, reason: string }
-async function classify(message, { roster = ROSTER, note = '' } = {}) {
+// Public: suggest an assignee for ONE message.
+//   message   — lib/gmail.js getMessage() shape.
+//   opts.side — 'buyer'|'seller' detected from labels (router passes it), or null.
+// Returns { assignee, person, personLabel, noTag, unsure, side, confidence, reason }.
+async function classify(message, { roster = cfg.ROSTER, side = null, note = '' } = {}) {
   if (!Array.isArray(roster) || roster.length === 0) {
-    return { person: null, personLabel: null, confidence: 0, reason: 'roster is empty — nothing to assign to' };
+    return { assignee: UNSURE, person: null, personLabel: null, noTag: false, unsure: true, side: side || 'unknown', confidence: 0, reason: 'roster is empty' };
   }
   const h = message.headers || {};
-  const userText = buildInput({ subject: h.subject, from: h.from, bodyText: message.bodyText, newestText: message.newestText });
+  const userText = buildInput({ subject: h.subject, from: h.from, bodyText: message.bodyText, newestText: message.newestText, sideHint: side });
   const out = await callClassifier(
-    buildSystem(roster),
+    buildSystem(roster, cfg.ROUTING_NOTES, cfg.NO_TAG_RULES),
     buildTool(roster),
     userText,
     note || `msg ${message.id || '?'}`,
   );
 
-  if (!out.assignee || out.assignee === UNSURE) {
-    return { person: null, personLabel: null, confidence: Number(out.confidence) || 0, reason: out.reason || '' };
-  }
-  const match = roster.find((p) => p.name === out.assignee) || null;
+  const assignee = out.assignee || UNSURE;
+  const match = roster.find((p) => p.name === assignee) || null;
   return {
+    assignee,
     person: match ? match.name : null,
     personLabel: match ? match.personLabel : null,
+    noTag: assignee === NO_TAG,
+    unsure: assignee === UNSURE,
+    side: out.side || side || 'unknown',
     confidence: Number(out.confidence) || 0,
     reason: out.reason || '',
   };
 }
 
-module.exports = { classify, UNSURE, _internal: { buildSystem, buildTool, buildInput } };
+module.exports = { classify, NO_TAG, UNSURE, _internal: { buildSystem, buildTool, buildInput } };

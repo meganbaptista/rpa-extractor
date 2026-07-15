@@ -9,34 +9,32 @@
 //
 // Flow (both branches run the skip gate first — never a pure lookup):
 //
-//   BRANCH A — message carries a known category label:
-//     1. skip gate.
-//     2. skip=true  → mark read, remove from intake, NO person label.
-//     3. skip=false → apply the category's mapped person label.
+//   BRANCH A — message carries a deterministic category label (CATEGORY_ROUTING):
+//     skip=true  → mark read, remove from intake, NO person label.
+//     skip=false → apply the category's mapped person label.
 //
-//   BRANCH B — no category label:
-//     1. skip gate.
-//     2. skip=true  → mark read, no labels.
-//     3. skip=false → V1: apply "Needs Attention".
-//                     V2: run the person-classifier. In CLASSIFIER.mode 'live'
-//                         and confidence ≥ threshold, apply that person label;
-//                         otherwise fall back to Needs Attention. In 'shadow'
-//                         mode the suggestion is recorded but Needs Attention is
-//                         still what gets planned. Either way the suggestion is
-//                         attached to the decision for the shadow log.
+//   BRANCH B — everything else:
+//     skip=true  → mark read, remove from intake, no label.
+//     skip=false → SENDER override? apply that person.
+//                  else run the classifier (rulebook):
+//                    person  → apply their label (live) or log-only (shadow).
+//                    NO_TAG  → mark read, remove from intake (skip-like).
+//                    UNSURE  → apply "Needs Attention".
 // ============================================================================
 
 const cfg = require('./routing-config');
 const skipGate = require('./skip-gate');
 const personClassifier = require('./person-classifier');
 
-// Decide what to do with one message.
-//   message    — lib/gmail.js getMessage() shape.
-//   labelNames — the message's current label DISPLAY names (consumer resolves ids→names).
-//   deps       — injectable for tests: { runSkipGate, classify, config }.
-// Returns a DECISION the consumer knows how to apply + the shadow log knows how
-// to record. `plannedLabel` is the person label routing wants applied (null when
-// skipping). `actions` is the concrete mutation plan.
+// The concrete "clear from the queue" action shared by skip + NO_TAG.
+function clearActions(config) {
+  return {
+    addLabels: [],
+    removeIntake: config.SKIP_BEHAVIOR.removeFromIntake,
+    markRead: config.SKIP_BEHAVIOR.markRead,
+  };
+}
+
 async function route(message, labelNames = [], deps = {}) {
   const config = deps.config || cfg;
   const runSkipGate = deps.runSkipGate || skipGate.runSkipGate;
@@ -44,12 +42,14 @@ async function route(message, labelNames = [], deps = {}) {
 
   const category = config.matchedCategory(labelNames);
   const branch = category ? 'A' : 'B';
+  const side = config.sideFromLabels(labelNames); // 'buyer'|'seller'|null
 
   const gate = await runSkipGate(message);
 
   const decision = {
     branch,
     category,
+    side,
     skip: gate.skip,
     deciding_rule: gate.deciding_rule,
     reason: gate.reason,
@@ -59,48 +59,52 @@ async function route(message, labelNames = [], deps = {}) {
     actions: null,
   };
 
-  // SKIP — identical in both branches: mark read, drop from intake, no person label.
+  // SKIP — identical in both branches: clear from the queue, no person label.
   if (gate.skip) {
-    decision.actions = {
-      addLabels: [],
-      removeIntake: config.SKIP_BEHAVIOR.removeFromIntake,
-      markRead: config.SKIP_BEHAVIOR.markRead,
-    };
+    decision.actions = clearActions(config);
     return decision;
   }
 
-  // NOT SKIP.
+  // BRANCH A — deterministic category label decides the person.
   if (branch === 'A') {
-    // Category already tells us who owns it.
     const person = config.personForCategory(category);
-    decision.plannedLabel = person; // may be null if the map has a category with no owner yet
-    decision.actions = {
-      addLabels: person ? [person] : [config.LABELS.needsAttention],
-      removeIntake: true,
-      markRead: false,
-    };
-    if (!person) {
-      // Category is mapped in config but to no person — surface, don't silently drop.
-      decision.reason = `${decision.reason} | category "${category}" has no person mapping; routed to Needs Attention`;
-    }
+    decision.plannedLabel = person || config.LABELS.needsAttention;
+    decision.actions = { addLabels: [decision.plannedLabel], removeIntake: true, markRead: false };
+    if (!person) decision.reason = `${decision.reason} | category "${category}" has no person mapping; routed to Needs Attention`;
     return decision;
   }
 
-  // BRANCH B — no category. Infer the person (V2), fall back to Needs Attention.
-  const suggestion = await classify(message);
+  // BRANCH B — sender override first (deterministic, no model call).
+  const h = message.headers || {};
+  const senderPerson = config.personForSender(h.from);
+  if (senderPerson) {
+    decision.plannedLabel = senderPerson;
+    decision.reason = `${decision.reason} | sender override -> ${senderPerson}`;
+    decision.actions = { addLabels: [senderPerson], removeIntake: true, markRead: false };
+    return decision;
+  }
+
+  // BRANCH B — the rulebook classifier.
+  const suggestion = await classify(message, { side });
   decision.classifier = suggestion;
 
+  // NO_TAG — a real but no-action email: clear it like a skip.
+  if (suggestion.noTag) {
+    decision.plannedLabel = null;
+    decision.reason = `${decision.reason} | classifier NO_TAG: ${suggestion.reason}`;
+    decision.actions = clearActions(config);
+    return decision;
+  }
+
+  // A confident person (in live classifier mode) -> that person; else Needs Attention.
   const live = config.CLASSIFIER.mode === 'live'
     && suggestion.personLabel
+    && !suggestion.unsure
     && suggestion.confidence >= config.CLASSIFIER.confidenceThreshold;
 
   const label = live ? suggestion.personLabel : config.LABELS.needsAttention;
   decision.plannedLabel = label;
-  decision.actions = {
-    addLabels: [label],
-    removeIntake: true,
-    markRead: false,
-  };
+  decision.actions = { addLabels: [label], removeIntake: true, markRead: false };
   return decision;
 }
 

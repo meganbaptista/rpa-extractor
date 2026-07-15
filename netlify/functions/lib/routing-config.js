@@ -3,53 +3,39 @@
 // ============================================================================
 // Email Router — CONFIGURATION AS DATA (see EMAIL-ROUTER-SPEC.md).
 // ============================================================================
-// This is the ONE place to edit routing behavior. No Airtable, no code changes:
-// change a label name or add an employee here and redeploy. Shaped for V2
-// multi-tenant (one config object per mailbox) even though V1 ships a single
-// tenant — so growing to more mailboxes is adding entries, not a rewrite.
+// The ONE place to edit routing behavior. No Airtable, no code changes. This
+// encodes the team's "EMAIL TAGGING NOTES" rulebook (how Belle was trained to
+// tag incoming mail) as data the person-classifier renders into its prompt.
+// Change a duty, add a person, or fix a rule here and redeploy.
 //
 // ┌─────────────────────────────────────────────────────────────────────────┐
-// │ MEGAN — FILL IN THE VALUES MARKED  ◀── FILL  BELOW.                       │
-// │ Everything with a real label name, person name, or "handles" description  │
-// │ must come from your actual Gmail + team. The example values are           │
-// │ placeholders so the module loads and the shape is clear; they are NOT     │
-// │ your real routing until you replace them.                                 │
+// │ MEGAN — CONFIRM the two ◀── CONFIRM items, and RESOLVE the ◀── CONFLICT   │
+// │ notes (the source doc disagreed with itself in these spots).             │
 // └─────────────────────────────────────────────────────────────────────────┘
-//
-// TERMS:
-//   category label  — a label your current Zaps already put on a message that
-//                     identifies WHAT it is (e.g. "Escrow", "Showings").
-//                     Presence of one of these = Branch A.
-//   person label    — the label naming WHO handles it (e.g. "Jill", "Needs Attention").
-//   intake label    — the label that means "sitting in the router's inbox queue".
-//                     The poller scans this; skip + routing both remove it.
 // ============================================================================
 
 // ---------------------------------------------------------------------------
-// TENANT — the mailbox this config governs. `key` is an internal id used in the
-// shadow log; `mailbox` must match GMAIL_IMPERSONATE_SUBJECT for this tenant.
+// TENANT — the mailbox this config governs; must match GMAIL_IMPERSONATE_SUBJECT.
 // ---------------------------------------------------------------------------
 const TENANT = {
   key: 'mtc',
-  mailbox: 'megan@mytcconcierge.com', // ◀── FILL  confirm this is the box to route
+  mailbox: 'megan@mytcconcierge.com',
 };
 
 // ---------------------------------------------------------------------------
-// LABELS the router reads/writes. Names must match Gmail EXACTLY (case aside).
+// LABELS the router reads/writes. Must match Gmail EXACTLY (case aside), because
+// person labels are auto-CREATED if the exact string isn't found — a typo makes
+// a new empty label instead of using yours.  ◀── CONFIRM every person label
+// string below matches Gmail, especially "JILL✨" (with the sparkle emoji?).
 // ---------------------------------------------------------------------------
 const LABELS = {
-  // The queue the poller scans. Everything the router touches carries this until
-  // it's routed or skipped. ◀── FILL with your real intake/triage label name.
-  intake: 'Intake',
-
-  // Branch B fallback when the message matters but no category tells us who.
-  // In V2 this is what the person-classifier falls back to at low confidence.
-  needsAttention: 'Needs Attention',
+  intake: 'INTAKE - REVIEW',      // the queue the poller scans
+  needsAttention: 'Needs Attention', // classifier is UNSURE -> human review
 };
 
 // ---------------------------------------------------------------------------
-// SKIP BEHAVIOR — what "skip=true" from the gate does, in BOTH branches.
-// Matches your correction: mark read, remove from intake, apply NO person label.
+// SKIP BEHAVIOR — what the acknowledgment skip gate does on skip=true. Also
+// reused for classifier NO_TAG outcomes (per Megan: mark read + drop from queue).
 // ---------------------------------------------------------------------------
 const SKIP_BEHAVIOR = {
   markRead: true,
@@ -58,63 +44,188 @@ const SKIP_BEHAVIOR = {
 };
 
 // ---------------------------------------------------------------------------
-// BRANCH A — category label -> person label. When a message already carries one
-// of these category labels AND the gate says skip=false, apply the mapped person
-// label. Keys are category label names; values are person label names.
-//   ◀── FILL  with your real categories and who owns each.
+// BRANCH A — deterministic category-label -> person overrides. If a message
+// ALREADY carries one of these labels, route straight to the mapped person
+// (still gated by the skip gate first). Most routing is NOT deterministic — it
+// runs through the classifier — so this stays small. Add entries only for
+// labels that ALONE decide the person with no content judgment needed.
 // ---------------------------------------------------------------------------
 const CATEGORY_ROUTING = {
-  // 'Escrow':    'Jill',
-  // 'Showings':  'Marco',
-  // 'Listings':  'Priya',
-  // 'Offers':    'Jill',
-  // '<CATEGORY LABEL>': '<PERSON LABEL>',
+  // '<CATEGORY LABEL>': '<PERSON>',
 };
 
 // ---------------------------------------------------------------------------
-// ROSTER — the team the V2 person-classifier can assign to (Branch B, no
-// category). `handles` is the ONLY thing the classifier reads to decide who a
-// message belongs to, so write it like you'd brief a new hire: concrete duties,
-// deal stages, document types, sender types. `personLabel` is the Gmail label
-// applied (must exist or be auto-created). `emails` (optional) lets the router
-// short-circuit to a person when a known address is the sender/recipient.
-//   ◀── FILL  with your real team.
+// SIDE TAGS — Gmail labels that reveal whether we represent the BUYER or SELLER
+// on this deal. Read first; if none present, the classifier infers side from
+// content. (Per the doc: buyer-side disclosure responses "will have a Buyer
+// Disclosures tag".)  ◀── CONFIRM these tag names match Gmail if you use them.
+// ---------------------------------------------------------------------------
+const SIDE_TAGS = {
+  buyer: ['Buyer Disclosures'],
+  seller: ['Seller Disclosures'],
+};
+
+// ---------------------------------------------------------------------------
+// SENDER ROUTING — deterministic "this sender always goes to this person".
+// Checked BEFORE the model (a match short-circuits the classifier — no API
+// cost). Keys are lowercased email addresses or bare domains.
+// ---------------------------------------------------------------------------
+const SENDER_ROUTING = {
+  'dan@anvilre.com': 'Megan',        // "Anything from Dan Smith - Anvil" -> Megan
+  'support@planetre.com': 'Lovely',  // resolved 2026-07-15: PlanetRE -> Lovely
+};
+
+// ---------------------------------------------------------------------------
+// ROSTER — the team + what each person handles. `handles` is the rulebook the
+// classifier reads to route Branch B mail; write it concrete. `personLabel` is
+// the Gmail label applied (auto-created if missing — match Gmail exactly).
+// Compiled from the "EMAIL TAGGING NOTES" doc.
 // ---------------------------------------------------------------------------
 const ROSTER = [
-  // {
-  //   name: 'Jill',
-  //   personLabel: 'Jill',
-  //   handles: 'Open escrow, contract-to-close coordination, RPA + disclosure packages, '
-  //          + 'title/escrow officer correspondence, contingency and closing deadlines.',
-  //   emails: ['jill@mytcconcierge.com'],
-  // },
-  // {
-  //   name: 'Marco',
-  //   personLabel: 'Marco',
-  //   handles: 'Showing requests and scheduling, lockbox/access, buyer tour logistics, '
-  //          + 'feedback follow-ups.',
-  //   emails: ['marco@mytcconcierge.com'],
-  // },
+  {
+    name: 'Belle',
+    personLabel: 'Belle',
+    handles: 'NEW ESCROWS / new files (agent looping in the TC, "adding my TC Megan", '
+      + '"attached is the fully executed contract", "accepted offer", "intro to escrow", '
+      + '"[address] - acceptance", "new file"). Escrow-officer AGENT opening package or '
+      + 'BROKER opening package (escrow instructions/general provisions, EMD, NHD/zone '
+      + 'report, prelim/preliminary title report, page 16 of RPA / escrow acknowledgement, '
+      + 'commission instructions when NOT amended). Preliminary title report, natural '
+      + 'hazards report, HOA docs (and HOA/9A/city-report updates from escrow), 9A / city '
+      + 'report / report of residential property records, retrofit / cert of compliance, '
+      + 'grant deed, encrypted messages, "your escrow number is ...". EMD/deposit RECEIVED '
+      + '(only when the escrow officer says it was received). Milestone confirmations in '
+      + 'the newest message: "we have funded" / "released for recording tomorrow" (funding '
+      + 'day), "we are confirmed/recorded/closed" (closing day). Agent/broker CLOSING '
+      + 'package and closing documents, closing statement / final closing / final '
+      + 'settlement statement, FIRPTA / QS. POF / proof of funds / pre-approval / prequal. '
+      + 'MLS SOLD copy. Amended/revised commission (the commission amount, from an agent), '
+      + 'and commission QUESTIONS or concerns. '
+      + 'Any change in close date / close-date revision, escrow closing audit response with '
+      + 'a changed close date. RLA / residential listing agreement / new listing, listing '
+      + 'agreement received. Rejected offers. Inspection REPORTS/receipts when a PDF is '
+      + 'attached or LINKED (general, termite, HVAC, roof, mold, plumbing, geo, etc.).',
+  },
+  {
+    name: 'Jill',
+    personLabel: 'JILL✨', // ◀── CONFIRM exact Gmail string (emoji?)
+    handles: 'Addendum or contingency-release (CR) requests — "agent asking us to send an '
+      + 'addendum", "send a contingency release", CAR ADDENDUM requests. ETA (Extension of '
+      + 'Time Addendum). Cancellation of escrow / cancellations. Purchase price amendment, '
+      + 'purchase price reduction, any change to purchase price or credit. Seller credit '
+      + 'addendum. RR / RRRR — request for repairs and seller response to repairs. '
+      + 'Contingency removals / releases / CR (including contingency releases delivered to '
+      + 'us with an attachment). AOAA, buyer vesting / vesting amendment / assignment (AOAA '
+      + 'form). Escrow AMENDMENTS (escrow-company paperwork, e.g. a Glen Oaks escrow header '
+      + 'on top — NOT CAR addendums, but both still route to Jill). RLAS (residential lease '
+      + 'AFTER sale / leaseback / rentback) and SIP (seller in possession / leaseback / '
+      + 'rentback).',
+  },
+  {
+    name: 'Ethan',
+    personLabel: 'Ethan',
+    handles: 'SELLER-SIDE disclosure and signature work. Home-warranty emails. VP / VOP / '
+      + 'final walk-through ATTACHED requesting the SELLER signature. Requesting CAR-form '
+      + 'disclosure items for the SELLER to sign (AVID, broker-affiliated disclosures). '
+      + 'Someone sending us the package of FULLY EXECUTED disclosures signed by the buyer. '
+      + 'Someone sending us disclosures FOR THE SELLER to sign. A client response to a '
+      + '"Seller Disclosure Package | [address]" email when we are on the SELLER side '
+      + '(their message contains a link for sellers to fill out disclosures). "Completed: '
+      + '[Electronic Version] Seller Disclosure Package" from DocuSign.',
+  },
+  {
+    name: 'Edelyn',
+    personLabel: 'Edelyn',
+    handles: 'BUYER-SIDE disclosure work. Disclosure PACKAGE for the BUYER to sign (has '
+      + 'the seller-signed disclosures attached). Requesting us to SEND CAR form VP / VOP / '
+      + 'final walk-through. TC introduction on the OTHER side. Requesting us to get / send '
+      + 'CAR-form disclosure items for the BUYER to sign (CAR forms, not escrow documents). '
+      + 'Glide link or requesting Glide. A client response to a '
+      + '"Seller Disclosure Package | [address]" email when we are on the BUYER side (these '
+      + 'carry a Buyer Disclosures tag). '
+      + '(Skyslope updates go to Lovely — resolved 2026-07-15.)',
+  },
+  {
+    name: 'Allana',
+    personLabel: 'Allana',
+    handles: 'Purchase contract audits. BRBC (Buyer Representation Agreement). "Completed: '
+      + 'Please DocuSign — Missed Initials on Purchase Agreement".',
+  },
+  {
+    name: 'Megan',
+    personLabel: 'Megan',
+    handles: 'Leases — CAR form "LR" (Residential Lease or month-to-month rental '
+      + 'agreement), NOT RLAS. Phone-call requests to Megan directly. Agent asking to send '
+      + 'out a Notice to Perform, or asking for a Notice to Perform / NTB draft. '
+      + 'Modification of Terms (MT / MOT). Referrals / W9 for referral. Anything from Dan '
+      + 'Smith (dan@anvilre.com) or Anvil. Emails from Zapier. Broker Complete File — a '
+      + 'reply with a question/comment/concern after we sent their broker complete file. '
+      + 'CDA (commission disbursement authorization) requests. Requests for an MT-BR or '
+      + 'MT-LA. Requests to take on new clients / inquiries about our services. TC check / '
+      + 'TC fee / Megan check / where to send the check or commission. A QUESTION about '
+      + 'escrow due dates (a plain confirmation of due dates is NO TAG). Amended commission '
+      + 'INSTRUCTIONS from escrow (the "if amended, tag Megan" case).',
+  },
+  {
+    name: 'Lovely',
+    personLabel: 'Lovely',
+    handles: 'Skyslope checklist updates. Emails from support@planetre.com. '
+      + '(NOTE: the source doc also lists both of these under Edelyn — see CONFLICTS.)',
+  },
 ];
 
 // ---------------------------------------------------------------------------
-// MODELS + CLASSIFIER SETTINGS.
-//   gate.model        — the skip gate. Haiku per spec (cheap, high volume).
-//   classifier.mode   — 'shadow' = log the would-be person label, DO NOT apply
-//                       (V1 default: Branch B still routes to Needs Attention).
-//                       'live'   = actually apply the classifier's person label.
-//   classifier.model  — start on Haiku; bump to Opus if shadow accuracy is short.
-//   classifier.confidenceThreshold — below this, fall back to Needs Attention
-//                       even in 'live' mode.
+// NO-TAG CONTENT RULES — real (non-acknowledgment) emails that get NO person
+// label. Per Megan these are cleared like a skip (mark read + drop from intake).
+// The classifier returns assignee = NO_TAG when the newest message matches one.
 // ---------------------------------------------------------------------------
-// ROUTER-LEVEL mode — governs the WHOLE router during cutover, independent of
-// the V2 classifier. Since we're migrating fully OFF Zapier, there is no live
-// Zap decision to diff against per message; instead run the router itself in
-// 'shadow' first: it evaluates every message and writes the full decision +
-// deciding rule to the shadow log, but applies NO labels and marks nothing read.
-// You compare the logged decisions (and which rule drove each) against what the
-// Zaps would have done, confirm Branch B parity + the intended Branch A
-// differences (rules 10–14 / quoted-history scoping), then flip to 'live'.
+const NO_TAG_RULES = [
+  'SELLER opening package or BUYER opening package (NOT the agent/broker opening package) once escrow is open and the email says "SELLER OPENING" / "BUYER OPENING".',
+  '"Loan docs are in / have arrived."',
+  'Buyer signing loan docs, notary appointments to sign docs, scheduling the buyer to sign loan docs.',
+  'ESTIMATED closing statement (must be estimated, not final).',
+  'Appraisal has been scheduled, or reaching out to schedule the appraisal.',
+  'Wire instructions / deposit instructions.',
+  'Third-party deposit form.',
+  'CONFIRMING escrow due dates (only a confirmation — a QUESTION about due dates goes to Megan).',
+  'Notice to Perform PDF received (no action beyond filing to drive).',
+  'Accepted calendar invite.',
+  'Automatic Reply / Out of Office.',
+  'Subject line that is just "Split on [address]".',
+  'A DocuSign that is NOT completed (we are only copied on delivery, often from an escrow officer).',
+  'A Voided DocuSign.',
+  'Inspection SCHEDULING or requests with no report attached or linked (only tag Belle when a report PDF is attached or linked).',
+];
+
+// ---------------------------------------------------------------------------
+// ROUTING NOTES — cross-cutting disambiguation the classifier must apply. These
+// are the "read the whole doc, not just keywords" rules.
+// ---------------------------------------------------------------------------
+const ROUTING_NOTES = [
+  'SENDER TYPE matters. The same words route differently from an Escrow Officer, an Agent, a DocuSign notification, or a Client (buyer/seller). Use the sender to disambiguate.',
+  'BUYER vs SELLER side flips disclosure routing: buyer-side disclosure work -> Edelyn, seller-side disclosure work -> Ethan. Prefer a side tag if one is present; otherwise infer side from the content.',
+  'VP / VOP / final walk-through: if ATTACHED requesting the SELLER signature -> Ethan; if someone is requesting us to SEND the VP/VOP -> Edelyn.',
+  'Disclosures: "for the SELLER to sign" or fully-executed-by-buyer packages we receive -> Ethan; "for the BUYER to sign" (package to send the buyer) -> Edelyn.',
+  'CAR ADDENDUMS (California Association of Realtors forms) and ESCROW AMENDMENTS (escrow-company paperwork, e.g. a Glen Oaks header) are different documents but BOTH route to Jill.',
+  'Commission: the commission AMOUNT / amended-revised commission from an agent -> Belle; amended commission INSTRUCTIONS from escrow -> Megan; a commission QUESTION or concern -> see CONFLICTS (doc says Belle in one place, Megan in another).',
+  'Leases: CAR form "LR" -> Megan; but RLAS / SIP (leaseback or seller-in-possession after sale) -> Jill.',
+  'Milestone receipts count only when in the NEWEST message (EMD received, funded, recorded/closed) and route to Belle; the same words quoted from an older message do not.',
+];
+
+// ---------------------------------------------------------------------------
+// CONFLICTS — spots where the source doc contradicted itself. Left explicit so
+// they are resolved deliberately, not silently. Resolve by editing ROSTER /
+// SENDER_ROUTING / ROUTING_NOTES above, then delete the entry here.
+// ---------------------------------------------------------------------------
+const CONFLICTS = [
+  'Commission question/concern: page-1 list says Belle; the example chart says Megan.',
+  'BRBC (Buyer Rep Agreement): listed under both Megan and Allana.',
+  'support@planetre.com and Skyslope checklist updates: listed under both Edelyn and Lovely.',
+];
+
+// ---------------------------------------------------------------------------
+// MODES + MODELS (both default SAFE).
+// ---------------------------------------------------------------------------
 const ROUTER = {
   mode: 'shadow', // 'shadow' = decide + log only, mutate nothing | 'live' = apply
 };
@@ -125,20 +236,18 @@ const GATE = {
 };
 
 const CLASSIFIER = {
-  mode: 'shadow', // 'shadow' | 'live'  — keep 'shadow' until the log proves it out
-  model: 'claude-haiku-4-5-20251001',
-  effort: 'low',
+  mode: 'shadow', // 'shadow' = log the would-be person, still apply Needs Attention | 'live'
+  // Opus for the rulebook: it's a nuanced, sender/side-aware classification and
+  // shadow mode makes accuracy (not cost) the priority. Drop to Haiku later if
+  // shadow shows it's accurate enough.
+  model: 'claude-opus-4-8',
+  effort: 'medium',
   confidenceThreshold: 0.7,
 };
 
 // ---------------------------------------------------------------------------
-// Helpers (small, so consumers don't reach into the raw objects).
+// Helpers.
 // ---------------------------------------------------------------------------
-
-// The category label (if any) present on a message, given its label NAMES.
-// Returns the matched category name or null. First match wins; if a message
-// somehow carries two category labels, order here is the tiebreak, so list the
-// most specific categories first if that ever matters.
 function matchedCategory(labelNames = []) {
   const set = new Set(labelNames.map((n) => String(n).toLowerCase()));
   for (const cat of Object.keys(CATEGORY_ROUTING)) {
@@ -147,16 +256,28 @@ function matchedCategory(labelNames = []) {
   return null;
 }
 
-// Person label for a category (Branch A target).
 function personForCategory(cat) {
   return CATEGORY_ROUTING[cat] || null;
 }
 
-// Look up a roster member by a sender/recipient email (Branch B short-circuit).
-function rosterByEmail(email) {
-  if (!email) return null;
-  const lc = String(email).toLowerCase();
-  return ROSTER.find((p) => (p.emails || []).some((e) => e.toLowerCase() === lc)) || null;
+// Deterministic sender override -> person name, or null. Matches full address
+// first, then the bare domain.
+function personForSender(fromHeader) {
+  if (!fromHeader) return null;
+  const m = String(fromHeader).match(/[<\s]?([^<>\s@]+@[^<>\s]+)>?/);
+  const email = (m ? m[1] : String(fromHeader)).toLowerCase().replace(/>$/, '');
+  if (SENDER_ROUTING[email]) return SENDER_ROUTING[email];
+  const domain = email.split('@')[1];
+  if (domain && SENDER_ROUTING[domain]) return SENDER_ROUTING[domain];
+  return null;
+}
+
+// Side implied by the message's current labels, or null if no side tag present.
+function sideFromLabels(labelNames = []) {
+  const set = new Set(labelNames.map((n) => String(n).toLowerCase()));
+  if (SIDE_TAGS.buyer.some((t) => set.has(t.toLowerCase()))) return 'buyer';
+  if (SIDE_TAGS.seller.some((t) => set.has(t.toLowerCase()))) return 'seller';
+  return null;
 }
 
 module.exports = {
@@ -164,11 +285,17 @@ module.exports = {
   LABELS,
   SKIP_BEHAVIOR,
   CATEGORY_ROUTING,
+  SIDE_TAGS,
+  SENDER_ROUTING,
   ROSTER,
+  NO_TAG_RULES,
+  ROUTING_NOTES,
+  CONFLICTS,
   ROUTER,
   GATE,
   CLASSIFIER,
   matchedCategory,
   personForCategory,
-  rosterByEmail,
+  personForSender,
+  sideFromLabels,
 };

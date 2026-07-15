@@ -14,14 +14,24 @@ Both branches run the **skip gate first** — it is never a pure lookup.
 2. `skip=true` → mark read, remove from intake, **no** person label.
 3. `skip=false` → apply the category's mapped **person** label.
 
-**Branch B — no category label:**
-1. Run the skip gate.
-2. `skip=true` → mark read, no labels.
-3. `skip=false` →
-   - **V1:** apply **"Needs Attention"**.
-   - **V2:** run the person-classifier. If `CLASSIFIER.mode='live'` and confidence
-     ≥ threshold, apply that person's label; else fall back to Needs Attention.
-     In `'shadow'` mode the suggestion is only logged; Needs Attention is applied.
+**Branch B — everything else (the common case):**
+1. Run the skip gate. `skip=true` → mark read, remove from intake, no label.
+2. `skip=false` → **sender override?** (e.g. dan@anvilre.com → Megan) apply that
+   person, no model call.
+3. Else run the **person-classifier** — the rulebook that automates Belle's
+   manual tagging (per-person duties + sender-type + buyer/seller-side rules,
+   all in `routing-config.js`). It returns one of:
+   - **a person** → apply their label if `CLASSIFIER.mode='live'` and confidence
+     ≥ threshold; in `'shadow'` the suggestion is logged and **Needs Attention**
+     is applied.
+   - **NO_TAG** (a real but no-action email: loan docs in, wire instructions,
+     estimated closing statement, …) → mark read, remove from intake (skip-like).
+   - **UNSURE** → **Needs Attention** (human review).
+
+**Buyer vs seller side** (flips e.g. disclosure responses between Edelyn and
+Ethan): read from a side tag (`SIDE_TAGS`, e.g. "Buyer Disclosures") when
+present, else the classifier infers it from content. The detected side is
+recorded in the shadow log.
 
 Both branches call **one shared skip gate** (`lib/skip-gate.js`) — the owner's
 14-rule master, verbatim. The old Zapier lane ran a drifted 9-rule variant
@@ -39,7 +49,7 @@ master closely (same rules).
 | `lib/gmail.js` | Reusable Gmail service. SA-JWT domain-wide delegation, `gmail.modify` scope, mailbox impersonation. Label lookup/create, list by label, message fetch (headers + body + newest-vs-history split + current-attachment flag), modify, mark-read. |
 | `lib/routing-config.js` | **All routing behavior as data.** Labels, skip behavior, Branch A category→person map, Branch B roster, model + mode switches. Edit here, redeploy. |
 | `lib/skip-gate.js` | THE canonical 14-rule gate (Haiku, forced-tool output). Returns `{skip, deciding_rule, reason, confidence}`. |
-| `lib/person-classifier.js` | V2 assignment. Reads `roster[].handles`, returns `{person, personLabel, confidence, reason}` or unsure. |
+| `lib/person-classifier.js` | The rulebook. Renders `ROSTER` duties + `ROUTING_NOTES` + `NO_TAG_RULES` into its prompt; returns `{assignee, side, confidence, reason}` where assignee is a person / NO_TAG / UNSURE. Opus by default (nuanced, sender/side-aware). |
 | `lib/email-router.js` | Pure decision logic. `route(message, labelNames)` → a DECISION. Touches no Gmail. |
 | `lib/shadow-log.js` | Durable per-message audit ledger (Netlify Blobs) + one-line console summary. |
 | `email-route-poller.js` | Scheduled producer. Lists intake-label ids, fans new ones to the consumer. Cheap (no body fetch, no AI). |
@@ -72,13 +82,26 @@ let the classifier gather shadow evidence → flip `CLASSIFIER.mode='live'`.
 API Controls → Domain-wide Delegation. Drive didn't need this; Gmail does,
 because the SA acts as the mailbox.
 
-## 5. Go-live checklist
+## 5. Rulebook config (`routing-config.js`)
 
-1. Fill `lib/routing-config.js` (intake label, mailbox, category→person map, roster).
-2. Create/confirm the Gmail labels the config names (person + Needs Attention
-   auto-create; category + intake labels must already exist).
+The routing logic is encoded from the team's "EMAIL TAGGING NOTES" doc as data:
+- `ROSTER[].handles` — each person's duties (what the classifier matches on).
+- `ROUTING_NOTES` — cross-cutting disambiguation (sender type, side, tricky pairs).
+- `NO_TAG_RULES` — no-action content that gets cleared like a skip.
+- `SENDER_ROUTING` — deterministic sender→person overrides (pre-model).
+- `SIDE_TAGS` — labels that reveal buyer/seller side.
+- `CONFLICTS` — spots where the source doc contradicted itself; resolve then delete.
+
+## 6. Go-live checklist
+
+1. In `routing-config.js`: **confirm** the person-label strings match Gmail
+   (esp. `JILL✨`), and **resolve** the `CONFLICTS` entries.
+2. Create/confirm Gmail labels: `INTAKE - REVIEW` and any side tags must already
+   exist; person labels + `Needs Attention` auto-create.
 3. Domain-wide delegation for `gmail.modify` (§4).
 4. Set env vars; leave `EMAIL_ROUTER_ENABLED` unset for now.
 5. Deploy. Set `ROUTER.mode='shadow'`, `EMAIL_ROUTER_ENABLED='true'`.
-6. Review the shadow log; confirm behavior.
-7. Flip `ROUTER.mode='live'`. Later, flip `CLASSIFIER.mode='live'`.
+6. Review the shadow log; confirm skip decisions + classifier assignments +
+   detected side. Tune `ROSTER`/`ROUTING_NOTES` as needed.
+7. Flip `ROUTER.mode='live'`. Later, once the classifier column looks right,
+   flip `CLASSIFIER.mode='live'`.

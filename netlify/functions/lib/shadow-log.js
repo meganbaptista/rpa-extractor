@@ -43,6 +43,7 @@ function buildRecord({ message, decision, mode, applied, nowIso }) {
     from: h.from || '',
     branch: decision.branch,      // 'A' | 'B'
     category: decision.category || null,
+    side: decision.side || null,  // 'buyer' | 'seller' | null (from a side tag)
     skip: decision.skip,
     deciding_rule: decision.deciding_rule,   // which of the 14 rules drove it
     gate_reason: decision.reason || '',
@@ -62,8 +63,9 @@ function summarize(rec) {
     rec.category ? `cat=${rec.category}` : null,
     `skip=${rec.skip}`,
     `rule=${rec.deciding_rule}`,
+    rec.side ? `side=${rec.side}` : null,
     rec.plannedLabel ? `plan="${rec.plannedLabel}"` : null,
-    rec.classifier && rec.classifier.person ? `clf=${rec.classifier.person}@${rec.classifier.confidence}` : null,
+    rec.classifier ? `clf=${rec.classifier.assignee}@${rec.classifier.confidence}` : null,
     rec.applied ? `applied="${rec.applied.label || rec.applied.action}"` : null,
     `"${(rec.subject || '').slice(0, 48)}"`,
   ].filter(Boolean);
