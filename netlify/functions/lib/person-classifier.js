@@ -66,7 +66,7 @@ function buildSystem(roster, notes, noTagRules) {
   const people = roster.map((p, i) => `${i + 1}. ${p.name}\n   ${p.handles}`).join('\n\n');
   const noTag = noTagRules.map((r) => `- ${r}`).join('\n');
   const rules = notes.map((r) => `- ${r}`).join('\n');
-  return `You route real estate transaction-coordination emails to the right teammate, exactly as our coordinator Belle was trained to. Read the NEWEST message (ignore quoted history except where a rule needs prior context) and decide who handles it.
+  return `You route real estate transaction-coordination emails to the right teammate, exactly as our coordinator Belle was trained to. The NEWEST message is the immediate ask, but use the SUBJECT and the WHOLE THREAD to decide what KIND of deal this is and who OWNS the file — routing follows the file owner, not just the words in the latest reply. (E.g. a lease thread belongs to Megan even if the newest message is a generic payment question.) Then decide who handles it.
 
 TEAM AND WHAT EACH PERSON HANDLES:
 

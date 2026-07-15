@@ -173,8 +173,13 @@ const ROSTER = [
   {
     name: 'Megan',
     personLabel: 'Megan',
-    handles: 'Leases — CAR form "LR" (Residential Lease or month-to-month rental '
-      + 'agreement), NOT RLAS. Phone-call requests to Megan directly. Agent asking to send '
+    handles: 'LEASES — Megan owns the entire lease file. Any thread that is a lease: CAR '
+      + 'form "LR" (Residential Lease or month-to-month rental agreement), an RLMM '
+      + '(Residential Lease or Month-to-Month) agreement, a subject like "Lease Contract", '
+      + 'or a lease agreement attached — but NOT RLAS (that is Jill). Because Megan owns the '
+      + 'whole lease file, route EVERY message in a lease thread to her, including questions '
+      + 'about compensation, payment, timing, or entity financials on that lease. '
+      + 'Phone-call requests to Megan directly. Agent asking to send '
       + 'out a Notice to Perform, or asking for a Notice to Perform / NTB draft. '
       + 'Modification of Terms (MT / MOT). Referrals / W9 for referral. Anything from Dan '
       + 'Smith (dan@anvilre.com) or Anvil. Emails from Zapier. Broker Complete File — a '
@@ -221,6 +226,7 @@ const NO_TAG_RULES = [
 // ---------------------------------------------------------------------------
 const ROUTING_NOTES = [
   'SENDER TYPE matters. The same words route differently from an Escrow Officer, an Agent, a DocuSign notification, or a Client (buyer/seller). Use the sender to disambiguate.',
+  'DEAL TYPE comes from the SUBJECT + WHOLE THREAD, not just the newest message. The newest message is the immediate ask; the thread tells you what KIND of deal it is (lease, purchase, listing) and therefore who owns the file. Route by the file owner. Example: a thread whose subject/attachments show a LEASE (Residential Lease, RLMM, month-to-month, "Lease Contract") belongs to Megan even if the newest message is a generic question about compensation, payment, or timing — do not route that to Belle/others on the strength of the newest message alone.',
   'BUYER vs SELLER side flips disclosure routing: buyer-side disclosure work -> Edelyn, seller-side disclosure work -> Ethan. Prefer a side tag if one is present; otherwise infer side from the content.',
   'STRONG PRIOR from sub-labels: if a "Buyer Disclosures" sub-label is present the handler is USUALLY Edelyn; if a "Seller Signed Disclosures" sub-label is present it is USUALLY Ethan. Follow this unless the content clearly indicates a different person.',
   'VP / VOP / final walk-through: if ATTACHED requesting the SELLER signature -> Ethan; if someone is requesting us to SEND the VP/VOP -> Edelyn.',

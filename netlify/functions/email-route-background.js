@@ -90,9 +90,10 @@ exports.handler = async function (event) {
     return { statusCode: 200 };
   } catch (err) {
     console.error(`[email-route-background] ${messageId} failed: ${err.message}`);
-    // 500 so a transient failure isn't marked "done" — the poller's seen store
-    // already recorded dispatch, so re-processing needs a manual re-drop or a
-    // seen-store clear; keep the loud log so failures are visible.
+    // Write an error record so a failed message shows in the viewer (as mode
+    // 'error') instead of silently vanishing — the poller already marked it seen
+    // on dispatch, so without this it would never reappear.
+    await shadowLog.recordError({ messageId, error: err.message, nowIso: nowIso() });
     return { statusCode: 500, body: err.message };
   }
 };

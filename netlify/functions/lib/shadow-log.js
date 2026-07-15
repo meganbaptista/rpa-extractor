@@ -86,6 +86,24 @@ async function record({ message, decision, mode, applied, nowIso }) {
   return rec;
 }
 
+// Write a minimal ERROR record so a message whose consumer failed still shows
+// up in the viewer (as mode 'error') instead of vanishing. Same key scheme as a
+// normal record. Never throws.
+async function recordError({ messageId, subject = '', from = '', error = '', nowIso }) {
+  const rec = {
+    at: nowIso, mode: 'error', messageId, subject: subject || '(processing error)', from,
+    branch: '', category: null, side: null, skip: false, deciding_rule: '',
+    gate_reason: error, gate_confidence: '', plannedLabel: null, classifier: null, applied: null,
+  };
+  try { console.warn(`[shadow-log] ERROR ${messageId}: ${error}`); } catch (_) { /* noop */ }
+  try {
+    await store().setJSON(`${(nowIso || '').slice(0, 10)}/${messageId}`, rec);
+  } catch (err) {
+    console.warn(`[shadow-log] error-record write failed: ${err.message}`);
+  }
+  return rec;
+}
+
 // Read back the most recent decision records, newest first. Keys are
 // `YYYY-MM-DD/messageId`, so sorting keys descending gives newest-first without
 // fetching every blob's body to compare timestamps. `limit` caps how many we
@@ -103,4 +121,4 @@ async function recent({ limit = 200 } = {}) {
   }
 }
 
-module.exports = { record, recent, _internal: { buildRecord, summarize } };
+module.exports = { record, recordError, recent, _internal: { buildRecord, summarize } };
