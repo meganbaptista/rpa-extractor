@@ -225,6 +225,7 @@ const ROUTING_NOTES = [
   'Leases: CAR form "LR" -> Megan; but RLAS / SIP (leaseback or seller-in-possession after sale) -> Jill.',
   'Milestone receipts count only when in the NEWEST message (EMD received, funded, recorded/closed) and route to Belle; the same words quoted from an older message do not.',
   'Loan emails split two ways: a lender LOAN-STATUS / progress update (approval received, conditions/ICD requested, appraisal progress, "loan update") -> Belle. But the physical loan DOCS arriving, buyer signing loan docs / scheduling the signing, and a bare appraisal-scheduling email stay NO_TAG.',
+  'CLOSE DATE beats the loan-docs no-tag: if an email states or confirms a specific closing date (e.g. "loan docs are coming so we can close Friday"), route to Belle to verify/update Process Street — do NOT mark it NO_TAG just because it also mentions loan docs arriving. Only a pure loan-docs-arriving note with no close date stays NO_TAG.',
 ];
 
 // ---------------------------------------------------------------------------
