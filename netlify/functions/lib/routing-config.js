@@ -112,7 +112,10 @@ const ROSTER = [
       + 'package and closing documents, closing statement / final closing / final '
       + 'settlement statement, FIRPTA / QS. POF / proof of funds / pre-approval / prequal. '
       + 'MLS SOLD copy. Amended/revised commission (the commission amount, from an agent), '
-      + 'and commission QUESTIONS or concerns. '
+      + 'and commission QUESTIONS or concerns. Lender LOAN-STATUS / loan-progress updates — '
+      + 'a "loan update" from the lender: loan approval received, conditions or ICD requested, '
+      + 'underwriting or appraisal progress. (This is distinct from the physical loan DOCS '
+      + 'arriving or signing logistics, which stay NO_TAG.) '
       + 'Any change in close date / close-date revision, escrow closing audit response with '
       + 'a changed close date. RLA / residential listing agreement / new listing, listing '
       + 'agreement received. Rejected offers. Inspection REPORTS/receipts when a PDF is '
@@ -221,6 +224,7 @@ const ROUTING_NOTES = [
   'Commission: the commission AMOUNT / amended-revised commission from an agent -> Belle; a commission QUESTION or concern -> Belle; amended commission INSTRUCTIONS from escrow -> Megan.',
   'Leases: CAR form "LR" -> Megan; but RLAS / SIP (leaseback or seller-in-possession after sale) -> Jill.',
   'Milestone receipts count only when in the NEWEST message (EMD received, funded, recorded/closed) and route to Belle; the same words quoted from an older message do not.',
+  'Loan emails split two ways: a lender LOAN-STATUS / progress update (approval received, conditions/ICD requested, appraisal progress, "loan update") -> Belle. But the physical loan DOCS arriving, buyer signing loan docs / scheduling the signing, and a bare appraisal-scheduling email stay NO_TAG.',
 ];
 
 // ---------------------------------------------------------------------------

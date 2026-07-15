@@ -89,23 +89,35 @@ async function route(message, labelNames = [], deps = {}) {
   const suggestion = await classify(message, { side, tagLean: config.personForSideTag(side) });
   decision.classifier = suggestion;
 
-  // NO_TAG — a real but no-action email: clear it like a skip.
-  if (suggestion.noTag) {
+  // We only ACT on the classifier when it is LIVE and CONFIDENT. In shadow the
+  // classifier is logged but never mutates mail; below the threshold we defer to
+  // a human. This applies to NO_TAG too — a shaky "no action" must never silently
+  // clear a potentially actionable email.
+  const classifierLive = config.CLASSIFIER.mode === 'live';
+  const confident = suggestion.confidence >= config.CLASSIFIER.confidenceThreshold;
+
+  if (classifierLive && confident && suggestion.noTag) {
+    // Confident, trusted no-action email -> clear it like a skip.
     decision.plannedLabel = null;
-    decision.reason = `${decision.reason} | classifier NO_TAG: ${suggestion.reason}`;
+    decision.reason = `${decision.reason} | NO_TAG (confident): ${suggestion.reason}`;
     decision.actions = clearActions(config);
     return decision;
   }
+  if (classifierLive && confident && suggestion.personLabel && !suggestion.unsure) {
+    // Confident, trusted person assignment.
+    decision.plannedLabel = suggestion.personLabel;
+    decision.reason = `${decision.reason} | routed to ${suggestion.person} (${suggestion.confidence})`;
+    decision.actions = { addLabels: [suggestion.personLabel], removeIntake: true, markRead: false };
+    return decision;
+  }
 
-  // A confident person (in live classifier mode) -> that person; else Needs Attention.
-  const live = config.CLASSIFIER.mode === 'live'
-    && suggestion.personLabel
-    && !suggestion.unsure
-    && suggestion.confidence >= config.CLASSIFIER.confidenceThreshold;
-
-  const label = live ? suggestion.personLabel : config.LABELS.needsAttention;
-  decision.plannedLabel = label;
-  decision.actions = { addLabels: [label], removeIntake: true, markRead: false };
+  // Everything else -> Needs Attention (a human decides): classifier still in
+  // shadow, UNSURE, a low-confidence person, or a low-confidence NO_TAG.
+  decision.plannedLabel = config.LABELS.needsAttention;
+  if (suggestion.noTag && !confident) {
+    decision.reason = `${decision.reason} | NO_TAG but low confidence -> Needs Attention`;
+  }
+  decision.actions = { addLabels: [config.LABELS.needsAttention], removeIntake: true, markRead: false };
   return decision;
 }
 
