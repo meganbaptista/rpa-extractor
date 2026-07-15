@@ -214,6 +214,24 @@ function collectBodies(payload, acc = { plain: '', html: '' }) {
   return acc;
 }
 
+// Walk the MIME tree collecting real attachments on THIS message: parts that
+// carry a filename and an attachmentId. Gmail does NOT re-attach a previous
+// email's files when you reply, so parts-with-filename here = attachments on the
+// CURRENT (newest) message — exactly what rule 2 of the skip gate needs. Inline
+// images referenced by the body (Content-Disposition: inline) are excluded.
+function collectAttachments(payload, acc = []) {
+  if (!payload) return acc;
+  const body = payload.body || {};
+  const filename = payload.filename || '';
+  const disp = ((payload.headers || []).find((h) => h.name && h.name.toLowerCase() === 'content-disposition') || {}).value || '';
+  const isInline = /inline/i.test(disp);
+  if (filename && body.attachmentId && !isInline) {
+    acc.push({ filename, mimeType: payload.mimeType || '', size: body.size || 0 });
+  }
+  for (const part of payload.parts || []) collectAttachments(part, acc);
+  return acc;
+}
+
 function stripHtml(html) {
   return String(html)
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -268,6 +286,7 @@ async function getMessage(id) {
   const bodies = collectBodies(data.payload);
   const bodyText = bodies.plain || (bodies.html ? stripHtml(bodies.html) : '');
   const { newest, history } = splitNewest(bodyText);
+  const attachments = collectAttachments(data.payload);
   return {
     id: data.id,
     threadId: data.threadId,
@@ -278,6 +297,8 @@ async function getMessage(id) {
     bodyText,         // full decoded body (newest + quoted history)
     newestText: newest, // just the newest message, for history-scoped rules
     historyText: history,
+    attachments,      // real attachments on the CURRENT message (rule 2)
+    hasAttachment: attachments.length > 0,
     isUnread: (data.labelIds || []).includes('UNREAD'),
   };
 }
@@ -316,5 +337,5 @@ module.exports = {
   modifyMessage,
   markRead,
   // exposed for unit tests
-  _internal: { stripHtml, splitNewest, collectBodies, pickHeaders },
+  _internal: { stripHtml, splitNewest, collectBodies, collectAttachments, pickHeaders },
 };

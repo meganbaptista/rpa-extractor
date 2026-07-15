@@ -15,3 +15,11 @@
 # poller has no AI cost — just a Drive listing — so a tight interval is cheap.)
 [functions."disclosure-watch-poller"]
   schedule = "*/2 * * * *"
+
+# Email Router — the poller scans the intake label and fans new messages out to
+# email-route-background. It only LISTS message ids (no body fetch, no AI) so a
+# tight interval is cheap; the per-message AI cost lives in the consumer and is
+# deduped by the seen store. Inert until EMAIL_ROUTER_ENABLED=true (see the
+# function header), so this schedule is safe to deploy before go-live.
+[functions."email-route-poller"]
+  schedule = "*/5 * * * *"
