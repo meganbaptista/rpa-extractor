@@ -110,7 +110,7 @@ const ROSTER = [
       + 'the newest message: "we have funded" / "released for recording tomorrow" (funding '
       + 'day), "we are confirmed/recorded/closed" (closing day). Agent/broker CLOSING '
       + 'package and closing documents, closing statement / final closing / final '
-      + 'settlement statement, FIRPTA / QS. POF / proof of funds / pre-approval / prequal. '
+      + 'settlement statement, FIRPTA / QS. '
       + 'MLS SOLD copy. Amended/revised commission (the commission amount, from an agent), '
       + 'and commission QUESTIONS or concerns. Lender LOAN-STATUS / loan-progress updates — '
       + 'a "loan update" from the lender: loan approval received, conditions or ICD requested, '
@@ -164,7 +164,10 @@ const ROSTER = [
   {
     name: 'Allana',
     personLabel: 'Allana',
-    handles: 'Purchase contract audits. BRBC (Buyer Representation Agreement). "Completed: '
+    handles: 'Purchase contract audits. BRBC (Buyer Representation Agreement). ALL '
+      + 'pre-qualification / pre-approval / approval letters and PROOF OF FUNDS (POF / '
+      + 'prequal) — including a POF/pre-approval package, or a request to forward or send '
+      + "the buyer's pre-approval letter and/or proof of funds. \"Completed: "
       + 'Please DocuSign — Missed Initials on Purchase Agreement".',
   },
   {
