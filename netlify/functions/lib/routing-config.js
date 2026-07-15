@@ -168,7 +168,7 @@ const ROSTER = [
   {
     name: 'Lovely',
     personLabel: 'Lovely',
-    handles: 'Skyslope checklist updates. Emails from support@planetre.com.',
+    handles: 'Emails from support@planetre.com.',
   },
 ];
 
@@ -216,7 +216,7 @@ const ROUTING_NOTES = [
 // SENDER_ROUTING / ROUTING_NOTES above, then delete the entry here.
 // ---------------------------------------------------------------------------
 // All three source-doc conflicts resolved 2026-07-15: commission question -> Belle,
-// BRBC -> Allana, PlanetRE + Skyslope -> Lovely.
+// BRBC -> Allana, PlanetRE -> Lovely, Skyslope -> Edelyn ("for now").
 const CONFLICTS = [];
 
 // ---------------------------------------------------------------------------
