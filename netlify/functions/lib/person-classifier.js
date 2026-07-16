@@ -83,7 +83,11 @@ RETURN assignee = UNSURE only when the email clearly needs a human but you canno
 Call the assign_person tool with your decision.`;
 }
 
-function buildInput({ subject, from, bodyText, newestText, sideHint, tagLean, labelHints }) {
+function buildInput({ subject, from, bodyText, newestText, sideHint, tagLean, labelHints, attachments }) {
+  const attLine = (attachments && attachments.length)
+    ? 'ATTACHMENT FILENAMES (the filename often names the document type — e.g. "Cancellation", "RR", "AVID", "Addendum", a CAR form code): '
+      + attachments.map((a) => a && a.filename).filter(Boolean).join('; ')
+    : null;
   const sideLine = sideHint
     ? `SIDE we represent on this deal: ${sideHint}`
       + (tagLean
@@ -100,6 +104,7 @@ function buildInput({ subject, from, bodyText, newestText, sideHint, tagLean, la
     `SENDER: ${from || '(unknown)'}`,
     sideLine,
     hintLine,
+    attLine,
     '',
     'NEWEST MESSAGE:',
     (newestText || bodyText || '').trim() || '(empty)',
@@ -159,7 +164,7 @@ async function classify(message, { roster = cfg.ROSTER, side = null, tagLean = n
     return { assignee: UNSURE, person: null, personLabel: null, noTag: false, unsure: true, side: side || 'unknown', confidence: 0, reason: 'roster is empty' };
   }
   const h = message.headers || {};
-  const userText = buildInput({ subject: h.subject, from: h.from, bodyText: message.bodyText, newestText: message.newestText, sideHint: side, tagLean, labelHints });
+  const userText = buildInput({ subject: h.subject, from: h.from, bodyText: message.bodyText, newestText: message.newestText, sideHint: side, tagLean, labelHints, attachments: message.attachments });
   const out = await callClassifier(
     buildSystem(roster, cfg.ROUTING_NOTES, cfg.NO_TAG_RULES),
     buildTool(roster),
