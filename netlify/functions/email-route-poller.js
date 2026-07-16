@@ -21,6 +21,8 @@
 const { getStore } = require('@netlify/blobs');
 const gmail = require('./lib/gmail');
 const cfg = require('./lib/routing-config');
+const dealSide = require('./lib/deal-side');
+const { alert, clearAlert } = require('./lib/alert');
 
 const SEEN_STORE = 'email-router-seen';
 
@@ -79,6 +81,21 @@ async function scanIntake() {
   return summary;
 }
 
+// Alert (throttled) if the deal-side list is configured but broken or empty —
+// so a silently-degraded side lookup (renamed tab, un-shared sheet) doesn't go
+// unnoticed. Clears the throttle when healthy so the next failure alerts promptly.
+async function checkDealListHealth() {
+  const ds = await dealSide.status();
+  if (!ds.configured) return;
+  if (ds.error) {
+    await alert('deal-list', `deals sheet error: ${ds.error}`);
+  } else if (ds.count === 0) {
+    await alert('deal-list', `deals sheet loaded 0 deals from tab(s) [${ds.tabs.join(', ')}] — check the tab names / sharing`);
+  } else {
+    await clearAlert('deal-list');
+  }
+}
+
 exports.handler = async function () {
   if (process.env.EMAIL_ROUTER_ENABLED !== 'true') {
     console.log('[email-router-poller] disabled (set EMAIL_ROUTER_ENABLED=true to run)');
@@ -87,6 +104,7 @@ exports.handler = async function () {
   try {
     const summary = await scanIntake();
     console.log('[email-router-poller]', JSON.stringify(summary));
+    await checkDealListHealth();
     return { statusCode: 200 };
   } catch (err) {
     console.error('[email-router-poller] error:', err.message);
