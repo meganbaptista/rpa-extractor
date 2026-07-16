@@ -81,6 +81,16 @@ const SIDE_TAG_ROUTING = {
   seller: 'Ethan',
 };
 
+// LABEL HINTS — thread/deal labels that strongly suggest a PERSON (a "usually
+// this person" prior fed to the classifier, NOT a hard rule). Distinct from
+// SIDE_TAGS (which carry buyer/seller side): these are direct label->person
+// signals, e.g. a thread carrying a "Request for Repairs" label -> Jill. The
+// classifier follows the hint unless the newest message clearly belongs to
+// someone else. Add category labels here as you find them.
+const LABEL_HINTS = {
+  'Request for Repairs': 'Jill',
+};
+
 // ---------------------------------------------------------------------------
 // SENDER ROUTING — deterministic "this sender always goes to this person".
 // Checked BEFORE the model (a match short-circuits the classifier — no API
@@ -135,7 +145,9 @@ const ROSTER = [
     personLabel: 'JILL✨', // ◀── CONFIRM exact Gmail string (emoji?)
     handles: 'Addendum or contingency-release (CR) requests — "agent asking us to send an '
       + 'addendum", "send a contingency release", CAR ADDENDUM requests. ETA (Extension of '
-      + 'Time Addendum). Cancellation of escrow / cancellations. Purchase price amendment, '
+      + 'Time Addendum). A request to OUTLINE or PROVIDE the INSPECTION PERIOD dates and '
+      + 'relevant timelines — contingency dates, transaction deadlines / timelines (Jill owns '
+      + 'contingency and deadline timelines). Cancellation of escrow / cancellations. Purchase price amendment, '
       + 'purchase price reduction, any change to purchase price or credit. Seller credit '
       + 'addendum. RR / RRRR — request for repairs and seller response to repairs. '
       + 'Contingency removals / releases / CR (including contingency releases delivered to '
@@ -156,7 +168,11 @@ const ROSTER = [
       + 'Someone sending us disclosures FOR THE SELLER to sign. A client response to a '
       + '"Seller Disclosure Package | [address]" email when we are on the SELLER side '
       + '(their message contains a link for sellers to fill out disclosures). "Completed: '
-      + '[Electronic Version] Seller Disclosure Package" from DocuSign.',
+      + '[Electronic Version] Seller Disclosure Package" from DocuSign. '
+      + 'SELLER-SIDE document-status questions: confirming what is still outstanding / needed '
+      + 'on the SELLER\'s file, whether the seller has signed, or where the seller should '
+      + 'find/sign documents (e.g. in DocuSign) — a seller-side file/document audit. (This is '
+      + 'NOT a Purchase Contract Audit, which is Allana.)',
   },
   {
     name: 'Edelyn',
@@ -233,6 +249,7 @@ const NO_TAG_RULES = [
 // ---------------------------------------------------------------------------
 const ROUTING_NOTES = [
   'SENDER TYPE matters. The same words route differently from an Escrow Officer, an Agent, a DocuSign notification, or a Client (buyer/seller). Use the sender to disambiguate.',
+  'The word "AUDIT" splits two ways: a PURCHASE CONTRACT audit (reviewing the RPA/contract itself) -> Allana. A question about what documents are still OUTSTANDING / needed or whether the SELLER has signed / where to find the seller\'s docs -> Ethan (seller-side file/document status). Use the side and what is being audited to tell them apart.',
   'DEAL TYPE comes from the SUBJECT + WHOLE THREAD, not just the newest message. The newest message is the immediate ask; the thread tells you what KIND of deal it is (lease, purchase, listing) and therefore who owns the file. Route by the file owner. Example: a thread whose subject/attachments show a LEASE (Residential Lease, RLMM, month-to-month, "Lease Contract") belongs to Megan even if the newest message is a generic question about compensation, payment, or timing — do not route that to Belle/others on the strength of the newest message alone.',
   'BUYER vs SELLER side flips disclosure routing: buyer-side disclosure work -> Edelyn, seller-side disclosure work -> Ethan. Prefer a side tag if one is present; otherwise infer side from the content.',
   'STRONG PRIOR from sub-labels: if a "Buyer Disclosures" sub-label is present the handler is USUALLY Edelyn; if a "Seller Signed Disclosures" sub-label is present it is USUALLY Ethan. Follow this unless the content clearly indicates a different person.',
@@ -327,6 +344,16 @@ function personForSideTag(side) {
   return side ? (SIDE_TAG_ROUTING[side] || null) : null;
 }
 
+// Person hints implied by a thread's labels: [{ label, person }] for every
+// LABEL_HINTS entry present. Passed to the classifier as strong priors.
+function labelHints(labelNames = []) {
+  const out = [];
+  for (const [label, person] of Object.entries(LABEL_HINTS)) {
+    if (labelsInclude(labelNames, label)) out.push({ label, person });
+  }
+  return out;
+}
+
 module.exports = {
   TENANT,
   LABELS,
@@ -334,6 +361,7 @@ module.exports = {
   CATEGORY_ROUTING,
   SIDE_TAGS,
   SIDE_TAG_ROUTING,
+  LABEL_HINTS,
   SENDER_ROUTING,
   ROSTER,
   NO_TAG_RULES,
@@ -347,4 +375,5 @@ module.exports = {
   personForSender,
   sideFromLabels,
   personForSideTag,
+  labelHints,
 };

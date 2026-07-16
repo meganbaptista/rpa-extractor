@@ -84,9 +84,14 @@ async function route(message, labelNames = [], deps = {}) {
     return decision;
   }
 
-  // BRANCH B — the rulebook classifier. When a side sub-label is present, pass
-  // the person it usually implies (Edelyn/Ethan) as a strong prior.
-  const suggestion = await classify(message, { side, tagLean: config.personForSideTag(side) });
+  // BRANCH B — the rulebook classifier. Pass strong priors from the thread's
+  // labels: buyer/seller side (Edelyn/Ethan) and any label->person hints
+  // (e.g. a "Request for Repairs" thread -> Jill).
+  const suggestion = await classify(message, {
+    side,
+    tagLean: config.personForSideTag(side),
+    labelHints: config.labelHints(labelNames),
+  });
   decision.classifier = suggestion;
 
   // We only ACT on the classifier when it is LIVE and CONFIDENT. In shadow the

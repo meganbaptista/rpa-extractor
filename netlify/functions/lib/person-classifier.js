@@ -83,22 +83,28 @@ RETURN assignee = UNSURE only when the email clearly needs a human but you canno
 Call the assign_person tool with your decision.`;
 }
 
-function buildInput({ subject, from, bodyText, newestText, sideHint, tagLean }) {
+function buildInput({ subject, from, bodyText, newestText, sideHint, tagLean, labelHints }) {
   const sideLine = sideHint
     ? `SIDE (from a sub-label on this email): ${sideHint}`
       + (tagLean ? ` — this sub-label USUALLY means ${tagLean} handles it; follow that unless the content clearly points to someone else.` : '')
     : 'SIDE: not tagged — infer from content if you can.';
+  const hintLine = (labelHints && labelHints.length)
+    ? 'THREAD LABELS suggesting an owner: '
+      + labelHints.map((h) => `"${h.label}" -> usually ${h.person}`).join('; ')
+      + '. Treat as strong priors; follow unless the newest message clearly belongs to someone else.'
+    : null;
   return [
     `SUBJECT: ${subject || '(none)'}`,
     `SENDER: ${from || '(unknown)'}`,
     sideLine,
+    hintLine,
     '',
     'NEWEST MESSAGE:',
     (newestText || bodyText || '').trim() || '(empty)',
     '',
     'THREAD CONTEXT (quoted history, if any):',
     (bodyText || '').trim() || '(empty)',
-  ].join('\n');
+  ].filter((l) => l != null).join('\n');
 }
 
 async function callClassifier(system, tool, userText, note = '', attempt = 0) {
@@ -146,12 +152,12 @@ async function callClassifier(system, tool, userText, note = '', attempt = 0) {
 //   message   — lib/gmail.js getMessage() shape.
 //   opts.side — 'buyer'|'seller' detected from labels (router passes it), or null.
 // Returns { assignee, person, personLabel, noTag, unsure, side, confidence, reason }.
-async function classify(message, { roster = cfg.ROSTER, side = null, tagLean = null, note = '' } = {}) {
+async function classify(message, { roster = cfg.ROSTER, side = null, tagLean = null, labelHints = null, note = '' } = {}) {
   if (!Array.isArray(roster) || roster.length === 0) {
     return { assignee: UNSURE, person: null, personLabel: null, noTag: false, unsure: true, side: side || 'unknown', confidence: 0, reason: 'roster is empty' };
   }
   const h = message.headers || {};
-  const userText = buildInput({ subject: h.subject, from: h.from, bodyText: message.bodyText, newestText: message.newestText, sideHint: side, tagLean });
+  const userText = buildInput({ subject: h.subject, from: h.from, bodyText: message.bodyText, newestText: message.newestText, sideHint: side, tagLean, labelHints });
   const out = await callClassifier(
     buildSystem(roster, cfg.ROUTING_NOTES, cfg.NO_TAG_RULES),
     buildTool(roster),
