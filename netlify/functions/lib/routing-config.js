@@ -106,7 +106,10 @@ const ROSTER = [
       + '"[address] - acceptance", "new file"). Escrow-officer AGENT opening package or '
       + 'BROKER opening package (escrow instructions/general provisions, EMD, NHD/zone '
       + 'report, prelim/preliminary title report, page 16 of RPA / escrow acknowledgement, '
-      + 'commission instructions when NOT amended). Preliminary title report, natural '
+      + 'commission instructions). AMENDED INSTRUCTIONS of any kind issued/returned by the '
+      + 'ESCROW OFFICER — amended escrow instructions, an escrow amendment for a price '
+      + 'reduction, and AMENDED COMMISSION INSTRUCTIONS — all route to Belle (escrow-company '
+      + 'paperwork returned by the escrow officer). Preliminary title report, natural '
       + 'hazards report, HOA docs (and HOA/9A/city-report updates from escrow), 9A / city '
       + 'report / report of residential property records, retrofit / cert of compliance, '
       + 'grant deed, encrypted messages, "your escrow number is ...". EMD/deposit RECEIVED '
@@ -137,8 +140,9 @@ const ROSTER = [
       + 'addendum. RR / RRRR — request for repairs and seller response to repairs. '
       + 'Contingency removals / releases / CR (including contingency releases delivered to '
       + 'us with an attachment). AOAA, buyer vesting / vesting amendment / assignment (AOAA '
-      + 'form). Escrow AMENDMENTS (escrow-company paperwork, e.g. a Glen Oaks escrow header '
-      + 'on top — NOT CAR addendums, but both still route to Jill). RLAS (residential lease '
+      + 'form). A CAR Purchase Price Amendment form or other CONTRACT-side amendment/addendum '
+      + 'requested or sent by an AGENT. (Amended ESCROW INSTRUCTIONS returned by the escrow '
+      + 'officer — escrow-company paperwork — go to Belle, not Jill.) RLAS (residential lease '
       + 'AFTER sale / leaseback / rentback) and SIP (seller in possession / leaseback / '
       + 'rentback).',
   },
@@ -191,8 +195,7 @@ const ROSTER = [
       + 'CDA (commission disbursement authorization) requests. Requests for an MT-BR or '
       + 'MT-LA. Requests to take on new clients / inquiries about our services. TC check / '
       + 'TC fee / Megan check / where to send the check or commission. A QUESTION about '
-      + 'escrow due dates (a plain confirmation of due dates is NO TAG). Amended commission '
-      + 'INSTRUCTIONS from escrow (the "if amended, tag Megan" case).',
+      + 'escrow due dates (a plain confirmation of due dates is NO TAG).',
   },
   {
     name: 'Lovely',
@@ -235,8 +238,8 @@ const ROUTING_NOTES = [
   'STRONG PRIOR from sub-labels: if a "Buyer Disclosures" sub-label is present the handler is USUALLY Edelyn; if a "Seller Signed Disclosures" sub-label is present it is USUALLY Ethan. Follow this unless the content clearly indicates a different person.',
   'VP / VOP / final walk-through: if ATTACHED requesting the SELLER signature -> Ethan; if someone is requesting us to SEND the VP/VOP -> Edelyn.',
   'Disclosures: "for the SELLER to sign" or fully-executed-by-buyer packages we receive -> Ethan; "for the BUYER to sign" (package to send the buyer) -> Edelyn.',
-  'CAR ADDENDUMS (California Association of Realtors forms) and ESCROW AMENDMENTS (escrow-company paperwork, e.g. a Glen Oaks header) are different documents but BOTH route to Jill.',
-  'Commission: the commission AMOUNT / amended-revised commission from an agent -> Belle; a commission QUESTION or concern -> Belle; amended commission INSTRUCTIONS from escrow -> Megan.',
+  'AMENDMENTS split by WHO issues them: amended ESCROW INSTRUCTIONS issued/returned by the ESCROW OFFICER (escrow-company paperwork — amended instructions, an escrow amendment for a price reduction, amended commission instructions) -> Belle. CONTRACT-side amendments on CAR forms requested or sent by an AGENT (CAR addendum, a CAR Purchase Price Amendment form, seller credit addendum, AOAA) -> Jill. So the SAME price reduction is Belle when it arrives as the escrow officer\'s amended instructions, but Jill when an agent sends a CAR Purchase Price Amendment form.',
+  'Commission: the commission AMOUNT / amended-revised commission from an agent -> Belle; a commission QUESTION or concern -> Belle; amended commission INSTRUCTIONS from escrow -> Belle (Belle owns all escrow-officer amended instructions).',
   'Leases: CAR form "LR" -> Megan; but RLAS / SIP (leaseback or seller-in-possession after sale) -> Jill.',
   'Milestone receipts count only when in the NEWEST message (EMD received, funded, recorded/closed) and route to Belle; the same words quoted from an older message do not.',
   'Loan emails split two ways: a lender LOAN-STATUS / progress update (approval received, conditions/ICD requested, appraisal progress, "loan update") -> Belle. But the physical loan DOCS arriving, buyer signing loan docs / scheduling the signing, and a bare appraisal-scheduling email stay NO_TAG.',
