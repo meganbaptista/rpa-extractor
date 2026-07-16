@@ -161,7 +161,10 @@ const ROSTER = [
   {
     name: 'Ethan',
     personLabel: 'Ethan',
-    handles: 'SELLER-SIDE disclosure and signature work. Home-warranty emails. VP / VOP / '
+    handles: 'SELLER-SIDE disclosure and signature work, including the seller\'s Receipt for '
+      + 'Reports (RFR) — signing/acknowledging receipt of the completed reports (this is the '
+      + 'disclosure-flow "Receipt for Reports", NOT a "Request for Repairs", which is Jill). '
+      + 'Home-warranty emails. VP / VOP / '
       + 'final walk-through ATTACHED requesting the SELLER signature. Requesting CAR-form '
       + 'disclosure items for the SELLER to sign (AVID, broker-affiliated disclosures). '
       + 'Someone sending us the package of FULLY EXECUTED disclosures signed by the buyer. '
@@ -226,6 +229,7 @@ const ROSTER = [
 // The classifier returns assignee = NO_TAG when the newest message matches one.
 // ---------------------------------------------------------------------------
 const NO_TAG_RULES = [
+  'MLS LISTING MAINTENANCE that is the listing AGENT\'s job, not ours: removing or editing MLS photos, closing out / withdrawing the MLS listing, updating the MLS with agent names. Our team does not do MLS upkeep, so even a direct "can you take care of this?" request is NO_TAG. (This is DIFFERENT from receiving an "MLS SOLD" copy, which IS Belle.)',
   'SELLER opening package or BUYER opening package (NOT the agent/broker opening package) once escrow is open and the email says "SELLER OPENING" / "BUYER OPENING".',
   '"Loan docs are in / have arrived."',
   'Buyer signing loan docs, notary appointments to sign docs, scheduling the buyer to sign loan docs.',
@@ -256,6 +260,7 @@ const ROUTING_NOTES = [
   'DEAL TYPE comes from the SUBJECT + WHOLE THREAD, not just the newest message. The newest message is the immediate ask; the thread tells you what KIND of deal it is (lease, purchase, listing) and therefore who owns the file. Route by the file owner. Example: a thread whose subject/attachments show a LEASE (Residential Lease, RLMM, month-to-month, "Lease Contract") belongs to Megan even if the newest message is a generic question about compensation, payment, or timing — do not route that to Belle/others on the strength of the newest message alone.',
   'BUYER vs SELLER side flips disclosure routing: buyer-side disclosure work -> Edelyn, seller-side disclosure work -> Ethan. Prefer a side tag if one is present; otherwise infer side from the content.',
   'STRONG PRIOR from sub-labels: if a "Buyer Disclosures" sub-label is present the handler is USUALLY Edelyn; if a "Seller Signed Disclosures" sub-label is present it is USUALLY Ethan. Follow this unless the content clearly indicates a different person.',
+  'The abbreviation "RFR" is AMBIGUOUS — read the context: "Receipt for Reports" (acknowledging/signing receipt of the inspection/disclosure REPORTS — part of the disclosure flow, e.g. "signed the RFR for the reports") routes by disclosure SIDE: seller-side (e.g. a "Seller Signed Disclosures" thread) -> Ethan, buyer-side -> Edelyn. That is DIFFERENT from "Request for Repairs" (RR / RRRR — negotiating repairs) -> Jill. Do not send a Receipt-for-Reports email to Jill.',
   'VP / VOP / final walk-through: if ATTACHED requesting the SELLER signature -> Ethan; if someone is requesting us to SEND the VP/VOP -> Edelyn.',
   'Disclosures: "for the SELLER to sign" or fully-executed-by-buyer packages we receive -> Ethan; "for the BUYER to sign" (package to send the buyer) -> Edelyn.',
   'LETTERHEAD / SOURCE is a strong signal. A document on the ESCROW COMPANY\'s letterhead (escrow instructions, escrow amendments, escrow statements — the escrow office\'s own paperwork) -> Belle. A CAR (California Association of Realtors) form is contract paperwork -> its owner: addenda / amendments -> Jill; disclosures -> Ethan or Edelyn by side.',
