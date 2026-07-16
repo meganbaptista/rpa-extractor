@@ -186,7 +186,12 @@ const ROSTER = [
       + 'CAR-form disclosure items for the BUYER to sign (CAR forms, not escrow documents). '
       + 'Glide link or requesting Glide. Skyslope checklist updates. A client response to a '
       + '"Seller Disclosure Package | [address]" email when we are on the BUYER side (these '
-      + 'carry a Buyer Disclosures tag).',
+      + 'carry a Buyer Disclosures tag). A shared disclosure / property-info packet delivered '
+      + 'via a PORTAL — Disclosures.io, HomeLight, Glide, "shared access to the property '
+      + 'packet", a "REVIEW NOW" notification — route to Edelyn (she clicks through, retrieves '
+      + 'the PDFs, and decides whether to apply the "Disclosures - AI Review" label). This '
+      + 'holds even without a matched deal address; a shared/received packet means we are the '
+      + 'buyer side.',
   },
   {
     name: 'Allana',
