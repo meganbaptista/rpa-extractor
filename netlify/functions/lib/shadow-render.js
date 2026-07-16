@@ -30,7 +30,7 @@ function rows(records) {
       <td class="ctr">${esc(r.branch)}</td>
       <td class="${r.skip ? 'skip' : ''}">${skip}</td>
       <td class="ctr">${esc(r.deciding_rule)}</td>
-      <td class="ctr">${esc(r.side || '')}</td>
+      <td class="ctr">${esc(r.side || '')}${r.sideSource ? `<br><span style="color:#999;font-size:11px">${esc(r.sideSource)}</span>` : ''}</td>
       <td><b>${esc(r.plannedLabel || '')}</b></td>
       <td>${esc(clf(r))}</td>
       <td>${esc(applied)}</td>

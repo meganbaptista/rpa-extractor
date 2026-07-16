@@ -43,7 +43,8 @@ function buildRecord({ message, decision, mode, applied, nowIso }) {
     from: h.from || '',
     branch: decision.branch,      // 'A' | 'B'
     category: decision.category || null,
-    side: decision.side || null,  // 'buyer' | 'seller' | null (from a side tag)
+    side: decision.side || null,  // 'buyer' | 'seller' | null
+    sideSource: decision.sideSource || null, // 'tag' | 'deal-list' | null
     skip: decision.skip,
     deciding_rule: decision.deciding_rule,   // which of the 14 rules drove it
     gate_reason: decision.reason || '',

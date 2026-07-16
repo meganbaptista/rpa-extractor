@@ -25,6 +25,7 @@
 const cfg = require('./routing-config');
 const skipGate = require('./skip-gate');
 const personClassifier = require('./person-classifier');
+const dealSideLookup = require('./deal-side');
 
 // The concrete "clear from the queue" action shared by skip + NO_TAG.
 function clearActions(config) {
@@ -39,10 +40,20 @@ async function route(message, labelNames = [], deps = {}) {
   const config = deps.config || cfg;
   const runSkipGate = deps.runSkipGate || skipGate.runSkipGate;
   const classify = deps.classify || personClassifier.classify;
+  const dealSide = deps.dealSide || dealSideLookup;
 
   const category = config.matchedCategory(labelNames);
   const branch = category ? 'A' : 'B';
-  const side = config.sideFromLabels(labelNames); // 'buyer'|'seller'|null
+
+  // Side signal: prefer a Gmail side tag on the thread; else look up the side we
+  // represent for this deal in the deals sheet (matched by the subject address).
+  const h0 = message.headers || {};
+  let side = config.sideFromLabels(labelNames); // 'buyer'|'seller'|null
+  let sideSource = side ? 'tag' : null;
+  if (!side) {
+    const dealSideVal = await dealSide.sideForSubject(h0.subject);
+    if (dealSideVal) { side = dealSideVal; sideSource = 'deal-list'; }
+  }
 
   const gate = await runSkipGate(message);
 
@@ -50,6 +61,7 @@ async function route(message, labelNames = [], deps = {}) {
     branch,
     category,
     side,
+    sideSource,
     skip: gate.skip,
     deciding_rule: gate.deciding_rule,
     reason: gate.reason,
