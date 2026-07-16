@@ -96,48 +96,88 @@ function addressKeyParts(address) {
   return { num, streetWord };
 }
 
-// deals cache: [{ side, address, num, streetWord }]
-let _deals = { at: 0, list: null };
+// Extract deals from ONE tab's rows (each yearly tab has its own header row).
+function parseTab(rows) {
+  if (!rows || !rows.length) return [];
+  const header = rows[0].map((h) => String(h || '').trim().toLowerCase());
+  const addrHeader = (process.env.DEAL_ADDRESS_HEADER || 'Property Address').toLowerCase();
+  const repHeader = (process.env.DEAL_REP_HEADER || 'Representation').toLowerCase();
+  const ai = header.indexOf(addrHeader) >= 0 ? header.indexOf(addrHeader) : header.findIndex((h) => h.includes('address'));
+  const ri = header.indexOf(repHeader) >= 0 ? header.indexOf(repHeader) : header.findIndex((h) => h.includes('represent'));
+  if (ai < 0 || ri < 0) {
+    console.warn(`[deal-side] address/representation columns not found in header: ${JSON.stringify(rows[0])}`);
+    return [];
+  }
+  const out = [];
+  for (const row of rows.slice(1)) {
+    const side = normalizeSide(row[ri]);
+    const address = row[ai];
+    if (!side || !address) continue;
+    const parts = addressKeyParts(address);
+    if (!parts) continue;
+    out.push({ side, address, num: parts.num, streetWord: parts.streetWord });
+  }
+  return out;
+}
+
+// Which tabs to read. Explicit DEALS_SHEET_TAB wins; otherwise the CURRENT and
+// PREVIOUS calendar year (e.g. "2026","2025"), so the yearly rollover is
+// automatic — no reminder needed — as long as each year's tab is the 4-digit
+// year. Only tabs that actually exist are returned. DEALS_YEAR_TABS=false pins
+// to the first tab (legacy single-tab behavior).
+function targetTabs(existingTabs) {
+  const explicit = process.env.DEALS_SHEET_TAB;
+  if (explicit) return existingTabs.includes(explicit) ? [explicit] : [];
+  if (process.env.DEALS_YEAR_TABS === 'false') return existingTabs.slice(0, 1);
+  const year = new Date().getFullYear();
+  return [String(year), String(year - 1)].filter((t) => existingTabs.includes(t));
+}
+
+async function listTabs(id, token) {
+  const res = await fetch(`${SHEETS_API}/${id}?fields=sheets.properties.title`, { headers: { Authorization: `Bearer ${token}` } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`deals sheet meta failed (${res.status}): ${JSON.stringify(data).slice(0, 200)}`);
+  return (data.sheets || []).map((s) => s.properties && s.properties.title).filter(Boolean);
+}
+
+// deals cache: { list: [...], tabs: [...], count, error }
+let _deals = { at: 0, list: null, tabs: [], count: 0, error: null };
 
 async function loadDeals() {
   const now = Date.now();
   if (_deals.list && now - _deals.at < DEAL_TTL_MS) return _deals.list;
+
+  const reset = (patch) => { _deals = { at: now, list: [], tabs: [], count: 0, error: null, ...patch }; return _deals.list; };
   const id = process.env.DEALS_SHEET_ID;
-  if (!id) { _deals = { at: now, list: [] }; return _deals.list; }
+  if (!id) return reset({});
   const token = await getToken();
-  if (!token) { _deals = { at: now, list: [] }; return _deals.list; }
+  if (!token) return reset({ error: 'no GOOGLE_SA_JSON' });
 
-  const tab = process.env.DEALS_SHEET_TAB;
-  const range = tab ? `${tab}!A1:Z5000` : 'A1:Z5000';
-  const res = await fetch(`${SHEETS_API}/${id}/values/${encodeURIComponent(range)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`deals sheet read failed (${res.status}): ${JSON.stringify(data).slice(0, 200)}`);
-  const rows = data.values || [];
-  if (!rows.length) { _deals = { at: now, list: [] }; return _deals.list; }
+  try {
+    const existing = await listTabs(id, token);
+    const tabs = targetTabs(existing);
+    if (!tabs.length) return reset({ error: `no matching tab (have: ${existing.join(', ')})` });
 
-  const header = rows[0].map((h) => String(h || '').trim().toLowerCase());
-  const addrHeader = (process.env.DEAL_ADDRESS_HEADER || 'Property Address').toLowerCase();
-  const repHeader = (process.env.DEAL_REP_HEADER || 'Representation').toLowerCase();
-  const ai = header.findIndex((h) => h === addrHeader) >= 0 ? header.indexOf(addrHeader) : header.findIndex((h) => h.includes('address'));
-  const ri = header.findIndex((h) => h === repHeader) >= 0 ? header.indexOf(repHeader) : header.findIndex((h) => h.includes('represent'));
+    const ranges = tabs.map((t) => `ranges=${encodeURIComponent(`${t}!A1:Z5000`)}`).join('&');
+    const res = await fetch(`${SHEETS_API}/${id}/values:batchGet?${ranges}`, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`deals batchGet failed (${res.status}): ${JSON.stringify(data).slice(0, 200)}`);
 
-  const list = [];
-  if (ai >= 0 && ri >= 0) {
-    for (const row of rows.slice(1)) {
-      const side = normalizeSide(row[ri]);
-      const address = row[ai];
-      if (!side || !address) continue;
-      const parts = addressKeyParts(address);
-      if (!parts) continue;
-      list.push({ side, address, num: parts.num, streetWord: parts.streetWord });
-    }
-  } else {
-    console.warn(`[deal-side] could not find address/representation columns in header: ${JSON.stringify(rows[0])}`);
+    const list = [];
+    for (const vr of data.valueRanges || []) list.push(...parseTab(vr.values));
+    _deals = { at: now, list, tabs, count: list.length, error: null };
+    return list;
+  } catch (err) {
+    return reset({ error: err.message });
   }
-  _deals = { at: now, list };
-  return list;
+}
+
+// Health: { configured, tabs, count, error } — surfaced in the dry-run so a
+// broken/empty deal list is visible without a separate check.
+async function status() {
+  if (!process.env.DEALS_SHEET_ID) return { configured: false, tabs: [], count: 0, error: null };
+  await loadDeals();
+  return { configured: true, tabs: _deals.tabs, count: _deals.count, error: _deals.error };
 }
 
 // The side we represent for the deal this subject refers to, or null. Matches by
@@ -163,4 +203,4 @@ async function sideForSubject(subject) {
   }
 }
 
-module.exports = { sideForSubject, _internal: { normalizeSide, addressKeyParts, loadDeals } };
+module.exports = { sideForSubject, status, _internal: { normalizeSide, addressKeyParts, loadDeals, targetTabs, parseTab } };

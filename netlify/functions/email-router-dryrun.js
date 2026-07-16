@@ -33,6 +33,7 @@ const cfg = require('./lib/routing-config');
 const router = require('./lib/email-router');
 const shadowLog = require('./lib/shadow-log');
 const render = require('./lib/shadow-render');
+const dealSide = require('./lib/deal-side');
 
 async function labelNamesFor(labelIds, allLabels) {
   if (!labelIds || !labelIds.length) return [];
@@ -91,9 +92,15 @@ exports.handler = async function (event) {
   if (q.format === 'json') {
     return { statusCode: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ count: records.length, note: errorNote, records }, null, 2) };
   }
+  const ds = await dealSide.status();
+  const dealNote = !ds.configured
+    ? 'Deal-side list: not configured (set DEALS_SHEET_ID).'
+    : ds.error
+      ? `Deal-side list: ERROR — ${ds.error}`
+      : `Deal-side list: ${ds.count} deals from tab(s) [${ds.tabs.join(', ')}].`;
   const html = render.page(records, {
     title: `Email Router — dry run (${scored})`,
-    note: `Re-scored live against the current rules. Nothing applied, nothing marked read, seen-store ignored. ${errorNote}`,
+    note: `Re-scored live against the current rules. Nothing applied, nothing marked read, seen-store ignored. ${dealNote} ${errorNote}`,
     empty: `Nothing matched ${scored}.`,
   });
   return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: html };
