@@ -18,6 +18,7 @@
 // SETUP (Megan):
 //   1. Share the "MTC INFORMATION" sheet as VIEWER with the service-account
 //      email (the client_email inside GOOGLE_SA_JSON).
+//   2. Netlify env: DEALS_SHEET_ID = the id from the sheet URL
 //      (…/spreadsheets/d/<THIS>/edit). Optional: DEALS_SHEET_TAB (the tab name,
 //      if the deals aren't on the first tab), DEAL_ADDRESS_HEADER (default
 //      "Property Address"), DEAL_REP_HEADER (default "Representation").
