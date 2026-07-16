@@ -109,7 +109,11 @@ async function callClassifier(system, tool, userText, note = '', attempt = 0) {
   const body = {
     model: cfg.CLASSIFIER.model,
     max_tokens: 1024,
-    system,
+    // Prompt caching: the rulebook system prompt is identical on every call, so
+    // mark it cacheable. The breakpoint on the system block caches the static
+    // prefix (tool schema + rulebook); only the per-email body pays full price.
+    // Cache hits bill at ~10% of input — a big cut once emails arrive in bursts.
+    system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
     tools: [tool],
     tool_choice: { type: 'tool', name: tool.name },
     messages: [{ role: 'user', content: userText }],

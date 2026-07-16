@@ -135,7 +135,10 @@ async function callGate(userText, note = '', attempt = 0) {
     body: JSON.stringify({
       model: GATE.model,
       max_tokens: 1024,
-      system: RULES,
+      // Cache the 14-rule system prompt (static across calls). On Haiku the gate
+      // is already near-free; caching just trims it further when it clears the
+      // model's minimum cacheable length (short prompts are silently uncached).
+      system: [{ type: 'text', text: RULES, cache_control: { type: 'ephemeral' } }],
       tools: [DECISION_TOOL],
       tool_choice: { type: 'tool', name: DECISION_TOOL.name },
       messages: [{ role: 'user', content: userText }],
