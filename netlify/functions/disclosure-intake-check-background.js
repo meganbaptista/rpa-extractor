@@ -709,6 +709,17 @@ const ANSWER_REVIEW_PROMPT =
   'Section 2 boxes are not checked and Section 3 is not completed; please complete Section 2, mark Section 3A, ' +
   'select a Section 3C option, and resend the FHDS". Do NOT flag an FHDS that is fully completed, and do NOT raise ' +
   'this if no FHDS is in the package.\n' +
+  'ALSO check TDS SECTION III (the Agent\'s Inspection Disclosure block for the agent/broker REPRESENTING THE SELLER — ' +
+  'the listing agent; this is the TDS\'s own Section III, NOT a separate AVID form). It is complete only when exactly ' +
+  'ONE of its three boxes is checked: (1) "See attached Agent Visual Inspection Disclosure (AVID Form)", (2) "Agent ' +
+  'notes no items for disclosure", or (3) "Agent notes the following items". If a TDS is present but NONE of the ' +
+  'three Section III boxes is checked, raise a flag: "form":"TDS", "item":"Section III", "issue":"verify_mismatch", ' +
+  '"reason" = a complete request sentence, e.g. "the TDS is present but Section III (the listing agent\'s Inspection ' +
+  'Disclosure) has none of its three boxes checked; please have the listing agent complete Section III (check the ' +
+  'AVID box, \'notes no items for disclosure\', or \'notes the following items\') and resend the TDS". Do NOT flag ' +
+  'Section IV (the Agent Obtaining the Offer block) as incomplete — on a buyer-represented deal that block is ' +
+  'completed by our side later and is expected to be blank. Do NOT raise this if a Section III box is already ' +
+  'checked, and do NOT raise it if no TDS is in the package.\n' +
   'ALSO inspect the SELLER signature block(s) on the signed disclosure forms (TDS, SPQ, SBSA and similar). The pre-' +
   'printed party name on a form (the typed "Seller" name line, which is often a trust or LLC) is NOT the signature ' +
   'and must NEVER by itself trigger this flag. Judge ONLY by how the seller actually SIGNED. Raise an entity_signer ' +
