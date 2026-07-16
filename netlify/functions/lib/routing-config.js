@@ -240,7 +240,7 @@ const NO_TAG_RULES = [
   'Subject line that is just "Split on [address]".',
   'A DocuSign that is NOT completed (we are only copied on delivery, often from an escrow officer).',
   'A Voided DocuSign.',
-  'Inspection SCHEDULING or requests with no report attached or linked (only tag Belle when a report PDF is attached or linked).',
+  'Inspection SCHEDULING — booking/arranging an inspection (no report attached or linked) — is NO_TAG. But a request to SEND or PROVIDE a COPY of an inspection report is NOT NO_TAG (see the routing note on document-copy requests).',
 ];
 
 // ---------------------------------------------------------------------------
@@ -249,6 +249,7 @@ const NO_TAG_RULES = [
 // ---------------------------------------------------------------------------
 const ROUTING_NOTES = [
   'SENDER TYPE matters. The same words route differently from an Escrow Officer, an Agent, a DocuSign notification, or a Client (buyer/seller). Use the sender to disambiguate.',
+  'DOCUMENT-COPY REQUESTS are ACTIONABLE, never NO_TAG: a request to SEND / PROVIDE a copy of a document we may have on file (an inspection report, work order, receipt, disclosure, etc.) needs someone to check the file and send it. Route it — an inspection-report copy -> Belle; a disclosure -> Edelyn/Ethan by side. If the email is a jumble of asks or has no property address to identify the deal/owner, default to Needs Attention (a human triages). Do NOT mark it NO_TAG just because it also mentions inspection scheduling.',
   'SIDE from the counterparty\'s own words: when the SENDER (the opposing agent/broker) refers to "MY seller" / "my listing" / "the seller I represent", THEY are on the seller side, so WE are on the BUYER side -> buyer-side routing (e.g. an AVID/disclosure -> Edelyn). If they say "MY buyer", we are the SELLER side -> Ethan. This is a reliable side signal when present, and beats guessing from a document\'s name.',
   'An AVID (Agent Visual Inspection Disclosure) sent "for signatures" routes by WHO must SIGN it, which follows the side we represent: needs the SELLER\'s signature -> Ethan; needs the BUYER\'s signature -> Edelyn. The document name ("Buyer Agent AVID", "Selling Agent AVID") refers to who PREPARED it, NOT which side signs — do NOT route on the name. If the side is known (side tag or deal list), use it.',
   'The word "AUDIT" splits two ways: a PURCHASE CONTRACT audit (reviewing the RPA/contract itself) -> Allana. A question about what documents are still OUTSTANDING / needed or whether the SELLER has signed / where to find the seller\'s docs -> Ethan (seller-side file/document status). Use the side and what is being audited to tell them apart.',
