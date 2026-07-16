@@ -85,9 +85,11 @@ Call the assign_person tool with your decision.`;
 
 function buildInput({ subject, from, bodyText, newestText, sideHint, tagLean, labelHints }) {
   const sideLine = sideHint
-    ? `SIDE (from a sub-label on this email): ${sideHint}`
-      + (tagLean ? ` — this sub-label USUALLY means ${tagLean} handles it; follow that unless the content clearly points to someone else.` : '')
-    : 'SIDE: not tagged — infer from content if you can.';
+    ? `SIDE we represent on this deal: ${sideHint}`
+      + (tagLean
+        ? ` — a disclosure sub-label is present, which USUALLY means ${tagLean} handles it; follow that unless the content clearly points to someone else.`
+        : ' — use this ONLY to disambiguate buyer vs seller; it does NOT by itself imply a person. Route by the content/document.')
+    : 'SIDE: unknown — infer from content if you can.';
   const hintLine = (labelHints && labelHints.length)
     ? 'THREAD LABELS suggesting an owner: '
       + labelHints.map((h) => `"${h.label}" -> usually ${h.person}`).join('; ')

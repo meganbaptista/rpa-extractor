@@ -155,8 +155,8 @@ const ROSTER = [
       + 'form). A CAR Purchase Price Amendment form or other CONTRACT-side amendment/addendum '
       + 'requested or sent by an AGENT. (Amended ESCROW INSTRUCTIONS returned by the escrow '
       + 'officer — escrow-company paperwork — go to Belle, not Jill.) RLAS (residential lease '
-      + 'AFTER sale / leaseback / rentback) and SIP (seller in possession / leaseback / '
-      + 'rentback).',
+      + 'AFTER sale / leaseback / rentback), SIP (seller in possession / leaseback / '
+      + 'rentback), and IOA (Interim Occupancy Agreement — buyer in possession before close).',
   },
   {
     name: 'Ethan',

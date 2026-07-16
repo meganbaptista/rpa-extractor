@@ -101,7 +101,11 @@ async function route(message, labelNames = [], deps = {}) {
   // (e.g. a "Request for Repairs" thread -> Jill).
   const suggestion = await classify(message, {
     side,
-    tagLean: config.personForSideTag(side),
+    // The Edelyn/Ethan lean only applies when the side came from a DISCLOSURE
+    // sub-label (that label is itself a disclosure signal). Side from the deal
+    // list just means "which side we represent" — it disambiguates buyer/seller
+    // but must NOT bias every buyer-side email toward Edelyn (e.g. an ETA -> Jill).
+    tagLean: sideSource === 'tag' ? config.personForSideTag(side) : null,
     labelHints: config.labelHints(labelNames),
   });
   decision.classifier = suggestion;
