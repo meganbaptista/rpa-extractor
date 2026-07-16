@@ -71,6 +71,10 @@ console.log('[audit-background] module loading (line 1)');
 const { getStore } = require('@netlify/blobs');
 console.log('[audit-background] @netlify/blobs loaded');
 
+// Per-call token ledger -> Google Sheet. Inert without USAGE_SHEET_ID, and every
+// failure is swallowed inside logUsage, so it can never fail an audit.
+const usageLog = require('./lib/usage-log');
+
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 
 // TEST 2: swapped from 'claude-sonnet-4-20250514' to Opus 4.7 to match the
@@ -774,6 +778,12 @@ async function callClaude(prompt, pdfBase64, attempt = 0) {
   }
 
   const data = await response.json();
+
+  // Ledger BEFORE the truncation guard below on purpose: a max_tokens response is
+  // billed in full (thinking tokens included) and then throws, so logging after
+  // the guard would make the most expensive failures the invisible ones -- and a
+  // re-run of this job re-bills them. This is the row that exposes that pattern.
+  await usageLog.logUsage({ fn: 'audit', model: MODEL, effort: 'high', usage: data.usage });
 
   // Truncation guard: with adaptive thinking, thinking tokens consume the same
   // budget as the response. If max_tokens were too small the audit would be

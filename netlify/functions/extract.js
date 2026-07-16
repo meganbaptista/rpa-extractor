@@ -22,6 +22,11 @@ const {
 // Scrubs model-emitted placeholder sentinels ("<UNKNOWN>", "N/A", ...) back to
 // empty string so a missed field reads as honestly blank, not fake-filled.
 const { scrubPlaceholders } = require('./lib/sanitize');
+// Per-call token ledger -> Google Sheet. Inert without USAGE_SHEET_ID, and every
+// failure is swallowed inside logUsage, so it can never fail an extraction. Rows
+// from here carry note 'extract-legacy': this is the OLD direct /extract endpoint,
+// NOT the frontend path, so anything landing here means an external caller.
+const usageLog = require('./lib/usage-log');
 
 // ── PAGE-DETECTION MARKERS ──────────────────────────────────────────────────
 // These two literal strings have been stable in CAR purchase agreement forms
@@ -159,6 +164,7 @@ async function locateRpaPagesViaVision(documents, apiKey) {
     body: JSON.stringify(body)
   });
   const data = await response.json();
+  await usageLog.logUsage({ fn: 'extract-detect', model: body.model, usage: data.usage, note: 'extract-legacy/pdf' });
 
   if (!Array.isArray(data.content)) {
     console.warn('vision page-detection: unexpected response shape, no content array');
@@ -264,6 +270,7 @@ async function locateRpaPagesViaImages(documents, apiKey) {
     body: JSON.stringify(body)
   });
   const data = await response.json();
+  await usageLog.logUsage({ fn: 'extract-detect', model: body.model, usage: data.usage, note: 'extract-legacy/images' });
 
   if (!Array.isArray(data.content)) {
     console.warn('image-locate page-detection: unexpected response shape, no content array');
@@ -574,6 +581,7 @@ exports.handler = async function(event, context) {
       });
 
       const data = await response.json();
+      await usageLog.logUsage({ fn: 'extract-rla', model: 'claude-sonnet-4-6', usage: data.usage, note: 'extract-legacy' });
       return { statusCode: 200, headers, body: JSON.stringify(data) };
     }
 
@@ -601,21 +609,37 @@ exports.handler = async function(event, context) {
       text: 'Extract all required fields from the attached California real estate purchase agreement package by calling the extract_contract_fields tool. Read each field description carefully — they contain specific source-priority and disambiguation rules.'
     }];
 
-    const callApi = (msgContent, tool, model) => fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: model || 'claude-sonnet-4-6',
-        max_tokens: 4096,
-        tools: [tool],
-        tool_choice: { type: "tool", name: tool.name },
-        messages: [{ role: 'user', content: msgContent }]
-      })
-    }).then(r => r.json());
+    // Every extraction call funnels through callApi — the main call, the targeted
+    // trim + its render-retry (lib/targeted-call.js gets this via `deps`), the
+    // image fallback, and the Opus escalation. Logging HERE covers all of them at
+    // one edit point; the tool name is what separates main from targeted, so the
+    // ledger splits them with no plumbing through the call sites.
+    const callApi = (msgContent, tool, model) => {
+      const modelUsed = model || 'claude-sonnet-4-6';
+      return fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: modelUsed,
+          max_tokens: 4096,
+          tools: [tool],
+          tool_choice: { type: "tool", name: tool.name },
+          messages: [{ role: 'user', content: msgContent }]
+        })
+      }).then(r => r.json()).then(async (data) => {
+        await usageLog.logUsage({
+          fn: tool && tool.name === 'extract_contract_fields' ? 'extract-main' : 'extract-targeted',
+          model: modelUsed,
+          usage: data && data.usage,
+          note: 'extract-legacy'
+        });
+        return data;
+      });
+    };
 
     const findToolUse = (resp) => Array.isArray(resp.content)
       ? resp.content.find(b => b.type === 'tool_use')
