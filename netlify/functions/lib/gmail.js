@@ -303,6 +303,21 @@ async function getMessage(id) {
   };
 }
 
+// Union of label ids across ALL messages in a thread. Gmail labels are
+// per-message: a label applied to a thread (e.g. "Buyer Disclosures" at escrow
+// opening) sits on the messages that existed then, and is NOT auto-copied onto
+// new replies. So a fresh message's own labelIds can miss a deal-level label
+// that's clearly on the thread. For routing CONTEXT (side, category) we want the
+// thread's full label set, not just the triggering message's. `format: minimal`
+// returns each message's labelIds without bodies, so this stays cheap.
+async function getThreadLabelIds(threadId) {
+  if (!threadId) return [];
+  const data = await apiGet(`/threads/${encodeURIComponent(threadId)}`, { format: 'minimal' });
+  const ids = new Set();
+  for (const m of data.messages || []) for (const id of (m.labelIds || [])) ids.add(id);
+  return [...ids];
+}
+
 // ----------------------------------------------------------------------------
 // MUTATIONS
 // ----------------------------------------------------------------------------
@@ -333,6 +348,7 @@ module.exports = {
   // messages
   listMessages,
   getMessage,
+  getThreadLabelIds,
   // mutations
   modifyMessage,
   markRead,

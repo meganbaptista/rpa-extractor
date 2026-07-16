@@ -19,9 +19,13 @@
 // it costs a little each run. Processes messages in parallel and caps the count
 // so a browser-facing (synchronous) call returns within the function timeout.
 //
-//   HTML (default): /.netlify/functions/email-router-dryrun
-//   JSON:           /.netlify/functions/email-router-dryrun?format=json
-//   Cap:            /.netlify/functions/email-router-dryrun?limit=10   (default 20)
+//   HTML (default):   /.netlify/functions/email-router-dryrun
+//   JSON:             /.netlify/functions/email-router-dryrun?format=json
+//   Cap:              /.netlify/functions/email-router-dryrun?limit=10   (default 20)
+//   Score a LABEL:    /.netlify/functions/email-router-dryrun?label=Buyer Disclosures
+//   Score a SEARCH:   /.netlify/functions/email-router-dryrun?q=subject:"600 W California"
+// Default scores the INTAKE - REVIEW queue. ?label= / ?q= let you re-score any
+// mail (e.g. a message that already left the queue) to test routing on demand.
 // ============================================================================
 
 const gmail = require('./lib/gmail');
@@ -43,16 +47,31 @@ exports.handler = async function (event) {
 
   let records = [];
   let errorNote = '';
+  let scored = `the ${cfg.LABELS.intake} queue`;
   try {
-    const intakeId = await gmail.labelId(cfg.LABELS.intake);
     const allLabels = await gmail.listLabels();
-    const msgs = await gmail.listMessages({ labelIds: [intakeId] });
+    // What to score: a Gmail search (?q=), a named label (?label=), or the
+    // default INTAKE - REVIEW queue.
+    let listOpts;
+    if (q.q) {
+      listOpts = { q: q.q };
+      scored = `search "${q.q}"`;
+    } else if (q.label) {
+      listOpts = { labelIds: [await gmail.labelId(q.label)] };
+      scored = `label "${q.label}"`;
+    } else {
+      listOpts = { labelIds: [await gmail.labelId(cfg.LABELS.intake)] };
+    }
+    const msgs = await gmail.listMessages(listOpts);
     const slice = msgs.slice(0, limit);
 
     records = await Promise.all(slice.map(async (m) => {
       try {
         const message = await gmail.getMessage(m.id);
-        const labelNames = await labelNamesFor(message.labelIds, allLabels);
+        // Read the THREAD's labels for routing context (deal-level side/category
+        // labels aren't copied onto fresh replies) — same as the live consumer.
+        const threadLabelIds = await gmail.getThreadLabelIds(message.threadId);
+        const labelNames = await labelNamesFor(threadLabelIds, allLabels);
         const decision = await router.route(message, labelNames);
         // Build the same record shape the viewer renders; applied stays null
         // because a dry run never applies anything.
@@ -73,9 +92,9 @@ exports.handler = async function (event) {
     return { statusCode: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ count: records.length, note: errorNote, records }, null, 2) };
   }
   const html = render.page(records, {
-    title: 'Email Router — dry run (current INTAKE - REVIEW queue)',
+    title: `Email Router — dry run (${scored})`,
     note: `Re-scored live against the current rules. Nothing applied, nothing marked read, seen-store ignored. ${errorNote}`,
-    empty: 'The INTAKE - REVIEW queue is empty (or the label was not found).',
+    empty: `Nothing matched ${scored}.`,
   });
   return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: html };
 };

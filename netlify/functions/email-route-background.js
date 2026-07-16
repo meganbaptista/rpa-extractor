@@ -76,7 +76,11 @@ exports.handler = async function (event) {
 
   try {
     const message = await gmail.getMessage(messageId);
-    const labelNames = await labelNamesFor(message.labelIds);
+    // Routing context (side / category) is deal-level, so read the THREAD's
+    // labels, not just this message's — a deal-level label (e.g. Buyer
+    // Disclosures) set on an older message won't be on a fresh reply.
+    const threadLabelIds = await gmail.getThreadLabelIds(message.threadId);
+    const labelNames = await labelNamesFor(threadLabelIds);
 
     const decision = await router.route(message, labelNames);
 

@@ -64,7 +64,11 @@ const CATEGORY_ROUTING = {
 // ---------------------------------------------------------------------------
 const SIDE_TAGS = {
   buyer: ['Buyer Disclosures'],
-  seller: ['Seller Signed Disclosures'],
+  // Both seller-side disclosure stages route to Ethan: "MEGAN/Seller Disclosures"
+  // is completing disclosures WITH the seller; "Seller Signed Disclosures" is
+  // sending the signed disclosures to the buyer's agent. (Nested label paths are
+  // matched by exact name or as a "/leaf" suffix.)
+  seller: ['Seller Signed Disclosures', 'MEGAN/Seller Disclosures'],
 };
 
 // Whom a present side sub-label USUALLY means. Passed to the classifier as a
