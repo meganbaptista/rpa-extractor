@@ -233,6 +233,7 @@ const NO_TAG_RULES = [
   'SELLER opening package or BUYER opening package (NOT the agent/broker opening package) once escrow is open and the email says "SELLER OPENING" / "BUYER OPENING".',
   '"Loan docs are in / have arrived."',
   'Buyer signing loan docs, notary appointments to sign docs, scheduling the buyer to sign loan docs.',
+  'NOTARY appointments and scheduling of ANY kind — escrow (or anyone) coordinating with the client to book, confirm, reschedule, or arrange a notary signing (time, date, location, mobile notary). ALWAYS NO_TAG; our team takes no action on notary scheduling (a big email clog).',
   'ESTIMATED closing statement (must be estimated, not final).',
   'Appraisal has been scheduled, or reaching out to schedule the appraisal.',
   'Wire instructions / deposit instructions.',
