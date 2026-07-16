@@ -28,19 +28,21 @@ function store() {
 // Fire an alert for `key`, at most once per throttle window. `key` groups a
 // recurring condition (e.g. "deal-list") so it doesn't spam. Returns whether it
 // actually sent this time.
-async function alert(key, message, { throttleMs = DEFAULT_THROTTLE_MS } = {}) {
+async function alert(key, message, { throttleMs = DEFAULT_THROTTLE_MS, force = false } = {}) {
   const line = `[ROUTER ALERT] ${key}: ${message}`;
   try { console.error(line); } catch (_) { /* noop */ }
 
   const now = Date.now();
   let s;
-  try {
-    s = store();
-    const last = await s.get(`${key}`);
-    if (last && now - Number(last) < throttleMs) return false; // within window, already alerted
-  } catch (err) {
-    // If the throttle store is unreachable, still try to send (better a dup than silence).
-    console.warn(`[alert] throttle read failed: ${err.message}`);
+  if (!force) {
+    try {
+      s = store();
+      const last = await s.get(`${key}`);
+      if (last && now - Number(last) < throttleMs) return false; // within window, already alerted
+    } catch (err) {
+      // If the throttle store is unreachable, still try to send (better a dup than silence).
+      console.warn(`[alert] throttle read failed: ${err.message}`);
+    }
   }
 
   const url = process.env.ALERT_WEBHOOK_URL;
@@ -49,14 +51,22 @@ async function alert(key, message, { throttleMs = DEFAULT_THROTTLE_MS } = {}) {
       await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: 'email-router', key, message, at: new Date().toISOString() }),
+        // `text` renders directly in a Slack incoming webhook; the structured
+        // fields are there for a Zapier catch-hook to map into an email/Slack.
+        body: JSON.stringify({
+          text: `🚨 Email Router alert — ${key}: ${message}`,
+          source: 'email-router',
+          key,
+          message,
+          at: new Date().toISOString(),
+        }),
       });
     } catch (err) {
       console.warn(`[alert] webhook POST failed: ${err.message}`);
     }
   }
 
-  try { if (s) await s.set(`${key}`, String(now)); } catch (_) { /* noop */ }
+  try { if (!force) { s = s || store(); await s.set(`${key}`, String(now)); } } catch (_) { /* noop */ }
   return true;
 }
 

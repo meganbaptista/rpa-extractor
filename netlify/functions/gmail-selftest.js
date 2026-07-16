@@ -15,8 +15,23 @@
 
 const gmail = require('./lib/gmail');
 const cfg = require('./lib/routing-config');
+const { alert } = require('./lib/alert');
 
-exports.handler = async function () {
+exports.handler = async function (event) {
+  const q = (event && event.queryStringParameters) || {};
+
+  // ?testAlert=1 — fire a one-off test alert (bypasses throttle) so you can
+  // confirm ALERT_WEBHOOK_URL delivers to your email/Slack.
+  if (q.testAlert) {
+    const hasUrl = !!process.env.ALERT_WEBHOOK_URL;
+    await alert('test', 'Test alert from gmail-selftest — if you see this, your webhook works.', { force: true });
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sentTestAlert: true, webhookConfigured: hasUrl, note: hasUrl ? 'Check your email/Slack.' : 'ALERT_WEBHOOK_URL is not set — only the function log got it.' }, null, 2),
+    };
+  }
+
   const out = { ok: false, mailbox: null, checks: {} };
   try {
     out.mailbox = gmail.subject(); // throws if GMAIL_IMPERSONATE_SUBJECT unset
