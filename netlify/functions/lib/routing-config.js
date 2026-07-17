@@ -296,7 +296,7 @@ const NO_TAG_RULES = [
   'Third-party deposit form.',
   'CONFIRMING escrow due dates (only a confirmation — a QUESTION about due dates goes to Megan).',
   'Notice to Perform PDF received (no action beyond filing to drive).',
-  'A routine incoming CDA DOCUMENT delivery from Marie Maravillas (csfinance@ciresocal.com, a Christie\'s commission specialist) whose only purpose is to DELIVER an attached CDA (e.g. subject "CDA - [address]", body just "please find the attached CDA", no question or request) is a no-action document drop (file to drive) -> NO_TAG, even though it carries the CDA attachment. This applies ONLY to csfinance@ciresocal.com simply attaching a finished CDA; a CDA REQUEST, a request to prepare or modify a CDA, or a CDA question still goes to Megan.',
+  'A routine incoming CDA DOCUMENT delivery from Christie\'s commission finance (csfinance@ciresocal.com or jennifer@ciresocal.com) whose only purpose is to DELIVER an attached CDA (e.g. subject "CDA - [address]", body just "please find the attached CDA", no question or request) is a no-action document drop (file to drive) -> NO_TAG, even though it carries the CDA attachment. This applies ONLY to csfinance@ciresocal.com or jennifer@ciresocal.com simply attaching a finished CDA; a CDA REQUEST, a request to prepare or modify a CDA, or a CDA question still goes to Megan.',
   'Accepted calendar invite.',
   'Automatic Reply / Out of Office.',
   'Subject line that is just "Split on [address]".',
