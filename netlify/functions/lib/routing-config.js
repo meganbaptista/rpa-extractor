@@ -51,7 +51,14 @@ const SKIP_BEHAVIOR = {
 // labels that ALONE decide the person with no content judgment needed.
 // ---------------------------------------------------------------------------
 const CATEGORY_ROUTING = {
-  // '<CATEGORY LABEL>': '<PERSON>',
+  // '<GMAIL LABEL ON THE THREAD>': '<GMAIL LABEL TO APPLY>'. A thread carrying the
+  // key routes deterministically (Branch A) to the mapped person, bypassing the AI
+  // classifier — but the skip gate still runs first, so a plain "thanks/received"
+  // on one of these threads is SKIPPED (marked read, no label) and never reaches
+  // Needs Attention. Net: these threads can only be cleared or land on the right
+  // person; Needs Attention is off the table for them.
+  'VP Buyer': 'Edelyn',   // buyer-side final walk-through (VP) -> always Edelyn
+  'VP Seller': 'Ethan',   // seller-side final walk-through (VP) -> always Ethan
 };
 
 // ---------------------------------------------------------------------------
