@@ -74,7 +74,9 @@ AND there is no new task, no question, no request, and NO attachment, then retur
 
 13. If the thread subject contains "DocuSign Package" and the newest email is a simple acknowledgment confirming they received or will complete the DocuSign — such as "will do", "will do so now", "got them", "ok got it", "on it", "will sign now", "thank you" — return skip_assignment = true. These are courtesy confirmations that the recipient received Megan's outbound DocuSign request and no further action is needed until the signed documents are returned via DocuSign notification.
 
-14. If the newest email is a simple thank you or courtesy reply from a third party responding to another third party (not to Megan or My TC Concierge directly), and Megan is only CC'd on the thread, return skip_assignment = true. If the conversation is between other parties and requires no direct action from Megan's team, it can be skipped. This holds EVEN IF the reply confirms a substantive fact (such as a loan amount or a figure) — being only CC'd on a confirmation between other parties (escrow, agent, lender) is skippable, UNLESS it is a milestone OUR team must log per Rule 7 (e.g. EMD/funds received, funded, recorded).`;
+14. If the newest email is a simple thank you or courtesy reply from a third party responding to another third party (not to Megan or My TC Concierge directly), and Megan is only CC'd on the thread, return skip_assignment = true. If the conversation is between other parties and requires no direct action from Megan's team, it can be skipped. This holds EVEN IF the reply confirms a substantive fact (such as a loan amount or a figure) — being only CC'd on a confirmation between other parties (escrow, agent, lender) is skippable, UNLESS it is a milestone OUR team must log per Rule 7 (e.g. EMD/funds received, funded, recorded).
+
+15. If the newest email is an agent, transaction coordinator, escrow/title officer, or other industry contact ANNOUNCING that they have joined a NEW BROKERAGE or company, changed roles, or shared NEW CONTACT INFO — e.g. "Guess who's back", "I landed at [company]", "I've joined [brokerage]", "my new email/number is", "excited to be at [firm]" — return skip_assignment = false. Even though it reads like a no-task courtesy note (Rule 1), it is a relationship/contact update the team wants to see and log, so it must NOT be skipped.`;
 
 // The forced-output tool. Same fields the owner's master returns, plus deciding_rule.
 const DECISION_TOOL = {
@@ -90,8 +92,8 @@ const DECISION_TOOL = {
       deciding_rule: {
         type: 'integer',
         minimum: 1,
-        maximum: 14,
-        description: 'The rule number (1–14) that MOST directly drove this decision. '
+        maximum: 15,
+        description: 'The rule number (1–15) that MOST directly drove this decision. '
           + 'If several apply, pick the single most decisive one. If nothing specific '
           + 'matched and you defaulted, use 6 (the "if unsure" default) for skip=false, '
           + 'or 1 for a plain non-actionable acknowledgment skip=true.',

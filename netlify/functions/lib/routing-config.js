@@ -221,7 +221,10 @@ const ROSTER = [
       + 'CDA (commission disbursement authorization) requests. Requests for an MT-BR or '
       + 'MT-LA. Requests to take on new clients / inquiries about our services. TC check / '
       + 'TC fee / Megan check / where to send the check or commission. A QUESTION about '
-      + 'escrow due dates (a plain confirmation of due dates is NO TAG).',
+      + 'escrow due dates (a plain confirmation of due dates is NO TAG). '
+      + 'An agent, TC, escrow/title officer, or other industry contact ANNOUNCING a new brokerage / '
+      + 'new company / new role / new contact info (a "guess who\'s back" / "I landed at [company]" / '
+      + '"my new email is" note) -> Megan (relationship / contact update, so we log where they went).',
   },
   {
     name: 'Lovely',
