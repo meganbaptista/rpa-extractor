@@ -347,11 +347,13 @@ const GATE = {
 
 const CLASSIFIER = {
   mode: 'shadow', // 'shadow' = log the would-be person, still apply Needs Attention | 'live'
-  // Opus for the rulebook: it's a nuanced, sender/side-aware classification and
-  // shadow mode makes accuracy (not cost) the priority. Drop to Haiku later if
-  // shadow shows it's accurate enough.
-  model: 'claude-opus-4-8',
-  effort: 'medium',
+  // Haiku trial (started 2026-07-17): Opus routed accurately across 200+ shadow
+  // emails but costs ~5x Haiku, which made the whole conversion a net loss vs the
+  // Zapier savings. Running Haiku in shadow for a day to compare its accuracy
+  // against Belle's actual labels. Revert model to 'claude-opus-4-8' if Haiku
+  // misroutes materially.
+  model: 'claude-haiku-4-5',
+  effort: 'medium', // log-only (the ledger's Effort column); NOT sent to the API — Haiku ignores effort
   confidenceThreshold: 0.7,
 };
 
