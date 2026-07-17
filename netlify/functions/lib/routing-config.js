@@ -347,13 +347,15 @@ const GATE = {
 
 const CLASSIFIER = {
   mode: 'shadow', // 'shadow' = log the would-be person, still apply Needs Attention | 'live'
-  // Haiku trial (started 2026-07-17): Opus routed accurately across 200+ shadow
-  // emails but costs ~5x Haiku, which made the whole conversion a net loss vs the
-  // Zapier savings. Running Haiku in shadow for a day to compare its accuracy
-  // against Belle's actual labels. Revert model to 'claude-opus-4-8' if Haiku
-  // misroutes materially.
-  model: 'claude-haiku-4-5',
-  effort: 'medium', // log-only (the ledger's Effort column); NOT sent to the API — Haiku ignores effort
+  // Model: Opus. Haiku trial (2026-07-17) was rejected — in the shadow day it made
+  // 2 CONFIDENT misroutes to the wrong person (should-be-Ethan -> Jill@0.95,
+  // should-be-Jill -> Allana@0.85), which is the one failure the confidence gate
+  // can't catch (high-confidence wrong answers sail past the threshold). Opus
+  // routed cleanly across 200+. Opus costs ~5x Haiku, but dropping Zapier to the
+  // 50k tier once labeling moves in-house more than covers it, so Opus is net
+  // cost-positive AND accurate.
+  model: 'claude-opus-4-8',
+  effort: 'medium', // log-only (the ledger's Effort column); not sent to the API
   confidenceThreshold: 0.7,
 };
 
