@@ -59,6 +59,15 @@ const CATEGORY_ROUTING = {
   // person; Needs Attention is off the table for them.
   'VP Buyer': 'Edelyn',   // buyer-side final walk-through (VP) -> always Edelyn
   'VP Seller': 'Ethan',   // seller-side final walk-through (VP) -> always Ethan
+  // DISCLOSURE sub-labels -> the side's disclosure person, deterministically. The
+  // classifier kept side-flipping these when the SUBJECT named the other side (e.g.
+  // a buyer-side thread whose subject reads "... Seller Disclosures"), so route by
+  // the label, not the AI's guess. Buyer labels -> Edelyn, seller labels -> Ethan.
+  // (Match the EXACT Gmail label string, incl. any nested path like "MEGAN/...".)
+  'Buyer Disclosures': 'Edelyn',
+  'Buyer Signed Disclosures': 'Edelyn',
+  'Seller Signed Disclosures': 'Ethan',
+  'MEGAN/Seller Disclosures': 'Ethan',
 };
 
 // ---------------------------------------------------------------------------

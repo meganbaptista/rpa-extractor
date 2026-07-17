@@ -50,17 +50,25 @@ async function route(message, labelNames = [], deps = {}) {
   const category = config.matchedCategory(labelNames);
   const branch = category ? 'A' : 'B';
 
-  // ALREADY-ASSIGNED short-circuit: if the thread already carries a person label,
-  // someone owns it — clear this message (mark read, drop from intake, keep the
-  // existing person label, add no new tag) WITHOUT spending a skip-gate or
-  // classifier call. Cuts the long tail of replies on threads that are already
-  // routed. The person labels come from the ROSTER, so this stays in sync as the
-  // team changes. (Needs Attention is NOT a person label, so those threads still
-  // get processed.) Runs before the gate/classifier/deal-list lookup on purpose,
-  // to save all three calls.
+  // ALREADY-ASSIGNED short-circuit: if the thread already carries a person label
+  // AND has no category label, someone owns it — clear this message (mark read,
+  // drop from intake, keep the existing person label, add no new tag) WITHOUT
+  // spending a skip-gate or classifier call. Cuts the long tail of replies on
+  // already-routed threads. Person labels come from the ROSTER, so this stays in
+  // sync as the team changes. (Needs Attention is NOT a person label, so those
+  // threads still get processed.)
+  //
+  // The `!category` guard makes CATEGORY_ROUTING (VP, disclosures) AUTHORITATIVE:
+  // a thread with a category label is NOT short-circuited, so it always flows to
+  // Branch A and (re)applies the category's person — even if the thread is already
+  // assigned to someone ELSE. That's how a disclosure/VP thread mislabeled to the
+  // wrong person self-heals: e.g. a "Buyer Signed Disclosures" thread carrying a
+  // stale Ethan label gets Edelyn ADDED on its next actionable message (existing
+  // labels are kept — Branch A only adds). Acks on category threads still clear
+  // via the skip gate below. Non-category assigned threads keep the full savings.
   const personLabelSet = new Set(config.ROSTER.map((p) => String(p.personLabel).toLowerCase()));
   const assignedTo = labelNames.find((n) => personLabelSet.has(String(n).toLowerCase()));
-  if (assignedTo) {
+  if (!category && assignedTo) {
     return {
       branch, category, side: null, sideSource: null,
       skip: true, deciding_rule: 'assigned',
