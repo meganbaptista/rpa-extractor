@@ -100,8 +100,13 @@ async function getSheetsToken() {
 
 // Estimate the USD cost of one call from its usage block. Unknown model -> 0
 // (the row still records the raw token counts).
+//
+// Model IDs may carry a dated snapshot suffix (e.g. 'claude-haiku-4-5-20251001')
+// while the PRICES keys are undated. Try the exact ID first, then retry with a
+// trailing -YYYYMMDD stripped, so a dated ID (skip-gate's Haiku today, any Opus/
+// Sonnet snapshot later) still prices instead of silently logging $0.
 function estimateCost(model, u) {
-  const p = PRICES[model];
+  const p = PRICES[model] || PRICES[String(model || '').replace(/-\d{8}$/, '')];
   if (!p) return 0;
   const inTok = u.input_tokens || 0;
   const outTok = u.output_tokens || 0;
