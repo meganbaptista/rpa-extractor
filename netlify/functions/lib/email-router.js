@@ -9,13 +9,17 @@
 //
 // Flow (both branches run the skip gate first — never a pure lookup):
 //
+//   SKIP GATE (shared, runs before the branch split):
+//     skip=true at a TRUSTED confidence  → mark read, remove from intake, no label.
+//     skip=true at an UNTRUSTED one      → "Needs Attention" (see GATE
+//                                          .trustedSkipConfidence). A shaky skip
+//                                          must never silently clear the email.
+//
 //   BRANCH A — message carries a deterministic category label (CATEGORY_ROUTING):
-//     skip=true  → mark read, remove from intake, NO person label.
-//     skip=false → apply the category's mapped person label.
+//     apply the category's mapped person label.
 //
 //   BRANCH B — everything else:
-//     skip=true  → mark read, remove from intake, no label.
-//     skip=false → SENDER override? apply that person.
+//     SENDER override? apply that person.
 //                  else run the classifier (rulebook):
 //                    person  → apply their label (live) or log-only (shadow).
 //                              a PAIRS assignee (e.g. Belle+Megan) applies BOTH.
@@ -73,8 +77,25 @@ async function route(message, labelNames = [], deps = {}) {
   };
 
   // SKIP — identical in both branches: clear from the queue, no person label.
+  // But ONLY at a confidence trusted to clear. A skip marks the email read and
+  // drops it from the queue with no label, so nobody ever looks at it again —
+  // a shaky skip is the one path where actionable mail vanishes unseen. Below
+  // the bar we defer to a human instead, exactly as a low-confidence NO_TAG does
+  // further down. A missing/unknown confidence is untrusted (runSkipGate already
+  // defaults it to 'low'), so this fails safe.
   if (gate.skip) {
-    decision.actions = clearActions(config);
+    const trusted = (config.GATE && config.GATE.trustedSkipConfidence) || [];
+    if (trusted.includes(String(gate.confidence).toLowerCase())) {
+      decision.actions = clearActions(config);
+      return decision;
+    }
+    // Not trusted to clear -> route it. `skip` records what we DID (route), not
+    // what the gate wanted; gate_reason + deciding_rule preserve the gate's view
+    // so a rescued skip is still auditable in the ledger.
+    decision.skip = false;
+    decision.plannedLabel = config.LABELS.needsAttention;
+    decision.reason = `${decision.reason} | skip at ${gate.confidence} confidence is not trusted to clear -> Needs Attention`;
+    decision.actions = { addLabels: [config.LABELS.needsAttention], removeIntake: true, markRead: false };
     return decision;
   }
 

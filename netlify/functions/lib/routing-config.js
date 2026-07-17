@@ -329,6 +329,20 @@ const ROUTER = {
 const GATE = {
   model: 'claude-haiku-4-5-20251001',
   effort: 'low',
+  // Confidence levels TRUSTED to CLEAR an email on skip=true (the gate returns
+  // 'high' | 'medium' | 'low'). A skip at any other level routes to Needs
+  // Attention instead of being cleared.
+  //
+  // Why this exists: a skip marks the email read, drops it from the queue, and
+  // applies no label — so a wrong skip is the one path where actionable mail
+  // vanishes with nobody watching. The gate runs FIRST, on every email, before
+  // the classifier ever sees it. This mirrors CLASSIFIER.confidenceThreshold,
+  // which already blocks a shaky NO_TAG from silently clearing for the same
+  // reason. Rule 6 ("if unsure, return skip_assignment = false") is a fail-safe
+  // in the PROMPT; this is the one in the CODE.
+  //
+  // To tighten: drop 'medium' so only a high-confidence skip may clear.
+  trustedSkipConfidence: ['high', 'medium'],
 };
 
 const CLASSIFIER = {
