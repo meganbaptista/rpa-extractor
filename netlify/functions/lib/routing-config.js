@@ -277,6 +277,7 @@ const NO_TAG_RULES = [
   'Third-party deposit form.',
   'CONFIRMING escrow due dates (only a confirmation — a QUESTION about due dates goes to Megan).',
   'Notice to Perform PDF received (no action beyond filing to drive).',
+  'A routine incoming CDA DOCUMENT delivery from Marie Maravillas (csfinance@ciresocal.com, a Christie\'s commission specialist) whose only purpose is to DELIVER an attached CDA (e.g. subject "CDA - [address]", body just "please find the attached CDA", no question or request) is a no-action document drop (file to drive) -> NO_TAG, even though it carries the CDA attachment. This applies ONLY to csfinance@ciresocal.com simply attaching a finished CDA; a CDA REQUEST, a request to prepare or modify a CDA, or a CDA question still goes to Megan.',
   'Accepted calendar invite.',
   'Automatic Reply / Out of Office.',
   'Subject line that is just "Split on [address]".',
@@ -298,6 +299,7 @@ const ROUTING_NOTES = [
   'The word "AUDIT" splits two ways: a PURCHASE CONTRACT audit (reviewing the RPA/contract itself) -> Allana. A question about what documents are still OUTSTANDING / needed or whether the SELLER has signed / where to find the seller\'s docs -> Ethan (seller-side file/document status). Use the side and what is being audited to tell them apart.',
   'DEAL TYPE comes from the SUBJECT + WHOLE THREAD, not just the newest message. The newest message is the immediate ask; the thread tells you what KIND of deal it is (lease, purchase, listing) and therefore who owns the file. Route by the file owner. Example: a thread whose subject/attachments show a LEASE (Residential Lease, RLMM, month-to-month, "Lease Contract") belongs to Megan even if the newest message is a generic question about compensation, payment, or timing — do not route that to Belle/others on the strength of the newest message alone.',
   'BUYER vs SELLER side flips disclosure routing: buyer-side disclosure work -> Edelyn, seller-side disclosure work -> Ethan. Prefer a side tag if one is present; otherwise infer side from the content.',
+  'SOLAR PAY-OFF: a solar loan payoff (a "paid in full" / "paid off" / payoff / "Payment Received" letter for a solar loan, e.g. Solar Mosaic, Solar Servicing, or Sunrun; the letter confirming the solar loan is paid off so title/escrow can clear it before closing) routes by the SIDE we represent, like disclosures: seller-side -> Ethan; buyer-side -> Edelyn; if we represent BOTH sides (dual agency) -> Ethan. This holds even when the newest message is just the agent forwarding the letter to escrow ("this is the paid in full letter"). Do NOT route it to Megan because she is cc\'d or the thread says "Megan\'s team", and do NOT treat it as a generic Belle milestone; it follows the buyer/seller disclosure split.',
   'STRONG PRIOR from sub-labels: if a "Buyer Disclosures" sub-label is present the handler is USUALLY Edelyn; if a "Seller Signed Disclosures" sub-label is present it is USUALLY Ethan. Follow this unless the content clearly indicates a different person.',
   'The abbreviation "RFR" is AMBIGUOUS — read the context: "Receipt for Reports" (acknowledging/signing receipt of the inspection/disclosure REPORTS — part of the disclosure flow, e.g. "signed the RFR for the reports") routes by disclosure SIDE: seller-side (e.g. a "Seller Signed Disclosures" thread) -> Ethan, buyer-side -> Edelyn. That is DIFFERENT from "Request for Repairs" (RR / RRRR — negotiating repairs) -> Jill. Do not send a Receipt-for-Reports email to Jill.',
   'VP / VOP / final walk-through: if ATTACHED requesting the SELLER signature -> Ethan; if someone is requesting us to SEND the VP/VOP -> Edelyn.',
@@ -325,7 +327,7 @@ const CONFLICTS = [];
 // MODES + MODELS (both default SAFE).
 // ---------------------------------------------------------------------------
 const ROUTER = {
-  mode: 'shadow', // 'shadow' = decide + log only, mutate nothing | 'live' = apply
+  mode: 'live', // 'shadow' = decide + log only, mutate nothing | 'live' = apply
 };
 
 const GATE = {
@@ -348,7 +350,7 @@ const GATE = {
 };
 
 const CLASSIFIER = {
-  mode: 'shadow', // 'shadow' = log the would-be person, still apply Needs Attention | 'live'
+  mode: 'live', // 'shadow' = log the would-be person, still apply Needs Attention | 'live'
   // Model: Opus. Haiku trial (2026-07-17) was rejected — in the shadow day it made
   // 2 CONFIDENT misroutes to the wrong person (should-be-Ethan -> Jill@0.95,
   // should-be-Jill -> Allana@0.85), which is the one failure the confidence gate
