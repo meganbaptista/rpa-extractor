@@ -50,6 +50,26 @@ async function route(message, labelNames = [], deps = {}) {
   const category = config.matchedCategory(labelNames);
   const branch = category ? 'A' : 'B';
 
+  // ALREADY-ASSIGNED short-circuit: if the thread already carries a person label,
+  // someone owns it — clear this message (mark read, drop from intake, keep the
+  // existing person label, add no new tag) WITHOUT spending a skip-gate or
+  // classifier call. Cuts the long tail of replies on threads that are already
+  // routed. The person labels come from the ROSTER, so this stays in sync as the
+  // team changes. (Needs Attention is NOT a person label, so those threads still
+  // get processed.) Runs before the gate/classifier/deal-list lookup on purpose,
+  // to save all three calls.
+  const personLabelSet = new Set(config.ROSTER.map((p) => String(p.personLabel).toLowerCase()));
+  const assignedTo = labelNames.find((n) => personLabelSet.has(String(n).toLowerCase()));
+  if (assignedTo) {
+    return {
+      branch, category, side: null, sideSource: null,
+      skip: true, deciding_rule: 'assigned',
+      reason: `thread already assigned to "${assignedTo}"; cleared without re-routing`,
+      confidence: '', plannedLabel: null, classifier: null,
+      actions: clearActions(config),
+    };
+  }
+
   // Side signal: prefer a Gmail side tag on the thread; else look up the side we
   // represent for this deal in the deals sheet (matched by the subject address).
   const h0 = message.headers || {};
