@@ -18,6 +18,7 @@
 //     skip=false → SENDER override? apply that person.
 //                  else run the classifier (rulebook):
 //                    person  → apply their label (live) or log-only (shadow).
+//                              a PAIRS assignee (e.g. Belle+Megan) applies BOTH.
 //                    NO_TAG  → mark read, remove from intake (skip-like).
 //                    UNSURE  → apply "Needs Attention".
 // ============================================================================
@@ -124,11 +125,16 @@ async function route(message, labelNames = [], deps = {}) {
     decision.actions = clearActions(config);
     return decision;
   }
-  if (classifierLive && confident && suggestion.personLabel && !suggestion.unsure) {
-    // Confident, trusted person assignment.
-    decision.plannedLabel = suggestion.personLabel;
+  const personLabels = suggestion.personLabels || [];
+  if (classifierLive && confident && personLabels.length && !suggestion.unsure) {
+    // Confident, trusted person assignment. Usually one label; a PAIRS assignee
+    // (e.g. Belle+Megan) yields two and BOTH get applied.
+    // NOTE: plannedLabel is DISPLAY ONLY here (a pair joins to "Belle + Megan",
+    // which is not a real Gmail label). actions.addLabels is what gets applied —
+    // never derive labels from plannedLabel on this path.
+    decision.plannedLabel = personLabels.join(' + ');
     decision.reason = `${decision.reason} | routed to ${suggestion.person} (${suggestion.confidence})`;
-    decision.actions = { addLabels: [suggestion.personLabel], removeIntake: true, markRead: false };
+    decision.actions = { addLabels: personLabels, removeIntake: true, markRead: false };
     return decision;
   }
 

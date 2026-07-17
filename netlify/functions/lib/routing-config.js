@@ -229,6 +229,36 @@ const ROSTER = [
 ];
 
 // ---------------------------------------------------------------------------
+// PAIRS — the ONLY cases where one email gets TWO person labels, because two
+// people genuinely must both act. Deliberately a short, closed list of named
+// situations rather than a general "pick N people" capability: if the model
+// were free to name any two, it would pair whenever it was torn, and hedging
+// would quietly replace UNSURE. Each entry is one discrete choice the model
+// can make, and only for the case in `when`.
+//
+//   name    — the enum value the classifier returns (also what the ledger shows).
+//   members — ROSTER names; ALL must resolve or the email falls to Needs
+//             Attention rather than being half-labeled (see person-classifier).
+//   when    — the situation, written concrete. Rendered into the prompt.
+//
+// To retire a pair: delete its entry. Nothing else references it.
+// ---------------------------------------------------------------------------
+const PAIRS = [
+  {
+    name: 'Belle+Megan',
+    members: ['Belle', 'Megan'],
+    when: 'AGENT REIMBURSEMENT AT CLOSING — an agent paid out of pocket for a deal '
+      + 'expense (an inspection, a repair, a report, a utility or HOA fee) and asks to be '
+      + 'repaid out of the proceeds at closing. E.g. "[agent] paid $150 toward the pool leak '
+      + 'inspection today, please have the buyers reimburse her at closing." The example is '
+      + 'illustrative — any out-of-pocket expense and any amount qualifies. This counts '
+      + 'whether or not the email says "CDA", and whether or not an invoice is attached. '
+      + 'Belle owns the escrow-side instruction that gets the money moved; Megan owns the '
+      + 'CDA the reimbursement flows through — both must act, so tag both.',
+  },
+];
+
+// ---------------------------------------------------------------------------
 // NO-TAG CONTENT RULES — real (non-acknowledgment) emails that get NO person
 // label. Per Megan these are cleared like a skip (mark read + drop from intake).
 // The classifier returns assignee = NO_TAG when the newest message matches one.
@@ -273,6 +303,7 @@ const ROUTING_NOTES = [
   'LETTERHEAD / SOURCE is a strong signal. A document on the ESCROW COMPANY\'s letterhead (escrow instructions, escrow amendments, escrow statements — the escrow office\'s own paperwork) -> Belle. A CAR (California Association of Realtors) form is contract paperwork -> its owner: addenda / amendments -> Jill; disclosures -> Ethan or Edelyn by side.',
   'AMENDMENTS split by WHO issues them: amended ESCROW INSTRUCTIONS issued/returned by the ESCROW OFFICER (escrow-company paperwork — amended instructions, an escrow amendment for a price reduction, amended commission instructions) -> Belle. CONTRACT-side amendments on CAR forms requested or sent by an AGENT (CAR addendum, a CAR Purchase Price Amendment form, seller credit addendum, AOAA) -> Jill. So the SAME price reduction is Belle when it arrives as the escrow officer\'s amended instructions, but Jill when an agent sends a CAR Purchase Price Amendment form.',
   'Commission: the commission AMOUNT / amended-revised commission from an agent -> Belle; a commission QUESTION or concern -> Belle; amended commission INSTRUCTIONS from escrow -> Belle (Belle owns all escrow-officer amended instructions).',
+  'AGENT REIMBURSEMENT is the Belle+Megan pair, not either one alone. When an agent paid out of pocket for a deal expense and asks to be repaid at closing, do NOT route it to Belle alone as an inspection receipt just because a report or invoice PDF is attached, and do NOT route it to Megan alone as a CDA request just because it touches the CDA. An invoice attached to a reimbursement email is EVIDENCE OF THE AMOUNT owed, not an inspection report being filed — the ask is the money, not the document. This holds even when the email never says "CDA".',
   'Leases: CAR form "LR" -> Megan; but RLAS / SIP (leaseback or seller-in-possession after sale) -> Jill.',
   'Milestone receipts count only when in the NEWEST message (EMD received, funded, recorded/closed) and route to Belle; the same words quoted from an older message do not.',
   'Loan emails split two ways: a lender LOAN-STATUS / progress update (approval received, conditions/ICD requested, appraisal progress, "loan update") -> Belle. But the physical loan DOCS arriving, buyer signing loan docs / scheduling the signing, and a bare appraisal-scheduling email stay NO_TAG.',
@@ -379,6 +410,7 @@ module.exports = {
   LABEL_HINTS,
   SENDER_ROUTING,
   ROSTER,
+  PAIRS,
   NO_TAG_RULES,
   ROUTING_NOTES,
   CONFLICTS,

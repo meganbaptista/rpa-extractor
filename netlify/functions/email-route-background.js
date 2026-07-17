@@ -52,8 +52,11 @@ async function applyDecision(message, decision) {
     await gmail.modifyMessage(message.id, { add: addLabelIds, remove: removeLabelIds });
   }
   return {
+    // Join, don't take [0]: a PAIRS assignee applies TWO labels, and reporting
+    // only the first would make a correct double-route look like a plain
+    // single-person route in the ledger — i.e. exactly the misroute it fixed.
     action: decision.skip ? 'skip' : `route_${decision.branch}`,
-    label: (actions.addLabels || [])[0] || null,
+    label: (actions.addLabels || []).join(' + ') || null,
     removedIntake: !!actions.removeIntake,
     markedRead: !!actions.markRead,
   };
