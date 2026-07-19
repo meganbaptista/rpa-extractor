@@ -82,6 +82,14 @@ function normalizeSide(v) {
   return null;
 }
 
+// A deal STATUS cell -> true if the deal is CLOSED or CANCELLED. Such rows are
+// excluded from the side lookup so a stale or relisted property (e.g. closed on
+// the buyer side in 2025, active on the seller side in 2026) resolves to the
+// CURRENT active row's side, not the dead one.
+function isInactiveStatus(v) {
+  return /closed|cancel/i.test(String(v == null ? '' : v));
+}
+
 // A distinctive match key for an address: leading street number + first real
 // street-name word (skipping directionals like N/S/E/W). Both must appear in an
 // email subject to count as a match, which keeps false positives low.
@@ -102,14 +110,25 @@ function parseTab(rows) {
   const header = rows[0].map((h) => String(h || '').trim().toLowerCase());
   const addrHeader = (process.env.DEAL_ADDRESS_HEADER || 'Property Address').toLowerCase();
   const repHeader = (process.env.DEAL_REP_HEADER || 'Representation').toLowerCase();
+  const statusHeader = (process.env.DEAL_STATUS_HEADER || 'Status').toLowerCase();
   const ai = header.indexOf(addrHeader) >= 0 ? header.indexOf(addrHeader) : header.findIndex((h) => h.includes('address'));
   const ri = header.indexOf(repHeader) >= 0 ? header.indexOf(repHeader) : header.findIndex((h) => h.includes('represent'));
+  // STATUS lives in a LABELED column on the current-year tab (e.g. "STATUS" in
+  // column H) but in the UNLABELED first column on the older yearly tabs. So use
+  // the labeled column when present, else fall back to column 0. On the
+  // current-year tab column 0 is a NAME, which never reads as a status, so the
+  // fallback only kicks in on the older layout where column 0 truly is the status.
+  const sti = header.indexOf(statusHeader) >= 0 ? header.indexOf(statusHeader) : header.findIndex((h) => h.includes('status'));
   if (ai < 0 || ri < 0) {
     console.warn(`[deal-side] address/representation columns not found in header: ${JSON.stringify(rows[0])}`);
     return [];
   }
   const out = [];
   for (const row of rows.slice(1)) {
+    // Drop CLOSED/CANCELLED deals so they can't win the address match over the
+    // current active row for a relisted property.
+    const statusCell = sti >= 0 ? row[sti] : row[0];
+    if (isInactiveStatus(statusCell)) continue;
     const side = normalizeSide(row[ri]);
     const address = row[ai];
     if (!side || !address) continue;

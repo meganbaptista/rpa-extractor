@@ -118,6 +118,29 @@ const SENDER_ROUTING = {
 };
 
 // ---------------------------------------------------------------------------
+// SUBJECT ROUTING — deterministic "this subject ALWAYS means this person",
+// regardless of branch, the deal-list side lookup, or a stale side label. For
+// subjects whose wording alone fixes the owner with no content judgment needed.
+// Checked AFTER the skip gate (a pure "thanks" ack on the thread still clears)
+// but BEFORE the deal-list side prior and the classifier — so an address-based
+// side guess can't override it. Each entry: { pattern: RegExp, person, note }.
+// Keep this small: add only subjects that decide the person on their own.
+// ---------------------------------------------------------------------------
+const SUBJECT_ROUTING = [
+  {
+    // DocuSign seller-signing envelope, e.g.
+    // "Fwd: Reminder: [Electronic Version] Seller Disclosure Package | 1419 Pacific St…".
+    // The seller signing their own disclosure package is ALWAYS the seller-side
+    // workflow -> Ethan, even when the deal-list has us on the buyer side (a stale
+    // row or a prior transaction on the same property). Per Megan: this subject is
+    // Ethan, period.
+    pattern: /\[electronic version\]\s*seller disclosure package\s*\|/i,
+    person: 'Ethan',
+    note: 'DocuSign seller disclosure package (signing) -> seller side',
+  },
+];
+
+// ---------------------------------------------------------------------------
 // ROSTER — the team + what each person handles. `handles` is the rulebook the
 // classifier reads to route Branch B mail; write it concrete. `personLabel` is
 // the Gmail label applied (auto-created if missing — match Gmail exactly).
@@ -409,6 +432,17 @@ function personForSender(fromHeader) {
   return null;
 }
 
+// Deterministic subject override -> person name, or null. First matching
+// SUBJECT_ROUTING pattern wins.
+function personForSubject(subject) {
+  if (!subject) return null;
+  const s = String(subject);
+  for (const rule of SUBJECT_ROUTING) {
+    if (rule.pattern.test(s)) return rule.person;
+  }
+  return null;
+}
+
 // True if any of the message's labels equals `tag`, or is a nested sub-label
 // ending in `.../tag` (Gmail stores nested labels as full slash-paths).
 function labelsInclude(labelNames, tag) {
@@ -450,6 +484,7 @@ module.exports = {
   SIDE_TAG_ROUTING,
   LABEL_HINTS,
   SENDER_ROUTING,
+  SUBJECT_ROUTING,
   ROSTER,
   PAIRS,
   NO_TAG_RULES,
@@ -461,6 +496,7 @@ module.exports = {
   matchedCategory,
   personForCategory,
   personForSender,
+  personForSubject,
   sideFromLabels,
   personForSideTag,
   labelHints,

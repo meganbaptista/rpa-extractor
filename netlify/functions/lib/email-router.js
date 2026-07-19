@@ -50,6 +50,13 @@ async function route(message, labelNames = [], deps = {}) {
   const category = config.matchedCategory(labelNames);
   const branch = category ? 'A' : 'B';
 
+  // Deterministic subject override (e.g. a DocuSign seller-disclosure signing
+  // envelope is always Ethan). Computed up front so it can (a) let a mislabeled
+  // thread self-heal past the already-assigned short-circuit below, and (b) win
+  // over the deal-list side prior. It is APPLIED after the skip gate, like every
+  // other deterministic route, so a pure ack on the thread still clears.
+  const subjectPerson = config.personForSubject((message.headers || {}).subject);
+
   // ALREADY-ASSIGNED short-circuit: if the thread already carries a person label
   // AND has no category label, someone owns it — clear this message (mark read,
   // drop from intake, keep the existing person label, add no new tag) WITHOUT
@@ -68,7 +75,10 @@ async function route(message, labelNames = [], deps = {}) {
   // via the skip gate below. Non-category assigned threads keep the full savings.
   const personLabelSet = new Set(config.ROSTER.map((p) => String(p.personLabel).toLowerCase()));
   const assignedTo = labelNames.find((n) => personLabelSet.has(String(n).toLowerCase()));
-  if (!category && assignedTo) {
+  // A deterministic subject override bypasses this short-circuit too (like a
+  // category label), so a thread mislabeled to the wrong person self-heals to the
+  // subject's owner on its next actionable message.
+  if (!category && !subjectPerson && assignedTo) {
     return {
       branch, category, side: null, sideSource: null,
       skip: true, deciding_rule: 'assigned',
@@ -124,6 +134,19 @@ async function route(message, labelNames = [], deps = {}) {
     decision.plannedLabel = config.LABELS.needsAttention;
     decision.reason = `${decision.reason} | skip at ${gate.confidence} confidence is not trusted to clear -> Needs Attention`;
     decision.actions = { addLabels: [config.LABELS.needsAttention], removeIntake: true, markRead: false };
+    return decision;
+  }
+
+  // DETERMINISTIC SUBJECT OVERRIDE — a subject that fixes the owner outright
+  // (SUBJECT_ROUTING) wins over the deal-list side prior and the classifier, so an
+  // address-based side guess can't misroute it. Runs after the skip gate, so a
+  // pure ack on the thread still clears above. This is what keeps a "[Electronic
+  // Version] Seller Disclosure Package" (seller-signing) email on Ethan even when
+  // the deal-list has us on the buyer side for that address.
+  if (subjectPerson) {
+    decision.plannedLabel = subjectPerson;
+    decision.reason = `${decision.reason} | subject override -> ${subjectPerson}`;
+    decision.actions = { addLabels: [subjectPerson], removeIntake: true, markRead: false };
     return decision;
   }
 
