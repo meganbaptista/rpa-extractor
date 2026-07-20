@@ -94,6 +94,20 @@ function isInactiveStatus(v) {
 // street-name word (skipping directionals like N/S/E/W). Both must appear in an
 // email subject to count as a match, which keeps false positives low.
 const DIRECTIONALS = new Set(['n', 's', 'e', 'w', 'north', 'south', 'east', 'west']);
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Whole-token presence test (bounded by non-word chars), NOT a substring test.
+// This is why a deal at "419 …" never matches "1419 …" (the "419" inside "1419"
+// has a digit on its left, so it isn't a token boundary) and "pacific" never
+// matches "pacifica". Both the street number and the street word must pass.
+function containsToken(haystack, token) {
+  if (!token) return false;
+  return new RegExp(`\\b${escapeRegex(token)}\\b`, 'i').test(haystack);
+}
+
 function addressKeyParts(address) {
   const m = String(address || '').match(/(\d+)\s+(.*)/);
   if (!m) return null;
@@ -210,7 +224,7 @@ async function sideForSubject(subject) {
     const subj = String(subject).toLowerCase();
     let best = null;
     for (const d of list) {
-      if (subj.includes(d.num) && subj.includes(d.streetWord)) {
+      if (containsToken(subj, d.num) && containsToken(subj, d.streetWord)) {
         const score = d.num.length + d.streetWord.length;
         if (!best || score > best.score) best = { side: d.side, score };
       }
