@@ -212,6 +212,80 @@ function joinFields(values, labels) {
 }
 
 // ----------------------------------------------------------------------------
+// DETERMINISTIC CROSS-CHECKS — hard consistency rules between a property-info
+// field and a seller answer that must fire EVERY time (not left to the model's
+// materiality judgment). Currently one: "High Fire Hazard Area?" (a Property
+// Information dropdown the team fills to draft blank disclosures) vs SPQ 17G
+// (annual brush clearance). If the property IS in a high fire hazard area but
+// the seller answered 17G "No", we nudge them to revise it to "Yes".
+// ----------------------------------------------------------------------------
+function normYesNo(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (/^y(es)?\b/.test(s)) return 'yes';
+  if (/^n(o)?\b/.test(s)) return 'no';
+  return '';
+}
+
+// First field whose label passes `matchLabel`, or null. Runs over the FULL
+// (pre-disclosure-filter) field set so property-info fields are visible.
+function findField(fields, matchLabel) {
+  for (const f of fields || []) {
+    if (f && matchLabel(String(f.label || ''))) return f;
+  }
+  return null;
+}
+
+// The Property Information "High Fire Hazard Area?" dropdown (Yes/No).
+function fireHazardField(fields) {
+  return findField(fields, (l) => /high fire hazard/i.test(l));
+}
+
+// The seller's 17G ANSWER dropdown — NOT the "17G: Please explain here:" text
+// field. The label starts with "17G" and is not the explain field.
+function item17gAnswerField(fields) {
+  return findField(fields, (l) => /^17\s*g\b/i.test(l.trim()) && !/explain/i.test(l));
+}
+
+// If the property is high fire hazard but 17G was answered "No", return a
+// mandated material finding (with Megan's exact wording); else null.
+function fireBrushMandate(fields) {
+  const fire = normYesNo((fireHazardField(fields) || {}).value);
+  const g17 = normYesNo((item17gAnswerField(fields) || {}).value);
+  console.log(`[disclosure-review] cross-check: fire-hazard=${fire || '(n/a)'} 17G=${g17 || '(n/a)'}`);
+  if (fire === 'yes' && g17 === 'no') {
+    return {
+      topic: 'Fire hazard and brush clearance',
+      section: 'SPQ 17G',
+      emailHeading: 'Fire hazard and brush clearance (SPQ 17G)',
+      seller_wrote: 'No',
+      why: 'The property is in a High Fire Hazard area, which typically carries annual brush clearance requirements, so a "No" here reads as inconsistent and a buyer would question it.',
+      ask: 'I noticed that you answered "No" to the property having annual brush clearance requirements. I show that the property is in a High Fire hazard zone, so typically this would require annual brush clearance. Do you want to revise this to be a Yes response?',
+      keyword: /brush clearance|high fire hazard/i,
+    };
+  }
+  return null;
+}
+
+// True if the model already worked a mandate into its material findings, so we
+// don't force a duplicate. Matches on the locator code or the mandate keyword.
+function materialHasMandate(material, m) {
+  return (material || []).some((x) =>
+    /17\s*g/i.test(String(x.section || '')) ||
+    m.keyword.test(`${x.topic || ''} ${x.ask || ''} ${x.why || ''}`));
+}
+
+// Insert a topic block just before the closing "Thanks!" line, so a mandate the
+// model omitted still lands in the email in the right place (above the sign-off).
+function insertBeforeSignoff(body, block) {
+  const b = String(body || '');
+  const idx = b.lastIndexOf('Thanks!');
+  if (idx < 0) return `${b.trimEnd()}\n\n${block}\n\nThanks!`;
+  const before = b.slice(0, idx).trimEnd();
+  const after = b.slice(idx);
+  return `${before}\n\n${block}\n\n${after}`;
+}
+
+// ----------------------------------------------------------------------------
 // THE PROMPT — materiality-tiered review of the seller's disclosure answers.
 // Input is the seller's Q&A (question label + answer/explanation), already
 // filtered to disclosure fields. The model pairs each question with its "Please
@@ -228,6 +302,11 @@ function buildReviewPrompt(fields, ctx) {
   const sellerBlock = sellers.length
     ? `SELLERS (the people this email is addressed to — use these and ONLY these for the greeting):\n${sellers.map((n) => `- ${n}`).join('\n')}`
     : `SELLERS: the seller name was not available — open the email with exactly "Hi there,".`;
+
+  const mandates = Array.isArray(ctx.mandates) ? ctx.mandates.filter(Boolean) : [];
+  const mandateBlock = mandates.length
+    ? `\nMANDATORY ITEMS (flagged by a deterministic consistency rule — you MUST include EACH as a "material" finding AND as its own topic in the seller email, using the provided question text closely; do NOT down-tier, reword away, or omit them):\n${mandates.map((m) => `- Topic "${m.topic}" (locator ${m.section}); the seller answered "${m.seller_wrote}". Group it in the email under a "${m.emailHeading}:" heading and include this question: ${m.ask}`).join('\n')}\n`
+    : '';
 
   return `You are an expert California real estate transaction coordinator on the LISTING side, reviewing a seller's completed disclosure answers${where} BEFORE they are finalized for signature. Forms involved are the seller-narrative disclosures (TDS, SPQ and its addendum, ESD, CSPQ, VLQ) — the parts where the seller writes explanations.
 
@@ -255,7 +334,7 @@ LINE BREAKS: do NOT hard-wrap text. Write each paragraph (the greeting, the intr
 CRITICAL STYLE RULE: do NOT use em dashes (the "—" character) anywhere in the email or your output; use periods, commas, or parentheses instead. SIGN-OFF: close the email with exactly "Thanks!" on its own line and nothing after it. Do NOT use "Warm regards", "Best", a team name, or any signature block.
 
 ${sellerBlock}
-
+${mandateBlock}
 SELLER'S DISCLOSURE ANSWERS:
 ${qa}
 
@@ -442,13 +521,19 @@ exports.handler = async function (event) {
     const sellerNames = extractSellerNames(fields);
     console.log(`[disclosure-review] seller names for greeting: ${sellerNames.length ? sellerNames.join(', ') : '(none found)'}`);
 
+    // Deterministic cross-checks run on the FULL field set: property-info fields
+    // like "High Fire Hazard Area?" get dropped by the disclosure filter, so read
+    // them before filtering. A mandate only exists when an inconsistency is real.
+    const mandates = [fireBrushMandate(fields)].filter(Boolean);
+    if (mandates.length) console.log(`[disclosure-review] ${mandates.length} deterministic mandate(s) forced into the review`);
+
     const disclosureFields = fields.filter((f) => isDisclosureField(f.label));
     if (!disclosureFields.length) {
       throw new Error('No disclosure fields found after filtering — check the field labels / PS response shape');
     }
 
     // 2) Materiality review.
-    const prompt = buildReviewPrompt(disclosureFields, { propertyAddress, sellerNames });
+    const prompt = buildReviewPrompt(disclosureFields, { propertyAddress, sellerNames, mandates });
     const raw = await callClaude(prompt);
     const review = parseReview(raw);
 
@@ -457,9 +542,24 @@ exports.handler = async function (event) {
     const minor = Array.isArray(review.minor) ? review.minor : [];
     const internal = Array.isArray(review.internal) ? review.internal : [];
 
+    // Guarantee each deterministic mandate survives the model's tiering: force it
+    // into material if the model dropped or down-tiered it (dedup so we never
+    // double it), and into the email body (before the sign-off) if it's missing.
+    let emailBody = review.email_body || '';
+    for (const m of mandates) {
+      if (!materialHasMandate(material, m)) {
+        material.unshift({ topic: m.topic, section: m.section, seller_wrote: m.seller_wrote, why: m.why, ask: m.ask });
+      }
+      if (!m.keyword.test(emailBody)) {
+        emailBody = insertBeforeSignoff(emailBody, `${m.emailHeading}:\n${m.ask}`);
+      }
+    }
+    // A detected inconsistency always means clarifications are recommended.
+    const overallStatus = mandates.length ? 'clarifications_recommended' : (review.overall_status || 'reviewed');
+
     const psComment =
       `Disclosure review${propertyAddress ? ` — ${propertyAddress}` : ''}\n` +
-      `Status: ${review.overall_status || 'reviewed'} | Material: ${material.length}, Minor: ${minor.length}, Internal: ${internal.length}\n\n` +
+      `Status: ${overallStatus} | Material: ${material.length}, Minor: ${minor.length}, Internal: ${internal.length}\n\n` +
       (material.length ? `MATERIAL (worth clarifying before it goes out):\n${bullets(material, (x) => `${x.topic}${x.section ? ` (${x.section})` : ''}: ${x.why} (ask: ${x.ask})`)}\n\n` : 'No material items.\n\n') +
       (minor.length ? `MINOR (optional):\n${bullets(minor, (x) => `${x.topic}${x.section ? ` (${x.section})` : ''}: ${x.note}`)}\n\n` : '') +
       (internal.length ? `INTERNAL (team only):\n${bullets(internal, (x) => `${x.topic}${x.section ? ` (${x.section})` : ''}: ${x.note}`)}\n` : '');
@@ -468,11 +568,11 @@ exports.handler = async function (event) {
       checklistRunId: runId || '',
       property_address: propertyAddress,
       seller_email: sellerEmail,
-      overall_status: review.overall_status || 'reviewed',
+      overall_status: overallStatus,
       material_count: material.length,
       email_subject: review.email_subject || `Quick clarifications on your disclosures${propertyAddress ? ` for ${propertyAddress}` : ''}`,
-      email_body: review.email_body || '',
-      email_body_html: renderEmailHtml(review.email_body || ''),
+      email_body: emailBody,
+      email_body_html: renderEmailHtml(emailBody),
       ps_comment: psComment,
       findings: { material, minor, internal },
     };
@@ -497,4 +597,15 @@ exports.handler = async function (event) {
     });
     return { statusCode: 500 };
   }
+};
+
+// Exposed for unit tests (not used by the handler).
+module.exports._internal = {
+  normYesNo,
+  fireHazardField,
+  item17gAnswerField,
+  fireBrushMandate,
+  materialHasMandate,
+  insertBeforeSignoff,
+  buildReviewPrompt,
 };
