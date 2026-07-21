@@ -662,11 +662,20 @@ const ANSWER_REVIEW_PROMPT =
   'explanation is provided, so this should be marked Yes";\n' +
   '(d) an answer that CONTRADICTS a fact evident in this package (the seller likely marked it wrong) — read the ' +
   'actual mark and report it. In particular:\n' +
-  '   - HOA / common interest: if anything in the package shows the property is in an HOA or common interest ' +
-  'development (an HOA or CC&R disclosure is present, HOA dues are referenced, or the forms otherwise indicate an ' +
-  'HOA), then the HOA questions MUST be YES — TDS Section C common-interest/HOA items (e.g. C12, C13, C14) and SPQ ' +
-  '6G and SPQ Section 14. If any of those is marked NO (or left blank), flag it, naming the exact item and that it ' +
-  'should be YES because the property is in an HOA.\n' +
+  '   - HOA / common interest: the property counts as an HOA or common interest development if ANYTHING indicates ' +
+  'one: an HOA or CC&R disclosure is present, HOA dues are referenced, the property is described as a condominium, ' +
+  'TIC (tenancy in common), planned unit development, or common interest subdivision, OR the seller\'s OWN answers ' +
+  'establish it (SPQ 6G marked Yes, or SPQ 14A, 14B, or 14C marked Yes, or an explanation stating there is an HOA). ' +
+  'When it does, these specific items MUST be YES: check EACH one individually and flag EVERY one marked No or left ' +
+  'blank, do not stop after the first. The items are SPQ 6G; SPQ 14A (is a condo/PUD/common interest subdivision), ' +
+  '14B (HOA has authority), 14C (common area), 14D (CC&R\'s or other deed restrictions/obligations), and 14F ' +
+  '(CC&R\'s or HOA committee with authority over improvements); and TDS Section C common-interest/HOA items (e.g. ' +
+  'C12, C13, C14). An HOA that has authority necessarily has governing documents, so a No on 14D or 14F while 14B ' +
+  'or 14C is Yes is contradictory. Name the exact sub-item in each flag and state it should be YES because the ' +
+  'property is in an HOA. EXCEPTION: SPQ 14E (pending or proposed dues increases, special assessments, rules ' +
+  'changes, insurance issues, or litigation) and 14F(1) are fact-specific "are you aware of..." questions that can ' +
+  'legitimately be No even in an HOA; do NOT auto-flag those, and flag 14E only if an explanation or another ' +
+  'document shows such a matter actually exists.\n' +
   '   - Provided documents: SPQ Section 6 asks whether specific reports/booklets/advisories were provided (e.g. 6K). ' +
   'If that document is PHYSICALLY PRESENT in this package, the matching "provided?" box should be YES; flag it if it ' +
   'is not marked YES.\n' +
