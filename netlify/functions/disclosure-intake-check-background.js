@@ -593,7 +593,9 @@ const IDENTIFY_PROMPT =
   'not a separate Wildfire or NHD form; the DIA describing the ESD is not an ESD. Also read the property street ' +
   'address from the forms.\n' +
   'Also list these as their own present documents when their pages are physically here: the Natural Hazard ' +
-  'Disclosure report (any provider — FANHD, JCP-LGS, Disclosure Source); and the RECEIPT/acknowledgment page for the ' +
+  'Disclosure report (any provider — FANHD, JCP-LGS, Disclosure Source); a signed NHD acknowledgment/receipt page ' +
+  '(a page where the buyer and/or seller acknowledge receipt of the Natural Hazard Disclosure) as a document ' +
+  'DISTINCT from the NHD report itself, named "NHD Receipt"; and the RECEIPT/acknowledgment page for the ' +
   '"Homeowner\'s Guide to Environmental Hazards and Earthquake Safety" booklet — both the standard CAR receipt and ' +
   'custom brokerage equivalents such as a "Receipt for Links to Booklets" page (a page acknowledging receipt of the ' +
   'environmental hazards / earthquake safety / HERS / lead booklets). Name that receipt clearly, e.g. ' +
@@ -1491,6 +1493,11 @@ async function reconcile(auditList, received) {
     '"present". The booklet ITSELF does NOT satisfy this; only an actual signed/signable acknowledgment page does, so ' +
     'if only the informational booklet pages were sent, treat the receipt as absent. If absent, put it in ' +
     '"still_needed". Do NOT add a "confirm signed" note for it.\n' +
+    '- NHD RECEIPT / acknowledgment is a SEPARATE item from the NHD report and a PRESENCE check, never "verify". ' +
+    'When the audit list calls for a signed NHD receipt/acknowledgment (the page where the buyer and/or seller ' +
+    'acknowledge receipt of the Natural Hazard Disclosure), it is NOT satisfied by the NHD report itself: receiving ' +
+    'the NHD report does not satisfy the NHD Receipt, and vice versa. If a signed/signable NHD acknowledgment/receipt ' +
+    'page is in the package, put the NHD Receipt requirement in "present"; if it is absent, put it in "still_needed".\n' +
     '- "verify" is reserved ONLY for genuine per-answer content confirmations where the form is present but a specific ' +
     'answer should be eyeballed (e.g. "SPQ 7E: Yes, pre-1978 build"). Keep verify minimal; do NOT put whole documents ' +
     'or receipts there.\n' +
