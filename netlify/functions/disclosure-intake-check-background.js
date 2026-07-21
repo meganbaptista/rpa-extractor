@@ -598,12 +598,14 @@ const IDENTIFY_PROMPT =
   'receipt of ...". If only the informational booklet pages are present with no such signed/signable acknowledgment ' +
   'page, do NOT list any booklet receipt as present. Also recognize the WBSA (Wooden Balconies and Stairs ' +
   'Addendum, C.A.R. Form WBSA) when its page is present.\n' +
-  'For EACH form, also read its printed REVISION DATE and return it as "revision" in M/YY form. CAR forms print it ' +
-  'under the title ("C.A.R. Form SPQ, Revised 12/25") and in the footer ("SPQ REVISED 12/25"). Local/county forms ' +
-  '(e.g. an Orange County Local Area Disclosure) print their own date. Return empty string for "revision" if no ' +
-  'revision date is printed on the form.\n\n' +
+  'For EACH form, also read its printed REVISION DATE and return it as "revision" in M/YY form. Read the ACTUAL ' +
+  'date printed on THAT form; NEVER copy a date shown in these instructions or in the JSON example below. CAR forms ' +
+  'print the revision under the title (e.g. "C.A.R. Form <CODE>, Revised <M/YY>") and again in the footer (e.g. ' +
+  '"<CODE> REVISED <M/YY>"); read the digits actually printed there. Local/county forms (e.g. an Orange County ' +
+  'Local Area Disclosure) print their own date. Return an empty string for "revision" if the mark is unreadable or ' +
+  'no revision date is printed on the form; never guess and never echo the placeholder.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
-  '{"property_address":"<street, city, state, zip>","forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25"}]}';
+  '{"property_address":"<street, city, state, zip>","forms":[{"code":"<CODE>","name":"<full form name>","revision":"<M/YY, read from the form>"}]}';
 
 // ----------------------------------------------------------------------------
 // Step 1b — DEDICATED answer-review pass. Split out of IDENTIFY_PROMPT on purpose
