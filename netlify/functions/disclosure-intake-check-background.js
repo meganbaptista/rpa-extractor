@@ -601,7 +601,11 @@ const IDENTIFY_PROMPT =
   'For EACH form, also read its printed REVISION DATE and return it as "revision" in M/YY form. Read the ACTUAL ' +
   'date printed on THAT form; NEVER copy a date shown in these instructions or in the JSON example below. CAR forms ' +
   'print the revision under the title (e.g. "C.A.R. Form <CODE>, Revised <M/YY>") and again in the footer (e.g. ' +
-  '"<CODE> REVISED <M/YY>"); read the digits actually printed there. Local/county forms (e.g. an Orange County ' +
+  '"<CODE> REVISED <M/YY>"); read the digits actually printed there. If a multi-page form shows DIFFERENT revision ' +
+  'dates on different pages (CAR sometimes leaves an older stamp on an interior page, e.g. an SBSA whose page 13 ' +
+  'reads "6/25" while the rest read "6/26"), treat the date on the form\'s FIRST/title page as the form\'s version; ' +
+  'if the first page is unreadable, use the MOST RECENT date seen across the form\'s pages, never the oldest. ' +
+  'Local/county forms (e.g. an Orange County ' +
   'Local Area Disclosure) print their own date. Return an empty string for "revision" if the mark is unreadable or ' +
   'no revision date is printed on the form; never guess and never echo the placeholder.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
