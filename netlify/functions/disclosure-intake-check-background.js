@@ -93,6 +93,12 @@ const PREPARED_BY_US_DEFAULTS = [
   'property profile', 'mls client', 'ba avid', 'receipt for reports', 'rfr',
   'dia', 'los angeles county local area', 'wfda',
   'bhaa',
+  // Buyer-investigation items: the buyer either orders the inspection or signs a
+  // Buyer Inspection Waiver (BIW). Audit-list lines like "Property Inspections or
+  // BIW" / "Termite Inspection or BIW" are buyer-signature-only, so we never chase
+  // the listing side for them. Keying on 'biw' catches both via the "or BIW" token
+  // without mis-bucketing a genuinely seller-provided pest report.
+  'biw',
   // OUR brokerage's affiliate disclosure is ours to produce, so it belongs here and is never
   // chased from the listing side. See COOPERATING_BROKER_LABEL: an affiliate disclosure that
   // ARRIVES in the delivery is the other side's and must not be mistaken for this one.
@@ -626,7 +632,12 @@ const ANSWER_REVIEW_PROMPT =
   'SECTION BY SECTION and SUB-ITEM BY SUB-ITEM, and do NOT skip any lettered or numbered sub-item: read the TDS ' +
   'Section C items C1 through C14 individually, and every SPQ sub-item individually (e.g. 6G, 7A, 14A, 14B, 14C).\n' +
   'Flag:\n' +
-  '(a) a question or sub-item left BLANK / unanswered (issue "unanswered");\n' +
+  '(a) a question or sub-item left BLANK / unanswered (issue "unanswered"). This INCLUDES conditional sub-items: ' +
+  'several items apply only when their parent is Yes (the form prints "If Yes to [parent], ..."), e.g. 7E(1)/7E(2), ' +
+  '8E(1)/8E(2), 13B(1)/13B(2), and 14F(1)/14F(2). When the PARENT is marked Yes, each of its conditional sub-items ' +
+  'MUST be answered (Yes or No); flag every one left blank as "unanswered", naming the exact sub-item (e.g. "14F is ' +
+  'Yes but 14F(1) and 14F(2) are blank"). Do NOT flag a conditional sub-item when its parent is No or blank, since ' +
+  'it correctly stays blank;\n' +
   '(b) ANY sub-item marked YES whose OWN explanation is BLANK, ILLEGIBLE, or TOO VAGUE to understand (issue ' +
   '"yes_no_explanation"). FIRST be certain the YES box is the one actually marked: these packages are SCANNED, and ' +
   'the Yes column (left) sits directly beside the No column (right), so do not transpose them. Treat a sub-item as ' +
@@ -678,7 +689,10 @@ const ANSWER_REVIEW_PROMPT =
   '(CC&R\'s or HOA committee with authority over improvements); and TDS Section C common-interest/HOA items (e.g. ' +
   'C12, C13, C14). An HOA that has authority necessarily has governing documents, so a No on 14D or 14F while 14B ' +
   'or 14C is Yes is contradictory. Name the exact sub-item in each flag and state it should be YES because the ' +
-  'property is in an HOA. EXCEPTION: SPQ 14E (pending or proposed dues increases, special assessments, rules ' +
+  'property is in an HOA. Being correctly marked Yes does NOT exempt these section-14 / HOA items from the ' +
+  'explanation requirement: every one marked Yes still needs its own written explanation, so also flag under rule ' +
+  '(b) any such Yes whose explanation is blank or missing. EXCEPTION: SPQ 14E (pending or proposed dues increases, ' +
+  'special assessments, rules ' +
   'changes, insurance issues, or litigation) and 14F(1) are fact-specific "are you aware of..." questions that can ' +
   'legitimately be No even in an HOA; do NOT auto-flag those, and flag 14E only if an explanation or another ' +
   'document shows such a matter actually exists.\n' +
