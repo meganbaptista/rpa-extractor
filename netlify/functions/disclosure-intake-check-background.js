@@ -124,6 +124,67 @@ function isPreparedByUs(name) {
   return keys.some((k) => k && new RegExp('\\b' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(n));
 }
 
+// ----------------------------------------------------------------------------
+// EXEMPT SELLER (ESD). When an Exempt Seller Disclosure is in the received set,
+// the deal is on the exempt path even though the compliance list was built for a
+// regular deal. The ESD is the legal SUBSTITUTE for the TDS and the SPQ, so both
+// are satisfied. On the exempt path the FHDS and the Residential Earthquake
+// Hazards Report (the seller's pre-1960 report; audit lists read it as "Earthquake
+// Hazard Report 1960") are NOT required, and the WHSD IS. Deterministic so it
+// fires every time an ESD arrives, never left to the model. Mutates the reconcile
+// result in place and returns a small summary for the heads-up alert. Only the
+// seller's earthquake REPORT is dropped, never the earthquake booklet receipt or
+// the guide (those carry "receipt" / "booklet" / "guide", excluded below).
+// ----------------------------------------------------------------------------
+const RX_ESD = /\besd\b|exempt\s*seller\s*disclosure/i;
+const RX_TDS = /\btds\b|transfer\s*disclosure\s*statement/i;
+const RX_SPQ = /\bspq\b|seller\s*property\s*questionnaire/i;
+const RX_FHDS = /\bfhds\b|fire\s*hardening/i;
+const RX_EQ_REPORT = /earthquake\s*hazards?\s*report|residential\s*earthquake/i;
+const RX_EQ_KEEP = /receipt|booklet|guide/i;
+const RX_WHSD = /\bwhsd\b|water\s*heater[\s\S]{0,40}smoke\s*(alarm|detector)|smoke\s*(alarm|detector)[\s\S]{0,40}water\s*heater/i;
+
+function receivedHas(received, rx) {
+  return (received || []).some((f) => rx.test(`${(f && f.code) || ''} ${(f && f.name) || ''}`));
+}
+
+function applyExemptSellerRules(result, received) {
+  if (!result || !receivedHas(received, RX_ESD)) return { exempt: false };
+
+  const still = Array.isArray(result.still_needed) ? result.still_needed : [];
+  const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
+  const present = Array.isArray(result.present) ? result.present : [];
+
+  const isEqReport = (s) => RX_EQ_REPORT.test(s) && !RX_EQ_KEEP.test(s);
+  const retire = (s) => RX_TDS.test(s) || RX_SPQ.test(s) || RX_FHDS.test(s) || isEqReport(s);
+  const hasWhsd = (arr) => arr.some((x) => RX_WHSD.test(String(x && x.item != null ? x.item : x)));
+
+  const removed = [];
+  const kept = [];
+  for (const item of still) {
+    if (retire(String(item))) {
+      removed.push(String(item));
+      na.push({ item: String(item), note: 'Seller is exempt, not required (ESD received in lieu of TDS/SPQ)' });
+    } else {
+      kept.push(item);
+    }
+  }
+
+  // WHSD is required on the exempt path: present if we have it, otherwise request it.
+  const whsdReceived = receivedHas(received, RX_WHSD);
+  if (whsdReceived) {
+    for (let i = kept.length - 1; i >= 0; i--) if (RX_WHSD.test(String(kept[i]))) kept.splice(i, 1);
+    if (!hasWhsd(present)) present.push('WHSD');
+  } else if (!hasWhsd(kept)) {
+    kept.push('WHSD');
+  }
+
+  result.still_needed = kept;
+  result.not_applicable = na;
+  result.present = present;
+  return { exempt: true, removed, whsdReceived };
+}
+
 console.log('[disclosure-intake] module fully loaded, handler ready');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -1601,6 +1662,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   if (!listText) throw new Error(`No audit list for "${address}" — pass auditList in the body, or add a matching row to the AUDIT_LIST_CSV_URL sheet.`);
   const result = await reconcile(listText, received);
 
+  // Exempt-seller path: an ESD retires the TDS/SPQ (and the FHDS + Residential
+  // Earthquake Hazards Report) and makes the WHSD required. Deterministic backstop
+  // so it always fires when an ESD is in hand, regardless of the original list.
+  const exemptInfo = applyExemptSellerRules(result, received);
+  if (exemptInfo.exempt) {
+    console.log(`[disclosure-intake] exempt seller (ESD present): retired ${(exemptInfo.removed || []).join(', ') || '(nothing on list)'}; WHSD ${exemptInfo.whsdReceived ? 'received' : 'requested'}`);
+  }
+
   // Cross-check the seller's answers against our own records (Year Built, HOA from
   // the master sheet) — facts the disclosure package may not contain. Adds flags the
   // package-only check can't catch (e.g. SPQ 7E when the build year isn't in the pack).
@@ -1825,10 +1894,20 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     ? 'ACTION: A Buyer Inspection Waiver (BIW) is in this package. Remove it before forwarding the disclosures to the buyer.'
     : '';
 
+  // Exempt-seller heads-up: never silently retire the TDS/SPQ. Tell the TC the deal
+  // is on the exempt path so the master compliance list gets flipped and confirmed.
+  const exemptAlert = exemptInfo.exempt
+    ? 'ACTION: An Exempt Seller Disclosure (ESD) is in this package, so this is an exempt-seller deal. '
+      + 'The ESD substitutes for the TDS and SPQ (both retired). The FHDS and Residential Earthquake Hazards Report are not required on the exempt path, and the WHSD is'
+      + (exemptInfo.whsdReceived ? ' received.' : ' still needed (added to the listing-side request).')
+      + ' Update the master compliance list to the exempt path.'
+    : '';
+
   const psComment =
     `Disclosure intake — ${address}\n` +
     `Status: ${overall} | ${present.length} of the required disclosures received; ${stillNeeded.length} to request, ${flags.length} response(s) to clarify\n\n` +
     (biwAlert ? `** ${biwAlert} **\n\n` : '') +
+    (exemptAlert ? `** ${exemptAlert} **\n\n` : '') +
     // Order is deliberate: everything that needs a DECISION comes first (what is wrong, what a
     // human must judge, what to confirm), then what to chase, then the reference lists. VERIFY in
     // particular must sit high: the addendum-explanation routing sends real work there (17 items
@@ -1917,6 +1996,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     verify_lines: verify.map((v) => `${v.item}: ${v.note}`).join('\n'),
     biw_found: biwFound ? 'yes' : 'no',
     biw_alert: biwAlert,
+    exempt_seller: exemptInfo.exempt ? 'yes' : 'no',
+    exempt_alert: exemptAlert,
     context_debug: debugContext,
     versions_debug: versionsDebug,
     summary: result.summary || '',
