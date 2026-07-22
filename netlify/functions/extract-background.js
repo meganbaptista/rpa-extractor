@@ -128,6 +128,42 @@ const MAX_FALLBACK_PAGES = 30;
 // TARGETED_IMAGE_SCALE (the hi-res render scale for the targeted call) now lives
 // in lib/targeted-call.js alongside the render-retry logic that uses it.
 
+// ── HELPER: POST to the Anthropic Messages API, surfacing HTTP errors ───────
+// Every detection/extraction call funnels through here. Previously each call
+// site did `.then(r => r.json())` WITHOUT checking response.ok, so an API error
+// body ({ type: "error", error: { type, message } } — authentication, billing/
+// usage-limit, rate limit, overload) parsed into an object with no `content`
+// array and was silently treated as "the model returned nothing": the job
+// shipped all-blank fields and was STILL marked complete. This helper checks
+// response.ok and throws a rich Error (HTTP status + error.type + message) so a
+// real API failure is loud in the logs and fails the job, instead of quietly
+// emitting blanks that reach Process Street looking like a normal (empty) read.
+async function anthropicMessages(apiKey, body) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify(body)
+  });
+  // Read the body regardless of status — Anthropic error responses carry a
+  // JSON { type: "error", error: { type, message } } we want in the log.
+  let data;
+  try {
+    data = await response.json();
+  } catch (parseErr) {
+    throw new Error('Anthropic API ' + response.status + ' returned a non-JSON body: ' + parseErr.message);
+  }
+  if (!response.ok) {
+    const errType = (data && data.error && data.error.type) || 'unknown_error';
+    const errMsg = (data && data.error && data.error.message) || JSON.stringify(data);
+    throw new Error('Anthropic API ' + response.status + ' ' + errType + ': ' + errMsg);
+  }
+  return data;
+}
+
 // ── HELPER: extract text from each page of a PDF buffer ─────────────────────
 // Returns an array of strings, one per page (page 1 at index 0).
 async function getPageTexts(buffer) {
@@ -230,16 +266,7 @@ async function locateRpaPagesViaVision(documents, apiKey) {
     }]
   };
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify(body)
-  });
-  const data = await response.json();
+  const data = await anthropicMessages(apiKey, body);
   await usageLog.logUsage({ fn: 'extract-detect', model: body.model, usage: data.usage, note: 'extract-background/pdf' });
 
   if (!Array.isArray(data.content)) {
@@ -336,16 +363,7 @@ async function locateRpaPagesViaImages(documents, apiKey) {
     }]
   };
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify(body)
-  });
-  const data = await response.json();
+  const data = await anthropicMessages(apiKey, body);
   await usageLog.logUsage({ fn: 'extract-detect', model: body.model, usage: data.usage, note: 'extract-background/images' });
 
   if (!Array.isArray(data.content)) {
@@ -627,21 +645,11 @@ exports.handler = async function(event, context) {
     if (promptOverride) {
       content.push({ type: 'text', text: promptOverride });
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 2500,
-          messages: [{ role: 'user', content }]
-        })
+      const data = await anthropicMessages(process.env.ANTHROPIC_API_KEY, {
+        model: 'claude-sonnet-4-6',
+        max_tokens: 2500,
+        messages: [{ role: 'user', content }]
       });
-
-      const data = await response.json();
       await usageLog.logUsage({ fn: 'extract-rla', model: 'claude-sonnet-4-6', usage: data.usage, note: 'extract-background' });
 
       // Canonicalize property_address to USPS shorthand suffixes (Avenue -> Ave) so the
@@ -702,31 +710,22 @@ exports.handler = async function(event, context) {
     // image fallback, and the Opus escalation. Logging HERE covers all of them at
     // one edit point; the tool name is what separates main from targeted, so the
     // ledger splits them with no plumbing through the call sites.
-    const callApi = (msgContent, tool, model) => {
+    const callApi = async (msgContent, tool, model) => {
       const modelUsed = model || 'claude-sonnet-4-6';
-      return fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: modelUsed,
-          max_tokens: 4096,
-          tools: [tool],
-          tool_choice: { type: "tool", name: tool.name },
-          messages: [{ role: 'user', content: msgContent }]
-        })
-      }).then(r => r.json()).then(async (data) => {
-        await usageLog.logUsage({
-          fn: tool && tool.name === 'extract_contract_fields' ? 'extract-main' : 'extract-targeted',
-          model: modelUsed,
-          usage: data && data.usage,
-          note: 'extract-background'
-        });
-        return data;
+      const data = await anthropicMessages(process.env.ANTHROPIC_API_KEY, {
+        model: modelUsed,
+        max_tokens: 4096,
+        tools: [tool],
+        tool_choice: { type: "tool", name: tool.name },
+        messages: [{ role: 'user', content: msgContent }]
       });
+      await usageLog.logUsage({
+        fn: tool && tool.name === 'extract_contract_fields' ? 'extract-main' : 'extract-targeted',
+        model: modelUsed,
+        usage: data && data.usage,
+        note: 'extract-background'
+      });
+      return data;
     };
 
     const findToolUse = (resp) => Array.isArray(resp.content)
@@ -902,8 +901,17 @@ exports.handler = async function(event, context) {
       extractionStatus = 'image_fallback_sonnet';
     }
 
+    // If the main call rejects at the API layer (auth / usage-limit / rate-
+    // limit / overload) we jump straight to the outer catch and never reach the
+    // targeted await below — attach a no-op catch now so the parallel targeted
+    // promise's rejection is observed and doesn't surface as an unhandled
+    // rejection. The real await inside the try/catch below still throws and is
+    // handled there when the main call DID succeed but the targeted one failed.
+    if (targetedCallPromise) targetedCallPromise.catch(() => {});
+
     // Wait for main call. The targeted call is running in parallel and will
-    // be awaited next.
+    // be awaited next. A non-ok API response now throws (see anthropicMessages),
+    // so a hard API failure marks the job FAILED instead of shipping blanks.
     const mainData = await mainCallPromise;
     const mainTool = findToolUse(mainData);
     let mergedFields = mainTool && mainTool.input ? { ...mainTool.input } : {};
