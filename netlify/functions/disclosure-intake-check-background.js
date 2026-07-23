@@ -699,7 +699,18 @@ const ANSWER_REVIEW_PROMPT =
   'several items apply only when their parent is Yes (the form prints "If Yes to [parent], ..."), e.g. 7E(1)/7E(2), ' +
   '8E(1)/8E(2), 13B(1)/13B(2), and 14F(1)/14F(2). When the PARENT is marked Yes, each of its conditional sub-items ' +
   'MUST be answered (Yes or No); flag every one left blank as "unanswered", naming the exact sub-item (e.g. "14F is ' +
-  'Yes but 14F(1) and 14F(2) are blank"). Do NOT flag a conditional sub-item when its parent is No or blank, since ' +
+  'Yes but 14F(1) and 14F(2) are blank"). ' +
+  'Conditional sub-items are NOT always numbered: many parents are followed by an unnumbered follow-up line printed ' +
+  'directly beneath them - e.g. SPQ 13C ("A pool heater on the Property") and 13D ("A spa heater on the Property") ' +
+  'each have their OWN "If yes, is it operational?" line, and the same "If yes, ..." pattern appears elsewhere. Treat ' +
+  'each such line as the conditional of the item DIRECTLY ABOVE it. CRITICAL - adjacent identical conditionals: 13C ' +
+  'and 13D print the SAME "If yes, is it operational?" text on consecutive lines, so read each letter\'s operational ' +
+  'box SEPARATELY and align it to THAT letter\'s own parent. It is common and correct for one to be blank and the ' +
+  'next filled (13C pool heater = No, so its "is it operational?" correctly stays blank, while 13D spa heater = Yes, ' +
+  'so its "is it operational?" is answered). NEVER carry a blank from one letter\'s conditional onto the adjacent ' +
+  'letter; before flagging a conditional blank, confirm THAT letter\'s OWN parent is marked Yes AND the box on THAT ' +
+  'letter\'s own line is truly empty. ' +
+  'Do NOT flag a conditional sub-item when its parent is No or blank, since ' +
   'it correctly stays blank;\n' +
   '(b) ANY sub-item marked YES whose OWN explanation is BLANK, ILLEGIBLE, or TOO VAGUE to understand (issue ' +
   '"yes_no_explanation"). FIRST be certain the YES box is the one actually marked: these packages are SCANNED, and ' +
