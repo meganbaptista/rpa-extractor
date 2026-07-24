@@ -38,6 +38,7 @@ console.log('[transaction-background] @netlify/blobs loaded');
 // Per-call token ledger -> Google Sheet. Inert without USAGE_SHEET_ID, and every
 // failure is swallowed inside logUsage, so it can never fail a run.
 const usageLog = require('./lib/usage-log');
+const { callClaude: callClaudeShared } = require('./lib/claude');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 
@@ -417,83 +418,20 @@ function parseTransactionResponse(raw) {
 //
 // Retries on 429/529.
 // ----------------------------------------------------------------------------
-async function callClaude(prompt, pdfBase64, attempt = 0) {
-  const MAX_RETRIES = 4;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
-
-  const response = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      // Well within Opus 4.7's 128k output limit; only billed for tokens
-      // actually generated. Covers adaptive thinking + prose + JSON.
-      max_tokens: 32000,
-      // Opus 4.7 requires adaptive thinking. display:'omitted' skips streaming
-      // the thinking text (this is a server-to-server pipeline that never
-      // surfaces it); the text-block filter below is unaffected by this.
-      thinking: { type: 'adaptive', display: 'omitted' },
-      // effort is a top-level output_config field (NOT nested in `thinking`).
-      output_config: { effort: 'high' },
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'document',
-              source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
-            },
-            { type: 'text', text: prompt },
-          ],
-        },
-      ],
-    }),
+// Streams via the shared lib/claude transport (survives long generations, retries
+// thrown network errors). effort stays 'high' (the shared default). The truncation
+// guard's custom message is passed through as maxTokensError; usage is logged inside
+// the shared call, before the guard.
+function callClaude(prompt, pdfBase64) {
+  return callClaudeShared({
+    fn: 'transaction',
+    model: MODEL,
+    content: [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
+      { type: 'text', text: prompt },
+    ],
+    maxTokens: 32000,
+    maxTokensError: 'Transaction-state response hit max_tokens -- output was truncated before completion. '
+      + 'Raise max_tokens in callClaude and re-run this job.',
   });
-
-  if ((response.status === 429 || response.status === 529) && attempt < MAX_RETRIES) {
-    const retryAfter = response.headers.get('retry-after');
-    const delay = retryAfter
-      ? Math.min(parseFloat(retryAfter) * 1000, 30000)
-      : Math.min(1000 * Math.pow(2, attempt), 30000);
-    console.log(`[callClaude] ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
-    await sleep(delay);
-    return callClaude(prompt, pdfBase64, attempt + 1);
-  }
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Claude API error ${response.status}: ${errText}`);
-  }
-
-  const data = await response.json();
-
-  // Ledger BEFORE the truncation guard below on purpose: a max_tokens response is
-  // billed in full (thinking tokens included) and then throws, so logging after
-  // the guard would make the most expensive failures the invisible ones -- and a
-  // re-run of this job re-bills them. This is the row that exposes that pattern.
-  await usageLog.logUsage({ fn: 'transaction', model: MODEL, effort: 'high', usage: data.usage });
-
-  // Truncation guard: with adaptive thinking, thinking tokens consume the same
-  // budget as the response. If max_tokens were too small the output would be
-  // cut off mid-sentence and parseTransactionResponse would still "succeed" on
-  // a partial answer -- a silent bad result. Fail loudly instead.
-  if (data.stop_reason === 'max_tokens') {
-    throw new Error(
-      'Transaction-state response hit max_tokens -- output was truncated before completion. ' +
-      'Raise max_tokens in callClaude and re-run this job.'
-    );
-  }
-
-  // Adaptive thinking returns thinking blocks before text blocks. We keep only
-  // the text blocks (the prose + the ===TRANSACTION_STATE=== JSON); this filter
-  // already ignores thinking blocks correctly.
-  return (data.content || [])
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n');
 }

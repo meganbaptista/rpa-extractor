@@ -37,6 +37,7 @@ console.log('[compliance-check] module loading');
 const zlib = require('zlib');
 const { canonicalAddress } = require('./lib/address');
 const usageLog = require('./lib/usage-log');
+const { callClaude: callClaudeShared } = require('./lib/claude');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-opus-4-8';
@@ -254,33 +255,17 @@ async function loadDocuments(documents) {
 // ---------------------------------------------------------------------------
 // Anthropic calls.
 // ---------------------------------------------------------------------------
-async function callClaude(content, maxTokens, attempt = 0) {
-  const MAX_RETRIES = 4;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
-  const response = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens || 8000,
-      thinking: { type: 'adaptive', display: 'omitted' },
-      output_config: { effort: 'high' },
-      messages: [{ role: 'user', content }],
-    }),
+// Streams via the shared lib/claude transport (survives long generations, retries
+// thrown network errors). opts.effort defaults to 'high'; the reconcile call passes
+// 'medium' since it is mechanical present-vs-required matching, not a document read.
+function callClaude(content, maxTokens, opts = {}) {
+  return callClaudeShared({
+    fn: 'compliance-check',
+    model: MODEL,
+    content,
+    maxTokens: maxTokens || 8000,
+    effort: opts.effort || 'high',
   });
-  if ((response.status === 429 || response.status === 529) && attempt < MAX_RETRIES) {
-    const retryAfter = response.headers.get('retry-after');
-    const delay = retryAfter ? Math.min(parseFloat(retryAfter) * 1000, 30000) : Math.min(1000 * Math.pow(2, attempt), 30000);
-    console.log(`[compliance-check] ${response.status}, retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
-    await sleep(delay);
-    return callClaude(content, maxTokens, attempt + 1);
-  }
-  if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
-  const data = await response.json();
-  await usageLog.logUsage({ fn: 'compliance-check', model: MODEL, effort: 'high', usage: data.usage });
-  if (data.stop_reason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
-  return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
 }
 
 function parseJson(raw) {
@@ -381,7 +366,7 @@ async function reconcileCompliance(listText, docsPresent) {
     '- Only count a document as present if it is truly in the package, not merely referenced.\n\n' +
     'Respond with ONLY this JSON (no prose, no fences):\n' +
     '{"present":["..names.."],"missing":["..names.."],"not_applicable":[{"item":"..","note":".."}],"summary":"one sentence"}';
-  return parseJson(await callClaude([{ type: 'text', text: prompt }], 8000));
+  return parseJson(await callClaude([{ type: 'text', text: prompt }], 8000, { effort: 'medium' }));
 }
 
 function bullets(list, fmt) {

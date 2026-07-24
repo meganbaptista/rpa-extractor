@@ -37,6 +37,7 @@ console.log('[disclosure-review] module loading');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const usageLog = require('./lib/usage-log');
+const { callClaude: callClaudeShared } = require('./lib/claude');
 
 // Opus 4.8 — materiality is liability-sensitive judgment; use the top tier
 // (same quality bar as the signature audit). Adaptive thinking is configured in
@@ -353,51 +354,17 @@ Respond with ONLY a single JSON object (no markdown fences, no prose before or a
 // Opus 4.8 call. Adaptive thinking (the only thinking mode on 4.8); effort high.
 // Retries on 429/529. Returns the text of the response (expected: one JSON obj).
 // ----------------------------------------------------------------------------
-async function callClaude(prompt, attempt = 0) {
-  const MAX_RETRIES = 4;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
-
-  const response = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 48000,
-      thinking: { type: 'adaptive', display: 'omitted' },
-      output_config: { effort: 'high' },
-      messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-    }),
+// Streams via the shared lib/claude transport (survives long generations, retries
+// thrown network errors). Materiality judgment is liability-sensitive, so effort
+// stays 'high' (the shared default).
+function callClaude(prompt) {
+  return callClaudeShared({
+    fn: 'disclosure-review',
+    model: MODEL,
+    content: [{ type: 'text', text: prompt }],
+    maxTokens: 48000,
+    maxTokensError: 'Disclosure review hit max_tokens — output truncated. Raise max_tokens and re-run.',
   });
-
-  if ((response.status === 429 || response.status === 529) && attempt < MAX_RETRIES) {
-    const retryAfter = response.headers.get('retry-after');
-    const delay = retryAfter
-      ? Math.min(parseFloat(retryAfter) * 1000, 30000)
-      : Math.min(1000 * Math.pow(2, attempt), 30000);
-    console.log(`[disclosure-review] ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
-    await sleep(delay);
-    return callClaude(prompt, attempt + 1);
-  }
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Claude API error ${response.status}: ${errText}`);
-  }
-
-  const data = await response.json();
-  await usageLog.logUsage({ fn: 'disclosure-review', model: MODEL, effort: 'high', usage: data.usage });
-  if (data.stop_reason === 'max_tokens') {
-    throw new Error('Disclosure review hit max_tokens — output truncated. Raise max_tokens and re-run.');
-  }
-  return (data.content || [])
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n');
 }
 
 // Parse the model's JSON (tolerate stray prose / code fences).

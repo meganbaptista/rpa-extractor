@@ -46,6 +46,7 @@ const crypto = require('crypto');
 const { getStore } = require('@netlify/blobs');
 const { canonicalAddress } = require('./lib/address');
 const usageLog = require('./lib/usage-log');
+const { callClaude: callClaudeShared } = require('./lib/claude');
 // Crisp-render dependency: pdf-parse (pdfjs under the hood) with its CanvasFactory polyfill,
 // which rasterizes pages server-side so Netlify Functions don't need the native canvas package.
 // pdf-lib is deliberately NOT used here any more — see pdfPageCount() for why.
@@ -601,108 +602,20 @@ function docsNote(step, docs) {
   return `${step} | ${parts.length} doc(s): ${parts.join('; ')}`;
 }
 
-// Read an Anthropic SSE stream to completion: accumulate the text, the final
-// stop_reason, and the usage totals. Streaming is what keeps a long generation
-// alive — a non-streaming call whose generation runs past ~300s trips undici's
-// headersTimeout (no first byte yet) and throws "fetch failed", which is exactly
-// how a heavy answer-review pass killed a run. With streaming, headers arrive at
-// once and only the (sub-second) gaps between token chunks are timed.
-async function readClaudeStream(response) {
-  let text = '';
-  let stopReason = null;
-  let usage = {};
-  const decoder = new TextDecoder();
-  let buffer = '';
-  for await (const chunk of response.body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    let nl;
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line.startsWith('data:')) continue;               // skip "event:" lines and blanks
-      const payload = line.slice(5).trim();
-      if (!payload || payload === '[DONE]') continue;
-      let evt;
-      try { evt = JSON.parse(payload); } catch { continue; }
-      if (evt.type === 'message_start' && evt.message && evt.message.usage) {
-        usage = { ...evt.message.usage };                     // input + cache tokens live here
-      } else if (evt.type === 'content_block_delta' && evt.delta && evt.delta.type === 'text_delta') {
-        text += evt.delta.text;                               // thinking_delta (omitted) is ignored
-      } else if (evt.type === 'message_delta') {
-        if (evt.delta && evt.delta.stop_reason) stopReason = evt.delta.stop_reason;
-        if (evt.usage) usage = { ...usage, ...evt.usage };    // final output_tokens
-      } else if (evt.type === 'error') {
-        throw new Error(`Claude stream error: ${JSON.stringify(evt.error)}`);
-      }
-    }
-  }
-  return { text, stopReason, usage };
-}
-
-// opts.effort right-sizes the reasoning budget PER CALL (default 'high'). The
-// quality-critical reads (identify, answer-review) stay 'high'; mechanical calls
-// (classify page-selection, reconcile matching) pass 'medium' to cut thinking-token
-// cost with no effect on the seller-answer reading. opts.attempt is internal (retries).
-async function callClaude(content, maxTokens, note = '', opts = {}) {
-  const { effort = 'high', attempt = 0 } = opts;
-  const MAX_RETRIES = 4;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
-
-  let response;
-  try {
-    response = await fetch(ANTHROPIC_API_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: maxTokens || 16000,
-        thinking: { type: 'adaptive', display: 'omitted' },
-        output_config: { effort },
-        stream: true,
-        messages: [{ role: 'user', content }],
-      }),
-    });
-  } catch (err) {
-    // Network-level failure ("fetch failed", ECONNRESET, headers/socket timeout). No response
-    // ever came back, so the 429/529 branch below can never see it. Left un-retried, one
-    // transient blip kills a multi-minute run — so retry it here.
-    if (attempt < MAX_RETRIES) {
-      const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
-      console.log(`[disclosure-intake] fetch error "${err.message}" — retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
-      await sleep(delay);
-      return callClaude(content, maxTokens, note, { effort, attempt: attempt + 1 });
-    }
-    throw new Error(`Claude API fetch failed after ${MAX_RETRIES + 1} attempts: ${err.message}`);
-  }
-
-  if ((response.status === 429 || response.status === 529) && attempt < MAX_RETRIES) {
-    const retryAfter = response.headers.get('retry-after');
-    const delay = retryAfter ? Math.min(parseFloat(retryAfter) * 1000, 30000) : Math.min(1000 * Math.pow(2, attempt), 30000);
-    console.log(`[disclosure-intake] ${response.status}, retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
-    await sleep(delay);
-    return callClaude(content, maxTokens, note, { effort, attempt: attempt + 1 });
-  }
-  if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
-
-  // Reading the stream can also throw mid-flight if the socket drops. Treat that like any
-  // other transient fetch failure and retry the whole call rather than failing the run.
-  let result;
-  try {
-    result = await readClaudeStream(response);
-  } catch (err) {
-    if (attempt < MAX_RETRIES) {
-      const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
-      console.log(`[disclosure-intake] stream error "${err.message}" — retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
-      await sleep(delay);
-      return callClaude(content, maxTokens, note, { effort, attempt: attempt + 1 });
-    }
-    throw new Error(`Claude API stream failed after ${MAX_RETRIES + 1} attempts: ${err.message}`);
-  }
-
-  await usageLog.logUsage({ fn: 'disclosure-intake', model: MODEL, effort, usage: result.usage, note });
-  if (result.stopReason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
-  return result.text;
+// Streams via the shared lib/claude transport (survives long generations, retries
+// thrown network errors). opts.effort right-sizes the reasoning budget PER CALL
+// (default 'high'): identify and answer-review stay 'high'; the mechanical classify
+// page-selection and reconcile matching pass 'medium' to trim thinking-token cost
+// with no effect on the seller-answer reading.
+function callClaude(content, maxTokens, note = '', opts = {}) {
+  return callClaudeShared({
+    fn: 'disclosure-intake',
+    model: MODEL,
+    content,
+    maxTokens: maxTokens || 16000,
+    effort: opts.effort || 'high',
+    note,
+  });
 }
 
 function parseJson(raw) {
