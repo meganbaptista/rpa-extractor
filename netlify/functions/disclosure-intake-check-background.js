@@ -601,22 +601,75 @@ function docsNote(step, docs) {
   return `${step} | ${parts.length} doc(s): ${parts.join('; ')}`;
 }
 
+// Read an Anthropic SSE stream to completion: accumulate the text, the final
+// stop_reason, and the usage totals. Streaming is what keeps a long generation
+// alive — a non-streaming call whose generation runs past ~300s trips undici's
+// headersTimeout (no first byte yet) and throws "fetch failed", which is exactly
+// how a heavy answer-review pass killed a run. With streaming, headers arrive at
+// once and only the (sub-second) gaps between token chunks are timed.
+async function readClaudeStream(response) {
+  let text = '';
+  let stopReason = null;
+  let usage = {};
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for await (const chunk of response.body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;               // skip "event:" lines and blanks
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      let evt;
+      try { evt = JSON.parse(payload); } catch { continue; }
+      if (evt.type === 'message_start' && evt.message && evt.message.usage) {
+        usage = { ...evt.message.usage };                     // input + cache tokens live here
+      } else if (evt.type === 'content_block_delta' && evt.delta && evt.delta.type === 'text_delta') {
+        text += evt.delta.text;                               // thinking_delta (omitted) is ignored
+      } else if (evt.type === 'message_delta') {
+        if (evt.delta && evt.delta.stop_reason) stopReason = evt.delta.stop_reason;
+        if (evt.usage) usage = { ...usage, ...evt.usage };    // final output_tokens
+      } else if (evt.type === 'error') {
+        throw new Error(`Claude stream error: ${JSON.stringify(evt.error)}`);
+      }
+    }
+  }
+  return { text, stopReason, usage };
+}
+
 async function callClaude(content, maxTokens, note = '', attempt = 0) {
   const MAX_RETRIES = 4;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
 
-  const response = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens || 16000,
-      thinking: { type: 'adaptive', display: 'omitted' },
-      output_config: { effort: 'high' },
-      messages: [{ role: 'user', content }],
-    }),
-  });
+  let response;
+  try {
+    response = await fetch(ANTHROPIC_API_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: maxTokens || 16000,
+        thinking: { type: 'adaptive', display: 'omitted' },
+        output_config: { effort: 'high' },
+        stream: true,
+        messages: [{ role: 'user', content }],
+      }),
+    });
+  } catch (err) {
+    // Network-level failure ("fetch failed", ECONNRESET, headers/socket timeout). No response
+    // ever came back, so the 429/529 branch below can never see it. Left un-retried, one
+    // transient blip kills a multi-minute run — so retry it here.
+    if (attempt < MAX_RETRIES) {
+      const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+      console.log(`[disclosure-intake] fetch error "${err.message}" — retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
+      await sleep(delay);
+      return callClaude(content, maxTokens, note, attempt + 1);
+    }
+    throw new Error(`Claude API fetch failed after ${MAX_RETRIES + 1} attempts: ${err.message}`);
+  }
 
   if ((response.status === 429 || response.status === 529) && attempt < MAX_RETRIES) {
     const retryAfter = response.headers.get('retry-after');
@@ -627,10 +680,24 @@ async function callClaude(content, maxTokens, note = '', attempt = 0) {
   }
   if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
 
-  const data = await response.json();
-  await usageLog.logUsage({ fn: 'disclosure-intake', model: MODEL, effort: 'high', usage: data.usage, note });
-  if (data.stop_reason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
-  return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+  // Reading the stream can also throw mid-flight if the socket drops. Treat that like any
+  // other transient fetch failure and retry the whole call rather than failing the run.
+  let result;
+  try {
+    result = await readClaudeStream(response);
+  } catch (err) {
+    if (attempt < MAX_RETRIES) {
+      const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+      console.log(`[disclosure-intake] stream error "${err.message}" — retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
+      await sleep(delay);
+      return callClaude(content, maxTokens, note, attempt + 1);
+    }
+    throw new Error(`Claude API stream failed after ${MAX_RETRIES + 1} attempts: ${err.message}`);
+  }
+
+  await usageLog.logUsage({ fn: 'disclosure-intake', model: MODEL, effort: 'high', usage: result.usage, note });
+  if (result.stopReason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
+  return result.text;
 }
 
 function parseJson(raw) {
