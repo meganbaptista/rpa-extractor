@@ -1122,6 +1122,79 @@ async function pdfPageCount(buffer) {
   }
 }
 
+// C.A.R. forms stamp a "(PAGE m OF n)" footer into the text layer of every page: page m of an
+// n-page form. That footer is a deterministic map of each form's page span, and we use it to make
+// the nondeterministic Q&A classifier LOSSLESS at the form level. classifyQAPages can drop a page
+// of a form it otherwise selected (see the coin-flip note above); when it does, the review pass
+// sees a form with a page missing and either raises a FALSE "section missing" flag or, worse, a
+// silent miss. Completing each selected form from its footers means the whole form always reaches
+// review, so it is read as it actually is — no phantom-missing page, no manual-verify punt.
+
+// Only forms up to this many pages are auto-completed. TDS(3), SPQ(5), FHDS(2), the water-heater/
+// smoke statement, the Residential Earthquake Hazards report and the like are all well under it.
+// The cap stops a stray selection inside a long advisory (the 15-page SBSA, a multi-page booklet)
+// from dragging its whole span into the hi-res review. It mirrors QA_REVIEW_ALL_MAX_PAGES: a form
+// small enough to review whole is small enough to complete.
+const FORM_BACKFILL_MAX_PAGES = 12;
+
+// Parse the "(PAGE m OF n)" footer on every page. Returns Map<pageNumber, { m, n }>.
+// Text-layer only: a scanned page carries no footer text, so it simply won't appear in the map and
+// backfill is a no-op for it (behaviour identical to before this existed). Never throws — on a
+// corrupt/unreadable PDF it returns an empty map and the caller keeps the classifier's own output.
+async function pdfFormSpans(buffer) {
+  const spans = new Map();
+  let parser;
+  try {
+    parser = new PDFParse({
+      data: new Uint8Array(buffer),
+      CanvasFactory,
+      ...(STANDARD_FONT_DATA_URL ? { standardFontDataUrl: STANDARD_FONT_DATA_URL } : {}),
+    });
+    const r = await parser.getText();
+    for (const page of (r.pages || [])) {
+      const num = Number(page.num);
+      if (!Number.isInteger(num) || num < 1) continue;
+      // Footers render at the bottom, so the LAST "PAGE m OF n" in the page text is the form
+      // footer, not a stray body-text mention. Some footers use a non-breaking space ( ).
+      const text = String(page.text || '').replace(/\u00a0/g, ' ');
+      const matches = [...text.matchAll(/\(?\s*PAGE\s+(\d+)\s+OF\s+(\d+)\s*\)?/gi)];
+      if (!matches.length) continue;
+      const last = matches[matches.length - 1];
+      const m = parseInt(last[1], 10);
+      const n = parseInt(last[2], 10);
+      if (Number.isInteger(m) && Number.isInteger(n) && m >= 1 && n >= 1 && m <= n) {
+        spans.set(num, { m, n });
+      }
+    }
+  } catch (err) {
+    console.warn(`[disclosure-intake] pdfFormSpans: could not read footers (${err.message}); backfill skipped`);
+    return new Map();
+  } finally {
+    if (parser) { try { await parser.destroy(); } catch { /* ignore */ } }
+  }
+  return spans;
+}
+
+// Expand the classifier's selected pages so every form that had ANY page selected becomes
+// page-complete. Deterministic; adds only the missing pages of already-selected forms, each anchored
+// by its own footer, and caps per-form length at FORM_BACKFILL_MAX_PAGES so a long advisory can't
+// balloon the review. Returns { pages, added } — added is the newly-included page numbers, for logs.
+function backfillFormPages(qaNums, spans, pageCount) {
+  const before = new Set(qaNums);
+  const keep = new Set(qaNums);
+  for (const p of qaNums) {
+    const span = spans.get(p);
+    if (!span || span.n > FORM_BACKFILL_MAX_PAGES) continue;
+    const first = p - (span.m - 1);
+    const last = p + (span.n - span.m);
+    if (first < 1 || last > pageCount) continue;   // footer disagrees with the real page count; don't guess
+    for (let q = first; q <= last; q++) keep.add(q);
+  }
+  const pages = [...keep].sort((a, b) => a - b);
+  const added = pages.filter((p) => !before.has(p));
+  return { pages, added };
+}
+
 // Render every page (up to maxPages). Kept for callers that want the whole document.
 async function renderAllPagesAsImages(buffer, scale, maxPages) {
   const count = await pdfPageCount(buffer);
@@ -1188,13 +1261,32 @@ async function renderQAPageImages(buffer, name) {
     qaNums = await classifyQAPages(thumbs, name);
     thumbs = null;   // drop ~46 thumbnails before rendering the hi-res pass
 
-    // What the classifier THREW AWAY. Previously nothing recorded this, which is exactly how a
-    // dropped TDS page hid for weeks: the ledger showed a review had run and said nothing about
-    // the pages it never looked at.
+    // Make the nondeterministic classifier LOSSLESS at the form level: if it picked any page of a
+    // multi-page C.A.R. form, add back that form's other pages from the "(PAGE m OF n)" footers.
+    // This is what stops a dropped TDS page 3 from becoming a false "Section III missing" flag (or
+    // a silent miss) — the whole form reaches the review pass, so it is read as it actually is.
+    let backfilled = [];
+    if (qaNums.length) {
+      const spans = await pdfFormSpans(buffer);
+      if (spans.size) {
+        const r = backfillFormPages(qaNums, spans, pageCount);
+        backfilled = r.added;
+        qaNums = r.pages;
+      }
+    }
+
+    // What the classifier THREW AWAY, AFTER footer backfill recovered what it could. A page still
+    // skipped here is one no footer could rescue (a scanned page, or a page in no paginated form).
+    // Previously nothing recorded this, which is exactly how a dropped TDS page hid for weeks: the
+    // ledger showed a review had run and said nothing about the pages it never looked at.
     const kept = new Set(qaNums);
     const skipped = thumbNums.filter((n) => !kept.has(n));
     selection = `${name}: reviewed ${qaNums.length}/${thumbNums.length}pp [${qaNums.join(',') || 'none'}]`
+      + (backfilled.length ? ` +backfill [${backfilled.join(',')}]` : '')
       + (skipped.length ? ` SKIPPED [${skipped.join(',')}]` : '');
+    if (backfilled.length) {
+      console.log(`[disclosure-intake] ${name}: form-completed ${backfilled.length} page(s) from footers: ${backfilled.join(', ')}`);
+    }
     if (skipped.length) {
       console.warn(`[disclosure-intake] ${name}: classifier SKIPPED ${skipped.length} page(s): ${skipped.join(', ')} `
         + '— these were NOT audited. A form on a skipped page draws no flags, correct or otherwise.');
