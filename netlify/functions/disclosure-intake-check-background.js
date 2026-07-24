@@ -639,7 +639,12 @@ async function readClaudeStream(response) {
   return { text, stopReason, usage };
 }
 
-async function callClaude(content, maxTokens, note = '', attempt = 0) {
+// opts.effort right-sizes the reasoning budget PER CALL (default 'high'). The
+// quality-critical reads (identify, answer-review) stay 'high'; mechanical calls
+// (classify page-selection, reconcile matching) pass 'medium' to cut thinking-token
+// cost with no effect on the seller-answer reading. opts.attempt is internal (retries).
+async function callClaude(content, maxTokens, note = '', opts = {}) {
+  const { effort = 'high', attempt = 0 } = opts;
   const MAX_RETRIES = 4;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
@@ -653,7 +658,7 @@ async function callClaude(content, maxTokens, note = '', attempt = 0) {
         model: MODEL,
         max_tokens: maxTokens || 16000,
         thinking: { type: 'adaptive', display: 'omitted' },
-        output_config: { effort: 'high' },
+        output_config: { effort },
         stream: true,
         messages: [{ role: 'user', content }],
       }),
@@ -666,7 +671,7 @@ async function callClaude(content, maxTokens, note = '', attempt = 0) {
       const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
       console.log(`[disclosure-intake] fetch error "${err.message}" — retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
       await sleep(delay);
-      return callClaude(content, maxTokens, note, attempt + 1);
+      return callClaude(content, maxTokens, note, { effort, attempt: attempt + 1 });
     }
     throw new Error(`Claude API fetch failed after ${MAX_RETRIES + 1} attempts: ${err.message}`);
   }
@@ -676,7 +681,7 @@ async function callClaude(content, maxTokens, note = '', attempt = 0) {
     const delay = retryAfter ? Math.min(parseFloat(retryAfter) * 1000, 30000) : Math.min(1000 * Math.pow(2, attempt), 30000);
     console.log(`[disclosure-intake] ${response.status}, retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
     await sleep(delay);
-    return callClaude(content, maxTokens, note, attempt + 1);
+    return callClaude(content, maxTokens, note, { effort, attempt: attempt + 1 });
   }
   if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
 
@@ -690,12 +695,12 @@ async function callClaude(content, maxTokens, note = '', attempt = 0) {
       const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
       console.log(`[disclosure-intake] stream error "${err.message}" — retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
       await sleep(delay);
-      return callClaude(content, maxTokens, note, attempt + 1);
+      return callClaude(content, maxTokens, note, { effort, attempt: attempt + 1 });
     }
     throw new Error(`Claude API stream failed after ${MAX_RETRIES + 1} attempts: ${err.message}`);
   }
 
-  await usageLog.logUsage({ fn: 'disclosure-intake', model: MODEL, effort: 'high', usage: result.usage, note });
+  await usageLog.logUsage({ fn: 'disclosure-intake', model: MODEL, effort, usage: result.usage, note });
   if (result.stopReason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
   return result.text;
 }
@@ -1240,7 +1245,7 @@ async function classifyQAPages(thumbs, label = '') {
     content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: t.base64 } });
   }
   content.push({ type: 'text', text: CLASSIFY_PROMPT });
-  const raw = await callClaude(content, 8000, `classify | ${label || 'doc'} | ${thumbs.length} page thumb(s)`);
+  const raw = await callClaude(content, 8000, `classify | ${label || 'doc'} | ${thumbs.length} page thumb(s)`, { effort: 'medium' });
   const parsed = parseJson(raw);
   return Array.isArray(parsed.qa_pages)
     ? parsed.qa_pages.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 1)
@@ -1653,7 +1658,7 @@ async function reconcile(auditList, received) {
   // this belongs in the Note where it survives.
   const recvCodes = (received || []).map((f) => (f && (f.code || f.name)) || '?').join(', ');
   return parseJson(await callClaude([{ type: 'text', text: prompt }], 16000,
-    `reconcile | ${(received || []).length} received form(s): ${recvCodes || '(none)'}`));
+    `reconcile | ${(received || []).length} received form(s): ${recvCodes || '(none)'}`, { effort: 'medium' }));
 }
 
 // Render the plain-text comment as HTML.
