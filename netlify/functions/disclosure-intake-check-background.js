@@ -627,6 +627,7 @@ function parseJson(raw) {
 // A request can blow the model's limits two different ways, and they surface as different
 // errors. Too many BYTES is a 413 request_too_large. Too many TOKENS once the PDF is
 // rasterized is a 400 "prompt is too long: N tokens > 1000000 maximum". The old drop-biggest
+// backstop only tested for the 413 wording, so a 455-page packet — which is under the 32MB
 // byte cap but ~1.1M tokens — sailed past the guard and threw, taking the whole delivery down.
 // Match BOTH so any overflow routes to the same drop/for-fallback handling.
 function isRequestTooLarge(msg) {
