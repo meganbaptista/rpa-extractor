@@ -624,6 +624,15 @@ function parseJson(raw) {
   return JSON.parse(m ? m[0] : t);
 }
 
+// A request can blow the model's limits two different ways, and they surface as different
+// errors. Too many BYTES is a 413 request_too_large. Too many TOKENS once the PDF is
+// rasterized is a 400 "prompt is too long: N tokens > 1000000 maximum". The old drop-biggest
+// byte cap but ~1.1M tokens — sailed past the guard and threw, taking the whole delivery down.
+// Match BOTH so any overflow routes to the same drop/for-fallback handling.
+function isRequestTooLarge(msg) {
+  return /\b413\b|request_too_large|too\s*large|prompt is too long|maximum\s+context|tokens\s*>\s*\d/i.test(String(msg || ''));
+}
+
 // ----------------------------------------------------------------------------
 // Step 1 — identify the REAL forms present across the documents, and read the
 // property address. The "real vs referenced" rule is the key lesson from the
@@ -969,17 +978,50 @@ async function identifyFormsUncached(docs) {
       console.log(`[disclosure-intake] identify returned ${forms.length} form(s): ${forms.map((f) => f.code || f.name).join(', ') || '(none)'}`);
       return { propertyAddress: String(parsed.property_address || '').trim(), forms, dropped };
     } catch (err) {
-      const tooLarge = /\b413\b|request_too_large|too\s*large/i.test(err.message || '');
+      const tooLarge = isRequestTooLarge(err.message);
       if (tooLarge && working.length > 1) {
         const big = working.shift(); // largest, list is size-sorted descending
         dropped.push(big.name);
         console.warn(`[disclosure-intake] identify: request too large — dropping biggest doc "${big.name}" and retrying with ${working.length} doc(s)`);
         continue;
       }
+      // Single doc that's too large to drop (e.g. a 455-page combined packet: under the 32MB
+      // byte cap but over the 1M-token cap once rasterized). Rather than throw — which used to
+      // discard the ENTIRE delivery, this delivery's other forms included — fall back to the
+      // TEXT LAYER. Identify only needs form headers, revision stamps and the address, all of
+      // which live in the text; sending text instead of rasterized pages is far cheaper AND
+      // fits under the token cap. Only worthwhile for a real text layer, so it's guarded.
+      if (tooLarge && working.length === 1) {
+        const textForms = await identifyFormsFromText(working[0]).catch((e) => {
+          console.warn(`[disclosure-intake] identify text-fallback failed for "${working[0].name}": ${e.message}`);
+          return null;
+        });
+        if (textForms) {
+          console.log(`[disclosure-intake] identify: text-layer fallback returned ${textForms.forms.length} form(s) for "${working[0].name}"`);
+          return { propertyAddress: textForms.propertyAddress, forms: textForms.forms, dropped };
+        }
+      }
       throw err;
     }
   }
   return { propertyAddress: '', forms: [], dropped };
+}
+
+// Identify off the TEXT LAYER, for a document too large to send as rasterized pages under the
+// 1M-token cap. Sends the extracted text (not images) so the whole packet fits. Returns null
+// when the text layer is unusable (a scan), so the caller can decide what to do next.
+async function identifyFormsFromText(doc) {
+  const buf = Buffer.from(doc.base64 || '', 'base64');
+  const texts = await pdfPageTexts(buf);
+  if (!isTextLayerUsable(texts)) return null;   // scanned/garbled — text won't help identify
+  const body = texts.map((p) => `--- PAGE ${p.num} ---\n${p.text}`).join('\n\n');
+  const content = [{ type: 'text', text: `${IDENTIFY_PROMPT}\n\nDOCUMENT: ${doc.name}\nFULL TEXT LAYER BELOW:\n\n${body}` }];
+  const raw = await callClaude(content, 24000, `identify-text | ${doc.name} (${texts.length}pp text)`);
+  const parsed = parseJson(raw);
+  const forms = Array.isArray(parsed.forms) ? parsed.forms
+    .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim() }))
+    .filter((f) => f.code || f.name) : [];
+  return { propertyAddress: String(parsed.property_address || '').trim(), forms };
 }
 
 // ----------------------------------------------------------------------------
@@ -996,7 +1038,8 @@ const QA_THUMB_SCALE = 0.7;                 // stage A: small thumbnails, just e
 // sharpness at all; it just cost memory (a factor in the OOM) and tokens. 1.9 lands at
 // ~1505px: under the cap, so it reaches the model at full fidelity, un-downscaled.
 const QA_HIRES_SCALE = 1.9;
-const QA_MAX_RENDER_PAGES = 60;             // safety cap on pages rendered from one document
+const QA_MAX_RENDER_PAGES = 60;             // pages classified per window (thumbnail working-set cap)
+const QA_MAX_REVIEW_PAGES = 150;            // hard cap on Q&A pages sent to the review; overflow logged, not dumped
 const QA_MAX_BATCH_B64 = 18 * 1024 * 1024;  // keep each review request well under the 32MB cap
 const QA_MAX_BATCH_IMAGES = 20;
 
@@ -1195,6 +1238,142 @@ function backfillFormPages(qaNums, spans, pageCount) {
   return { pages, added };
 }
 
+// ----------------------------------------------------------------------------
+// PATH A — text-layer-driven Q&A page selection.
+//
+// The old flow rendered thumbnails of only the FIRST QA_MAX_RENDER_PAGES(60) pages and asked a
+// nondeterministic classifier which carry seller answers. On a 455-page combined packet that is
+// blind to 87% of the document, and when the classifier returned nothing it fell back to shipping
+// the WHOLE pdf as a document block — the 1.1M-token request that 400'd and sank this delivery.
+//
+// Almost every real seller-disclosure packet has a readable text layer (measured: 427/455 pages
+// on the packet that failed), and every C.A.R. Q&A form stamps its CODE into a "(CODE PAGE m OF n)"
+// footer. So we can pick the Q&A pages deterministically from the text, across the WHOLE document,
+// with no classifier coin-flip and no whole-pdf dump. When the text layer is NOT usable (a scan, a
+// font-broken Docusign export) we fall back to the windowed image classifier (Path B).
+//
+// Design bias: INCLUSION. A false positive costs one extra rendered page that the review reads and,
+// finding no seller answer, flags nothing. A false negative is a Q&A page the buyer signs that was
+// never audited. So when in doubt, include.
+// ----------------------------------------------------------------------------
+
+// Seller Q&A form CODES — the seller marks Yes/No or writes answers/explanations on these. The
+// footer code (e.g. "TDS PAGE 2 OF 3", "(SPQ PAGE 1 OF 4)") is the deterministic signal.
+const QA_FORM_CODES = new Set(['TDS', 'SPQ', 'SPQA', 'ESD', 'CSPQ', 'FHDS', 'LPD', 'WCMD', 'WHSD', 'SFLS', 'SWPI', 'SPI', 'REHS', 'CSD']);
+// Advisory / informational / report forms — NOT seller Q&A. Excluded from the answer review even
+// when their prose happens to mention a Q&A form or the word "aware" (the 15-page SBSA discusses
+// earthquakes, wildfire, wells; the DIA describes the TDS). Excluding by CODE, not by prose, is what
+// keeps those out. Confirmed with the owner: exclude advisories to hold cost down.
+const ADVISORY_FORM_CODES = new Set(['DIA', 'SBSA', 'AVID', 'CCPA', 'DSDT', 'WFDA', 'WFA', 'AAA', 'MCA', 'RCSD', 'BIA', 'NHD', 'WHZ']);
+// Seller Q&A forms that lack a standard C.A.R. footer code — matched by their TITLE, anchored to the
+// top of the page so advisory prose deeper down can't trip them. The Residential Earthquake Hazards
+// report is the canonical one: no footer, a Yes/No/Don't-Know grid that doesn't read as dense
+// "Yes No" text, so a pure code+answer selector silently drops it.
+const QA_TITLE_PATTERNS = [
+  /RESIDENTIAL EARTHQUAKE (HAZARDS|RISK) DISCLOSURE/i,
+  /EARTHQUAKE RISK DISCLOSURE STATEMENT/i,
+  /WATER HEATER AND SMOKE DETECTOR STATEMENT OF COMPLIANCE/i,
+  /SOLAR (POWER|ENERGY|SYSTEM) (DISCLOSURE|QUESTIONNAIRE|LEASE)/i,
+];
+
+// Extract the text layer per page: [{ num, text }] sorted by page, non-breaking spaces normalized.
+// Never throws — returns [] on a corrupt/scanned PDF so callers fall through to the image path.
+async function pdfPageTexts(buffer) {
+  let parser;
+  try {
+    parser = new PDFParse({
+      data: new Uint8Array(buffer),
+      CanvasFactory,
+      ...(STANDARD_FONT_DATA_URL ? { standardFontDataUrl: STANDARD_FONT_DATA_URL } : {}),
+    });
+    const r = await parser.getText();
+    return (r.pages || [])
+      .map((p) => ({ num: Number(p.num), text: String(p.text || '').replace(/ /g, ' ') }))
+      .filter((p) => Number.isInteger(p.num) && p.num >= 1)
+      .sort((a, b) => a.num - b.num);
+  } catch (err) {
+    console.warn(`[disclosure-intake] pdfPageTexts: text layer unreadable (${err.message})`);
+    return [];
+  } finally {
+    if (parser) { try { await parser.destroy(); } catch { /* ignore */ } }
+  }
+}
+
+// Is the text layer usable, or is this a scan / font-broken export whose getText() is garbage?
+// A Docusign-flattened packet can have a "text layer" that extracts as control characters (no
+// ToUnicode map). Require a solid majority of pages to carry real words before trusting Path A.
+function isTextLayerUsable(texts) {
+  if (!texts || !texts.length) return false;
+  const readable = texts.filter((p) => (p.text.match(/[A-Za-z]{4,}/g) || []).length >= 10).length;
+  return readable >= 0.6 * texts.length;
+}
+
+// The last "(PAGE m OF n)" on a page is the form footer (earlier ones are body-text mentions).
+function pageSpanOf(text) {
+  const ms = [...text.matchAll(/\(?\s*PAGE\s+(\d+)\s+OF\s+(\d+)\s*\)?/gi)];
+  if (!ms.length) return null;
+  const last = ms[ms.length - 1];
+  const m = parseInt(last[1], 10);
+  const n = parseInt(last[2], 10);
+  return (Number.isInteger(m) && Number.isInteger(n) && m >= 1 && n >= 1 && m <= n) ? { m, n } : null;
+}
+
+// Form CODE from a page's footer. Handles the two real footer shapes — "(TDS PAGE 2 OF 3)" (code
+// inside the paren) and "FHDS REVISED 6/25 (PAGE 1 OF 2)" (code before REVISED) — plus the title
+// line "C.A.R. Form <CODE>". Returns null when no code is printed (non-C.A.R. or footerless page).
+function formCodeOf(text) {
+  const a = text.match(/\(\s*([A-Z]{2,6})\s+PAGE\s+\d+\s+OF\s+\d+/i);
+  if (a) return a[1].toUpperCase();
+  const b = [...text.matchAll(/\b([A-Z]{2,6})\s+REVISED\b/gi)];
+  if (b.length) return b[b.length - 1][1].toUpperCase();
+  const c = text.match(/C\.?A\.?R\.?\s+Form\s+([A-Z]{2,6})/i);
+  if (c) return c[1].toUpperCase();
+  return null;
+}
+
+const isOverflowAddendum = (text) => /TEXT OVERFLOW ADDENDUM/i.test(text);        // carries seller explanations
+const hasSellerAwareQuestion = (text) => /ARE YOU\s*\(?\s*SELLER\)?\s*AWARE/i.test(text);
+const hasQaTitle = (text) => QA_TITLE_PATTERNS.some((re) => re.test(text.slice(0, 140)));
+
+// Choose the Q&A pages to audit from the text layer. Returns { usable, pages, selection }.
+// usable=false means the text layer can't be trusted → caller runs Path B (image classifier).
+function selectQAPagesFromText(texts, pageCount) {
+  if (!isTextLayerUsable(texts)) return { usable: false, pages: [], selection: '' };
+  const byNum = new Map(texts.map((p) => [p.num, p.text]));
+  const include = new Set();
+  const why = new Map();
+  const mark = (n, reason) => { if (n >= 1 && n <= pageCount && !include.has(n)) { include.add(n); why.set(n, reason); } };
+
+  for (const { num, text } of texts) {
+    const code = formCodeOf(text);
+    if (code && ADVISORY_FORM_CODES.has(code) && !hasQaTitle(text)) continue;   // advisory/report: skip
+    if (code && QA_FORM_CODES.has(code)) mark(num, code);
+    else if (hasQaTitle(text)) mark(num, 'title');
+    else if (isOverflowAddendum(text)) mark(num, 'overflow');
+    else if (hasSellerAwareQuestion(text)) mark(num, 'answer');
+  }
+
+  // Footerless Q&A forms (title/answer matched) have no "(PAGE m OF n)" span to complete, so pull in
+  // an immediately-adjacent continuation page — but only a blank/continuation page, never one that is
+  // clearly its own titled form or an advisory. This is what recovers the earthquake report's second
+  // page without dragging a neighboring advisory into the review.
+  for (const n of [...include]) {
+    if (why.get(n) !== 'title' && why.get(n) !== 'answer') continue;
+    for (const j of [n - 1, n + 1]) {
+      if (j < 1 || j > pageCount || include.has(j)) continue;
+      const t = byNum.get(j) || '';
+      const jc = formCodeOf(t);
+      if (jc && (ADVISORY_FORM_CODES.has(jc) || QA_FORM_CODES.has(jc))) continue;
+      if (/C\.?A\.?R\.?\s+Form/i.test(t)) continue;
+      mark(j, 'neighbor');
+    }
+  }
+
+  const pages = [...include].sort((a, b) => a - b);
+  const selection = `text-driven ${pages.length}/${pageCount}pp [${pages.join(',') || 'none'}]`;
+  return { usable: true, pages, selection };
+}
+
 // Render every page (up to maxPages). Kept for callers that want the whole document.
 async function renderAllPagesAsImages(buffer, scale, maxPages) {
   const count = await pdfPageCount(buffer);
@@ -1242,11 +1421,36 @@ async function classifyQAPages(thumbs, label = '') {
 // Returns [] when the doc has no Q&A pages (e.g. an NHD report or booklet).
 // Returns { images, selection } — selection is a one-line human-readable record of WHICH pages
 // were reviewed and which were skipped, so it can be carried into the usage ledger.
+// PATH B: windowed image classification across the WHOLE document. Used only when the text layer
+// is unusable (a scan, a font-broken export). Renders thumbnails QA_MAX_RENDER_PAGES at a time,
+// classifies each window, drops the thumbnails, and accumulates the Q&A page numbers — so a big
+// scanned packet is covered end to end instead of only its first 60 pages, with memory bounded to
+// one window at a time (the OOM lever is thumbnail working-set, see RENDER_CHUNK_PAGES).
+async function classifyQAPagesWindowed(buffer, pageCount, name) {
+  const qa = new Set();
+  for (let start = 1; start <= pageCount; start += QA_MAX_RENDER_PAGES) {
+    const windowPages = [];
+    for (let p = start; p < start + QA_MAX_RENDER_PAGES && p <= pageCount; p++) windowPages.push(p);
+    let thumbs = await renderPagesAsImages(buffer, windowPages, QA_THUMB_SCALE);
+    if (!thumbs.length) continue;
+    const label = `${name} pp${windowPages[0]}-${windowPages[windowPages.length - 1]}`;
+    const picked = await classifyQAPages(thumbs, label);
+    thumbs = null;   // free the window before the next one
+    for (const n of picked) if (n >= 1 && n <= pageCount) qa.add(n);
+  }
+  return [...qa].sort((a, b) => a - b);
+}
+
+// Pick the Q&A pages of ONE document and render them hi-res. Returns { images, selection, status }.
+//   status 'ok'     — Q&A pages found and rendered
+//   status 'no_qa'  — document genuinely has no seller Q&A pages (an RPA, an NHD report): nothing to
+//                     audit, and critically NOT a reason to dump the whole PDF at the model
+//   status 'failed' — could not read/render the document at all (logged loud, never silent)
 async function renderQAPageImages(buffer, name) {
   const pageCount = await pdfPageCount(buffer);
-  if (!pageCount) return { images: [], selection: `${name}: unreadable (0 pages)` };
+  if (!pageCount) return { images: [], selection: `${name}: unreadable (0 pages)`, status: 'failed' };
 
-  let qaNums;
+  let qaNums = [];
   let selection;
 
   if (pageCount <= QA_REVIEW_ALL_MAX_PAGES) {
@@ -1255,58 +1459,60 @@ async function renderQAPageImages(buffer, name) {
     qaNums = Array.from({ length: pageCount }, (_, i) => i + 1);
     selection = `${name}: all ${pageCount}pp (classifier bypassed)`;
   } else {
-    let thumbs = await renderAllPagesAsImages(buffer, QA_THUMB_SCALE, QA_MAX_RENDER_PAGES);
-    if (!thumbs.length) return { images: [], selection: `${name}: no pages rendered` };
-    const thumbNums = thumbs.map((t) => t.pageNumber);
-    qaNums = await classifyQAPages(thumbs, name);
-    thumbs = null;   // drop ~46 thumbnails before rendering the hi-res pass
-
-    // Make the nondeterministic classifier LOSSLESS at the form level: if it picked any page of a
-    // multi-page C.A.R. form, add back that form's other pages from the "(PAGE m OF n)" footers.
-    // This is what stops a dropped TDS page 3 from becoming a false "Section III missing" flag (or
-    // a silent miss) — the whole form reaches the review pass, so it is read as it actually is.
-    let backfilled = [];
-    if (qaNums.length) {
-      const spans = await pdfFormSpans(buffer);
-      if (spans.size) {
-        const r = backfillFormPages(qaNums, spans, pageCount);
-        backfilled = r.added;
-        qaNums = r.pages;
+    // PATH A — deterministic text-layer selection across the whole document. Preferred: no
+    // classifier coin-flip, no per-page image cost just to decide, whole-document coverage.
+    const texts = await pdfPageTexts(buffer);
+    const a = selectQAPagesFromText(texts, pageCount);
+    if (a.usable) {
+      qaNums = a.pages;
+      selection = `${name}: ${a.selection}`;
+    } else {
+      // PATH B — the text layer is a scan or font-broken, so classify from images instead, but in
+      // windows across EVERY page rather than only the first 60 (which was blind to 87% of a
+      // 455-page packet). Footer backfill still applies where footers exist.
+      qaNums = await classifyQAPagesWindowed(buffer, pageCount, name);
+      let backfilled = [];
+      if (qaNums.length) {
+        const spans = await pdfFormSpans(buffer);
+        if (spans.size) {
+          const r = backfillFormPages(qaNums, spans, pageCount);
+          backfilled = r.added;
+          qaNums = r.pages;
+        }
       }
+      selection = `${name}: image-classified ${qaNums.length}/${pageCount}pp [${qaNums.join(',') || 'none'}]`
+        + (backfilled.length ? ` +backfill [${backfilled.join(',')}]` : '');
     }
+  }
 
-    // What the classifier THREW AWAY, AFTER footer backfill recovered what it could. A page still
-    // skipped here is one no footer could rescue (a scanned page, or a page in no paginated form).
-    // Previously nothing recorded this, which is exactly how a dropped TDS page hid for weeks: the
-    // ledger showed a review had run and said nothing about the pages it never looked at.
-    const kept = new Set(qaNums);
-    const skipped = thumbNums.filter((n) => !kept.has(n));
-    selection = `${name}: reviewed ${qaNums.length}/${thumbNums.length}pp [${qaNums.join(',') || 'none'}]`
-      + (backfilled.length ? ` +backfill [${backfilled.join(',')}]` : '')
-      + (skipped.length ? ` SKIPPED [${skipped.join(',')}]` : '');
-    if (backfilled.length) {
-      console.log(`[disclosure-intake] ${name}: form-completed ${backfilled.length} page(s) from footers: ${backfilled.join(', ')}`);
-    }
-    if (skipped.length) {
-      console.warn(`[disclosure-intake] ${name}: classifier SKIPPED ${skipped.length} page(s): ${skipped.join(', ')} `
-        + '— these were NOT audited. A form on a skipped page draws no flags, correct or otherwise.');
-    }
+  // Never send an unbounded page set to the review. A real Q&A set runs ~20-40 pages; a selection
+  // far past that means a broken document, not a real audit. Cap it and log the overflow LOUD (so a
+  // miss shows in the ledger) rather than risk a context-overflow 400 like the one that started this.
+  if (qaNums.length > QA_MAX_REVIEW_PAGES) {
+    const cut = qaNums.slice(QA_MAX_REVIEW_PAGES);
+    console.warn(`[disclosure-intake] ${name}: ${qaNums.length} Q&A pages selected exceeds cap ${QA_MAX_REVIEW_PAGES}; `
+      + `reviewing first ${QA_MAX_REVIEW_PAGES}, NOT auditing [${cut.join(',')}]`);
+    selection += ` CAPPED — not audited [${cut.join(',')}]`;
+    qaNums = qaNums.slice(0, QA_MAX_REVIEW_PAGES);
   }
 
   if (!qaNums.length) {
-    console.log(`[disclosure-intake] ${name}: no Q&A pages classified`);
-    return { images: [], selection };
+    console.log(`[disclosure-intake] ${name}: no seller Q&A pages found — nothing to answer-review`);
+    return { images: [], selection, status: 'no_qa' };
   }
 
-  // Render the Q&A pages straight from the original buffer. buildSubPdf() is gone: it
-  // filtered out-of-range page numbers, which shifted the sub-PDF's pages relative to
-  // qaNums, so every image after a dropped page got labelled with the WRONG page number.
-  // `partial` renders exactly these pages and each one reports its own true pageNumber.
+  // Render the Q&A pages straight from the original buffer. `partial` renders exactly these pages
+  // and each one reports its own true pageNumber (no page-label drift from a filtered sub-PDF).
   const hi = await renderPagesAsImages(buffer, qaNums, QA_HIRES_SCALE);
+  if (!hi.length) {
+    console.warn(`[disclosure-intake] ${name}: selected ${qaNums.length} Q&A page(s) but NONE rendered — NOT audited`);
+    return { images: [], selection: `${selection} RENDER FAILED`, status: 'failed' };
+  }
   console.log(`[disclosure-intake] ${name}: rendered ${hi.length} Q&A page(s) hi-res (pages ${hi.map((p) => p.pageNumber).join(', ')})`);
   return {
     images: hi.map((p) => ({ name: `${name} qa-p${p.pageNumber}`, base64: p.base64 })),
     selection,
+    status: 'ok',
   };
 }
 
@@ -1415,27 +1621,41 @@ function mergeKeyAnswers(acc, next) {
   return acc;
 }
 
-// Answer review over crisp Q&A page images. Renders each doc's Q&A pages, batches the
-// images under the request cap, and runs ANSWER_REVIEW_PROMPT on them. Falls back to the
-// document-block review if nothing renders, so the review is never silently skipped.
+// Answer review over crisp Q&A page images. Renders each doc's Q&A pages (Path A text selection,
+// Path B windowed image classify), batches the images under the request cap, and runs
+// ANSWER_REVIEW_PROMPT on them. When a delivery has no seller Q&A pages this correctly returns zero
+// flags — it does NOT dump whole PDFs at the model (the document-block fallback that produced the
+// 1.1M-token 400 is gone). A genuine render failure is reported loud, never silently skipped.
 async function reviewAnswers(docs) {
   let qaImages = [];
   const selections = [];
+  let anyFailed = false;
   for (const d of docs) {
     try {
       const buf = Buffer.from(d.base64 || '', 'base64');
-      const { images, selection } = await renderQAPageImages(buf, d.name);
+      const { images, selection, status } = await renderQAPageImages(buf, d.name);
       qaImages = qaImages.concat(images);
       if (selection) selections.push(selection);
+      if (status === 'failed') anyFailed = true;
     } catch (err) {
+      anyFailed = true;
       console.warn(`[disclosure-intake] Q&A render/classify failed for "${d.name}": ${err.message}`);
       selections.push(`${d.name}: RENDER FAILED (${err.message.slice(0, 40)}) — not audited`);
     }
   }
   console.log(`[disclosure-intake] page selection: ${selections.join(' | ') || '(none)'}`);
   if (!qaImages.length) {
-    console.log('[disclosure-intake] no Q&A page images; falling back to document-block answer review');
-    return reviewAnswersFromDocuments(docs);
+    // No Q&A images. For a delivery with no seller-answered pages (an RPA packet, an NHD-only
+    // report) this is the correct, cheap answer: zero flags. The old code instead shipped every
+    // whole PDF as document blocks — the path that 400'd on a 455-page packet and, because the
+    // throw unwound through Promise.all, discarded the entire delivery's identified forms. We never
+    // dump a whole packet again. A real render failure is surfaced loud so a miss shows in the log.
+    if (anyFailed) {
+      console.warn('[disclosure-intake] answer review INCOMPLETE: a document could not be rendered for audit (see page selection above)');
+    } else {
+      console.log('[disclosure-intake] no seller Q&A pages in this delivery — answer review is a no-op (0 flags)');
+    }
+    return { responseFlags: [], keyAnswers: { ...EMPTY_KEY_ANSWERS }, dropped: [], incomplete: anyFailed };
   }
 
   // Batch the images under the request size/count cap.
@@ -1474,40 +1694,7 @@ async function reviewAnswers(docs) {
     mergeKeyAnswers(keyAnswers, parsed.keyAnswers);
     console.log(`[disclosure-intake] answer-review image batch ${i + 1}/${batches.length} (${batches[i].length} page[s]): ${parsed.responseFlags.length} flag(s)`);
   }
-  return { responseFlags, keyAnswers, dropped: [] };
-}
-
-// Document-block answer review (fallback): sends the whole PDF(s) to the model and lets
-// Anthropic rasterize. Used when crisp Q&A-page rendering yields nothing. Same 413
-// drop-biggest backstop as identifyForms.
-async function reviewAnswersFromDocuments(docs) {
-  let working = docs.slice().sort((a, b) => (b.base64 || '').length - (a.base64 || '').length);
-  const dropped = [];
-  while (working.length) {
-    const content = working.map((d) => ({
-      type: 'document',
-      source: { type: 'base64', media_type: 'application/pdf', data: d.base64 },
-      title: d.name,
-    }));
-    content.push({ type: 'text', text: ANSWER_REVIEW_PROMPT });
-    try {
-      // Generous ceiling: this is the heavy reasoning pass (read every marked answer,
-      // pair Yes with explanation, run the contradiction checks) before a small JSON.
-      const raw = await callClaude(content, 48000, docsNote('answer-review-docs', working));
-      const { responseFlags, keyAnswers } = parseAnswerReview(raw);
-      return { responseFlags, keyAnswers, dropped };
-    } catch (err) {
-      const tooLarge = /\b413\b|request_too_large|too\s*large/i.test(err.message || '');
-      if (tooLarge && working.length > 1) {
-        const big = working.shift();
-        dropped.push(big.name);
-        console.warn(`[disclosure-intake] answer-review: request too large — dropping biggest doc "${big.name}" and retrying with ${working.length} doc(s)`);
-        continue;
-      }
-      throw err;
-    }
-  }
-  return { responseFlags: [], keyAnswers: { ...EMPTY_KEY_ANSWERS }, dropped };
+  return { responseFlags, keyAnswers, dropped: [], incomplete: false };
 }
 
 // Merge two form lists, de-duping on code (case-insensitive), then name.
@@ -1530,13 +1717,29 @@ function mergeForms(a, b) {
 // Run BOTH passes over one batch concurrently (latency ~ the slower of the two)
 // and combine into the shape callers already expect.
 async function identifyAndReview(batch) {
-  const [idr, ansr] = await Promise.all([identifyForms(batch), reviewAnswers(batch)]);
+  // The two passes are INDEPENDENT: identify records which forms arrived (the core job), review
+  // audits seller answers (a secondary check). They ran under one Promise.all, so a review throw
+  // rejected the whole thing and discarded identify's forms — which is exactly how a 455-page
+  // packet that overflowed the answer review erased its own already-identified forms. allSettled
+  // decouples them: identify's result stands even if review fails, and a failed review degrades to
+  // zero flags plus an `incomplete` marker instead of taking the delivery down.
+  const [ids, ans] = await Promise.allSettled([identifyForms(batch), reviewAnswers(batch)]);
+  if (ids.status === 'rejected') throw ids.reason;   // identify is essential; without forms there is nothing to record
+  const idr = ids.value;
+  let ansr;
+  if (ans.status === 'fulfilled') {
+    ansr = ans.value;
+  } else {
+    console.warn(`[disclosure-intake] answer review failed (forms still recorded): ${ans.reason && ans.reason.message}`);
+    ansr = { responseFlags: [], keyAnswers: { ...EMPTY_KEY_ANSWERS }, dropped: [], incomplete: true };
+  }
   return {
     propertyAddress: idr.propertyAddress || '',
     forms: idr.forms || [],
     responseFlags: ansr.responseFlags || [],
     keyAnswers: ansr.keyAnswers || { ...EMPTY_KEY_ANSWERS },
     dropped: [...(idr.dropped || []), ...(ansr.dropped || [])],
+    reviewIncomplete: !!ansr.incomplete,
   };
 }
 
@@ -1594,8 +1797,21 @@ async function identifyFormsChunked(docs) {
 
   let allForms = [], address = '', dropped = [], responseFlags = [];
   const keyAnswers = { ...EMPTY_KEY_ANSWERS };
+  let anyIncomplete = false;
   for (let i = 0; i < batches.length; i++) {
-    const r = await identifyAndReview(batches[i]);
+    // Isolate each batch: one batch throwing (a corrupt doc, an API error) must not discard the
+    // forms other batches already identified. A skipped batch is logged loud and its forms are
+    // simply absent from the received set — visible, never a silent wipe of the whole delivery.
+    let r;
+    try {
+      r = await identifyAndReview(batches[i]);
+    } catch (err) {
+      anyIncomplete = true;
+      const names = batches[i].map((d) => d.name).join(', ');
+      console.error(`[disclosure-intake] identify batch ${i + 1}/${batches.length} FAILED (${err.message}); docs NOT recorded this run: ${names}`);
+      continue;
+    }
+    if (r.reviewIncomplete) anyIncomplete = true;
     allForms = mergeForms(allForms, r.forms);
     if (r.responseFlags && r.responseFlags.length) responseFlags = responseFlags.concat(r.responseFlags);
     // First batch with a real (non-na) answer wins — the SPQ/TDS live in one batch.
@@ -1612,7 +1828,7 @@ async function identifyFormsChunked(docs) {
     if (r.dropped && r.dropped.length) dropped = dropped.concat(r.dropped);
     console.log(`[disclosure-intake] identify batch ${i + 1}/${batches.length} (${batches[i].length} doc[s]): ${r.forms.length} form(s), ${(r.responseFlags || []).length} response flag(s)`);
   }
-  return { propertyAddress: address, forms: allForms, responseFlags, keyAnswers, dropped };
+  return { propertyAddress: address, forms: allForms, responseFlags, keyAnswers, dropped, reviewIncomplete: anyIncomplete };
 }
 
 // ----------------------------------------------------------------------------
@@ -1744,7 +1960,7 @@ async function sendCallback(callbackUrl, payload) {
 // Reconcile the accumulated received set for a deal against its audit list and
 // POST the result to the callback. Shared by single-delivery mode and finalize.
 // ----------------------------------------------------------------------------
-async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}, threadId = '', droppedDocs = []) {
+async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}, threadId = '', droppedDocs = [], reviewIncomplete = false) {
   let listText = (auditList && String(auditList).trim()) || '';
   if (!listText) listText = await fetchAuditListByAddress(address);
   if (!listText) throw new Error(`No audit list for "${address}" — pass auditList in the body, or add a matching row to the AUDIT_LIST_CSV_URL sheet.`);
@@ -2051,6 +2267,16 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     : '';
   if (droppedList.length) console.error(`[disclosure-intake] ${address}: ${droppedAlert}`);
 
+  // Like a dropped doc, an INCOMPLETE answer review is silent-miss territory: the forms are
+  // recorded but their seller answers weren't audited (a page failed to render, or the selection
+  // was capped). Report zero flags in that case could read as "all clear", so say so explicitly.
+  const auditIncompleteAlert = reviewIncomplete
+    ? 'NOTE: the seller-answer audit did not fully complete for this delivery (a document could not be rendered '
+      + 'or the Q&A selection was capped). Forms received are accurate, but do not read a lack of answer flags as '
+      + 'a clean bill — spot-check the seller Q&A forms (TDS/SPQ and similar) manually.'
+    : '';
+  if (reviewIncomplete) console.warn(`[disclosure-intake] ${address}: ${auditIncompleteAlert}`);
+
   const payload = {
     property_address: address,
     gmail_thread_id: threadId,
@@ -2060,6 +2286,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     overall_status: overall,
     dropped_docs_text: droppedList.join(', '),
     dropped_alert: droppedAlert,
+    audit_incomplete: !!reviewIncomplete,
+    audit_incomplete_alert: auditIncompleteAlert,
     still_needed_count: stillNeeded.length,
     response_flags_count: flags.length,
     outdated_count: outdated.length,
@@ -2188,7 +2416,7 @@ exports.handler = async function (event) {
       throw new Error('No documents could be loaded (need fetchable url or base64)');
     }
 
-    const { propertyAddress: detectedAddr, forms: newForms, responseFlags: newFlags = [], keyAnswers: newKeyAnswers = {}, dropped } = await identifyFormsChunked(docs);
+    const { propertyAddress: detectedAddr, forms: newForms, responseFlags: newFlags = [], keyAnswers: newKeyAnswers = {}, dropped, reviewIncomplete = false } = await identifyFormsChunked(docs);
     if (dropped && dropped.length) console.warn(`[disclosure-intake] dropped oversized doc(s) to fit the model: ${dropped.join(', ')}`);
     const address = canonicalAddress(detectedAddr || propertyAddress || '');
     if (!address) throw new Error('Could not read a property address from the documents');
@@ -2211,7 +2439,7 @@ exports.handler = async function (event) {
     const received = mergeForms(prior.received, newForms);
     await store.setJSON(key, { address, received, updatedAt: Date.now() });
     console.log(`[disclosure-intake] ${address}: ${received.length} form(s) received so far (was ${prior.received.length})`);
-    await reconcileAndCallback(address, received, auditList, callback, newFlags, newKeyAnswers, gmailThreadId, dropped);
+    await reconcileAndCallback(address, received, auditList, callback, newFlags, newKeyAnswers, gmailThreadId, dropped, reviewIncomplete);
     return { statusCode: 200 };
   } catch (err) {
     console.error('[disclosure-intake] ERROR:', err.message);
