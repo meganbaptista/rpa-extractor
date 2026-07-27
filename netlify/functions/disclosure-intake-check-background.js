@@ -690,11 +690,17 @@ const ANSWER_REVIEW_PROMPT =
   'SECTION BY SECTION and SUB-ITEM BY SUB-ITEM, and do NOT skip any lettered or numbered sub-item: read the TDS ' +
   'Section C items C1 through C14 individually, and every SPQ sub-item individually (e.g. 6G, 7A, 14A, 14B, 14C).\n' +
   'Flag:\n' +
-  '(a) a question or sub-item left BLANK / unanswered (issue "unanswered"). This INCLUDES conditional sub-items: ' +
-  'several items apply only when their parent is Yes (the form prints "If Yes to [parent], ..."), e.g. 7E(1)/7E(2), ' +
-  '8E(1)/8E(2), 13B(1)/13B(2), and 14F(1)/14F(2). When the PARENT is marked Yes, each of its conditional sub-items ' +
-  'MUST be answered (Yes or No); flag every one left blank as "unanswered", naming the exact sub-item (e.g. "14F is ' +
-  'Yes but 14F(1) and 14F(2) are blank"). ' +
+  '(a) a question or sub-item left BLANK / unanswered (issue "unanswered"). This INCLUDES conditional sub-items, but ' +
+  'you MUST obey the skip-logic the form PRINTS next to the item, e.g. "(if No, leave (1) and (2) blank)", "(if No, ' +
+  'leave (2) blank)", "If yes to (1), ...", "If Yes to [parent], ...". A box the form\'s own printed instruction ' +
+  'directs the seller to leave blank is CORRECTLY blank — NEVER flag it. These conditionals are often NESTED, not ' +
+  'flat: a sub-item can depend on ANOTHER sub-item, not on the top parent. WORKED EXAMPLE, SPQ 7E: the parent "built ' +
+  'before 1978" is Yes, which requires 7E(1); if 7E(1) is answered No, the form prints "if No, leave (2) blank", so ' +
+  '7E(2) is CORRECTLY blank and must NOT be flagged — and 7E(1), being answered No, is not blank either. Flag a ' +
+  'conditional sub-item "unanswered" ONLY when the exact answer it names is actually Yes (flag 7E(2) only if 7E(1) is ' +
+  'Yes) AND that sub-item\'s own Yes/No box — which may sit at the END of a line that WRAPS onto a second visual ' +
+  'line — is truly empty. Name the exact sub-item that is genuinely blank; never carry a blank from (2) onto (1) or ' +
+  'the reverse (this same nesting applies to 8E(1)/8E(2), 13B(1)/13B(2), 14F(1)/14F(2) and any "If yes to (n)" line). ' +
   'Conditional sub-items are NOT always numbered: many parents are followed by an unnumbered follow-up line printed ' +
   'directly beneath them - e.g. SPQ 13C ("A pool heater on the Property") and 13D ("A spa heater on the Property") ' +
   'each have their OWN "If yes, is it operational?" line, and the same "If yes, ..." pattern appears elsewhere. Treat ' +
