@@ -238,6 +238,43 @@ function parseCsv(text) {
 }
 
 // Look up a deal's required-docs list by address from the published master sheet.
+// Pull a Google Doc's live text via its no-auth export endpoint (same style as the CSV fetch).
+// The compliance Docs are link-viewable, so this needs no service account. Returns '' on failure
+// so the caller falls back to the frozen sheet list.
+function extractDocId(url) {
+  const m = String(url || '').match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+  return m ? m[1] : '';
+}
+async function fetchGoogleDocText(docUrl) {
+  const id = extractDocId(docUrl);
+  if (!id) return '';
+  try {
+    const res = await fetch(`https://docs.google.com/document/d/${id}/export?format=txt`);
+    if (!res.ok) { console.warn(`[disclosure-intake] compliance doc export ${res.status} for ${id}`); return ''; }
+    return String(await res.text()).replace(/^﻿/, '').trim();   // strip UTF-8 BOM
+  } catch (err) {
+    console.warn(`[disclosure-intake] compliance doc fetch failed (${id}): ${err.message}`);
+    return '';
+  }
+}
+
+// The compliance Doc is split into BROKER OPENING / DISCLOSURES / CLOSING sections; reconcile only
+// wants the DISCLOSURES list (what the frozen sheet column held). Slice that section and strip the
+// bullet glyphs. If the "DISCLOSURES" marker isn't found, return the whole doc — reconcile already
+// filters non-disclosure items, so this stays safe if the template ever changes.
+function disclosuresSection(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const start = lines.findIndex((l) => /^\s*DISCLOSURES\s*:?\s*$/i.test(l));
+  if (start < 0) return String(text || '').trim();
+  const items = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^\s*CLOSING PACKAGE ITEMS/i.test(lines[i])) break;
+    const cleaned = lines[i].replace(/^\s*[-*•]\s*/, '').trim();
+    if (cleaned) items.push(cleaned);
+  }
+  return items.join('\n');
+}
+
 async function fetchAuditListByAddress(address) {
   if (!AUDIT_LIST_CSV_URL) return '';
   try {
@@ -247,19 +284,37 @@ async function fetchAuditListByAddress(address) {
     if (rows.length < 2) return '';
     const header = rows[0].map((h) => String(h).toLowerCase().trim());
     let addrCol = header.findIndex((h) => h.includes('address'));
-    let listCol = header.findIndex((h) => /disclos|required|audit|docs|list/.test(h));
+    let listCol = header.findIndex((h) => /disclos|required/.test(h));
+    // The LIVE compliance-list Google Doc URL (column F, "Compliance Audit List URL"). Match on
+    // 'compliance' + url/link so it never collides with the empty "Compliance Documents" column.
+    const docUrlCol = header.findIndex((h) => h.includes('compliance') && (h.includes('url') || h.includes('link')));
     if (addrCol < 0) addrCol = 0;
     if (listCol < 0) listCol = 1;
-    // If the same address appears more than once (e.g. a cancelled deal + a re-opened
-    // one), prefer the LAST non-empty match — rows are appended, so newest wins.
-    let match = '';
+    // If the same address appears more than once (e.g. a cancelled deal + a re-opened one), prefer
+    // the LAST non-empty value per field — rows are appended, so newest wins.
+    let frozen = '', docUrl = '';
     for (const r of rows.slice(1)) {
-      if (addrMatch(r[addrCol] || '', address)) {
-        const v = String(r[listCol] || '').trim();
-        if (v) match = v;
-      }
+      if (!addrMatch(r[addrCol] || '', address)) continue;
+      const v = String(r[listCol] || '').trim();
+      const u = docUrlCol >= 0 ? String(r[docUrlCol] || '').trim() : '';
+      if (v) frozen = v;
+      if (u) docUrl = u;
     }
-    if (match) return match;
+    // Prefer the LIVE compliance Doc. The team erases a line the moment that doc is received (through
+    // ANY channel), so the Doc's current text is the true outstanding list. The frozen sheet column
+    // is the escrow-open snapshot and re-requests anything received off-pipeline (e.g. the MCA), so
+    // it is only a fallback when there is no Doc URL or the Doc cannot be read.
+    if (docUrl) {
+      const live = await fetchGoogleDocText(docUrl);
+      if (live) {
+        const section = disclosuresSection(live);
+        const listText = section || live;   // if every disclosure line was erased, fall back to the whole doc (never empty)
+        console.log(`[disclosure-intake] using LIVE compliance doc for "${address}" (${listText.length} chars, ${section ? 'DISCLOSURES section' : 'whole doc'})`);
+        return listText;
+      }
+      console.warn(`[disclosure-intake] live compliance doc unreadable for "${address}"; using frozen sheet list`);
+    }
+    if (frozen) return frozen;
     console.warn(`[disclosure-intake] no audit-list row matched "${address}"`);
     return '';
   } catch (err) {
