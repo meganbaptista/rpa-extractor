@@ -651,7 +651,15 @@ const IDENTIFY_PROMPT =
   'Also list these as their own present documents when their pages are physically here: the Natural Hazard ' +
   'Disclosure report (any provider — FANHD, JCP-LGS, Disclosure Source); a signed NHD acknowledgment/receipt page ' +
   '(a page where the buyer and/or seller acknowledge receipt of the Natural Hazard Disclosure) as a document ' +
-  'DISTINCT from the NHD report itself, named "NHD Receipt"; and the RECEIPT/acknowledgment page for the ' +
+  'DISTINCT from the NHD report itself, named "NHD Receipt". CRITICAL: this receipt/acknowledgment page is very ' +
+  'often a SINGLE page that is TITLED "Natural Hazard Disclosure Statement" and shows the flood/fire hazard ' +
+  'determinations, so it LOOKS like the NHD report. Identify it as the "NHD Receipt" (NOT the full NHD report) ' +
+  'whenever the page signals it is the signature/acknowledgment page, e.g. it is labeled "(Signature Page)", or ' +
+  'reads "acknowledgment/acknowledgement page", "Buyer acknowledges receipt of the entire NHD report", or "This ' +
+  'acknowledgement page does not represent the entire natural hazard disclosure report" (common providers: MyNHD, ' +
+  'FANHD, JCP-LGS). A lone such page satisfies the NHD Receipt, not the multi-page NHD report; list "NHD Receipt" ' +
+  'for it, and list the full "NHD" report only when the actual multi-page hazard report pages are present. Also list ' +
+  'the RECEIPT/acknowledgment page for the ' +
   '"Homeowner\'s Guide to Environmental Hazards and Earthquake Safety" booklet — both the standard CAR receipt and ' +
   'custom brokerage equivalents such as a "Receipt for Links to Booklets" page (a page acknowledging receipt of the ' +
   'environmental hazards / earthquake safety / HERS / lead booklets). Name that receipt clearly, e.g. ' +
