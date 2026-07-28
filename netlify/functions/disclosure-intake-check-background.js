@@ -2234,12 +2234,11 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     (confirmedReadings.length ? `CONFIRMED (we checked these):\n${bullets(confirmedReadings, (x) => x)}\n\n` : '') +
     (na.length ? `NOT APPLICABLE / LATER:\n${bullets(na, (x) => `${x.item}: ${x.note}`)}\n` : '');
 
-  // Ready-to-send chase email. Zap B drops this into a Gmail draft when followup_count
-  // > 0 (missing docs and/or responses to clarify). No em dashes (Megan's standing
-  // preference); it's a draft she reviews, so greeting/recipient are finalized then.
+  // Ready-to-send chase email. Zap B drops this into a Gmail draft. No em dashes (Megan's
+  // standing preference); it's a draft she reviews, so greeting/recipient are finalized then.
   const signer = process.env.DISCLOSURE_SIGNER_NAME || 'Megan';
   const chaseEmailSubject = `Outstanding disclosures for ${address}`;
-  let chaseEmailBody = '';
+  let chaseEmailBody;
   if (followupCount) {
     chaseEmailBody =
       'Hi,\n\n' +
@@ -2259,9 +2258,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
       '\nWhen you have a moment, please send these over so we can wrap up our review. ' +
       'If any have already been provided or do not apply, just let me know.\n\n' +
       `Thanks!\n${signer}`;
-    // Backstop for Megan's no-em-dash rule across the whole email body.
-    chaseEmailBody = stripDashes(chaseEmailBody);
+  } else {
+    // Nothing to chase: no missing docs (TO REQUEST FROM LISTING SIDE is "(none)"), no responses
+    // to revise/confirm, nothing outdated. Give the draft a short confirmation instead of leaving
+    // it blank, so an empty body is never ambiguous — the draft itself confirms nothing is needed.
+    chaseEmailBody = 'Thank you! This is received.';
   }
+  // Backstop for Megan's no-em-dash rule across the whole email body.
+  chaseEmailBody = stripDashes(chaseEmailBody);
 
   // A dropped document is SILENT data loss: the 413 backstop discards the biggest doc to
   // make the request fit, and that is almost always the disclosure package itself. Every
