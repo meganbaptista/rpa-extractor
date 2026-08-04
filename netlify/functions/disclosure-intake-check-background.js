@@ -823,15 +823,23 @@ const ANSWER_REVIEW_PROMPT =
   'the SPQ page 1 header; return "form":"SPQ", "item":"APN", "reason":"the Assessor\'s Parcel Number in the header ' +
   'is left blank". Flag these only when the field is genuinely blank.\n' +
   'ALSO check the FHDS (Fire Hardening and Defensible Space Disclosure and Addendum, C.A.R. Form FHDS) if its pages ' +
-  'are anywhere in the package (it may be embedded inside a combined packet). The required-complete standard is: the ' +
-  'Section 2 fire-hardening compliance boxes are checked AND Section 3 is completed, specifically Section 3A is ' +
+  'are anywhere in the package (it may be embedded inside a combined packet). WHICH PARAGRAPHS ARE REQUIRED DEPENDS ' +
+  'ON THE YEAR THE PROPERTY WAS BUILT - do not demand Section 2B/2C from a newer home. Per the form\'s own paragraph ' +
+  '1A, the paragraph 2 fire-hardening questions apply ONLY to properties built BEFORE January 1, 2010; paragraph 1B ' +
+  'requires Section 3 for ANY high or very high fire hazard severity zone property with no year condition. ' +
+  'Paragraph 2 carries its own header checkbox reading "Property is built on or after January 1, 2010. Paragraphs 2B ' +
+  'and 2C do not have to be completed". So: (i) if that header box IS checked, or the package shows the property was ' +
+  'built in 2010 or later, Sections 2B and 2C are CORRECTLY BLANK and must NEVER be flagged - only Section 3 is ' +
+  'required; (ii) only when the property was built before 2010 are the Section 2 fire-hardening boxes required. ' +
+  'Section 3 is required either way, specifically Section 3A ' +
   'marked (the Property IS or is NOT subject to a local vegetation management ordinance) AND a Section 3C ' +
-  'responsibility option is selected. If an FHDS is present but Section 2 is unchecked, or Section 3A is unmarked, ' +
-  'or no Section 3C option is selected, raise a flag: "form":"FHDS", "item" = the incomplete part (e.g. "Section 2" ' +
-  'or "Section 3"), "issue":"verify_mismatch", "reason" = a complete request sentence, e.g. "the FHDS is present but ' +
-  'Section 2 boxes are not checked and Section 3 is not completed; please complete Section 2, mark Section 3A, ' +
-  'select a Section 3C option, and resend the FHDS". Do NOT flag an FHDS that is fully completed, and do NOT raise ' +
-  'this if no FHDS is in the package.\n' +
+  'responsibility option selected. Raise a flag only for a part that is genuinely required and genuinely incomplete: ' +
+  '"form":"FHDS", "item" = the incomplete part (e.g. "Section 2" ' +
+  'or "Section 3"), "issue":"verify_mismatch", "reason" = a complete request sentence naming only the parts actually ' +
+  'needed, e.g. "the FHDS is present but Section 3 is not completed; please mark Section 3A, ' +
+  'select a Section 3C option, and resend the FHDS". If you cannot tell the year built from the package and the ' +
+  'paragraph 2 header box is unchecked, ask about Section 3 only and do NOT assume Section 2 is owed. Do NOT flag an ' +
+  'FHDS that is complete for its year, and do NOT raise this if no FHDS is in the package.\n' +
   'ALSO check TDS SECTION III (the Agent\'s Inspection Disclosure block for the agent/broker REPRESENTING THE SELLER — ' +
   'the listing agent; this is the TDS\'s own Section III, NOT a separate AVID form). It is complete only when exactly ' +
   'ONE of its three boxes is checked: (1) "See attached Agent Visual Inspection Disclosure (AVID Form)", (2) "Agent ' +
@@ -885,9 +893,12 @@ const ANSWER_REVIEW_PROMPT =
   'is item 17F on the SPQ revised 12/24 and item 17G on the SPQ revised 6/26, and the letter can move again on other ' +
   'revisions; "fire_clearance_item" = the item letter/number exactly as printed on this form (e.g. "17F" or "17G"), ' +
   'or "" if not found; "fhds" = "yes" if a Fire Hardening Disclosure and Advisory (C.A.R. Form FHDS) is present AND ' +
-  'completed as required (its Section 2 compliance boxes are checked AND its Section 3 question is marked Yes), "no" ' +
-  'if an FHDS is present but Section 2 boxes are left unchecked or Section 3 is not marked Yes, or "na" if no FHDS is ' +
-  'in the package.\n\n' +
+  'completed as required FOR ITS YEAR BUILT, "no" if an FHDS is present but a REQUIRED part is incomplete, or "na" if ' +
+  'no FHDS is in the package. Required for its year means: Section 3 is marked Yes in every case, PLUS the Section 2 ' +
+  'compliance boxes ONLY when the property was built before January 1, 2010. If the paragraph 2 header box "Property ' +
+  'is built on or after January 1, 2010. Paragraphs 2B and 2C do not have to be completed" is checked, or the package ' +
+  'shows the property was built in 2010 or later, a blank 2B/2C is CORRECT and the form still counts as "yes" ' +
+  'provided Section 3 is done. Never return "no" solely because Section 2 is blank on a 2010-or-later property.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
   '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_on_addendum|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect; for explanation_on_addendum, a short quote of the addendum entry>","other_form":"<for inconsistent>","document":"<for document; for explanation_on_addendum, the sheet it was found on>","source":"<for transaction>"}],' +
   '"addendum_entries":[{"form":"SPQ","item":"7","text":"<verbatim text of that entry>"}],' +
@@ -2077,7 +2088,11 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const VERIFY_READINGS = [
     { re: /hoa|common\s*interest|\bc\s*,?\s*1[234]\b|\b6g\b|section\s*14/i, mark: hoaReading, refDefault: 'HOA disclosures', reasonBad: 'the property is in an HOA / common interest development, so it should be Yes' },
     { re: /brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i, mark: yesno(ka.fire_clearance), refDefault: `SPQ ${fireItem}`, reasonBad: 'the property is in a high fire hazard area, so it should be Yes' },
-    { re: /\bfhds\b|fire\s*hardening/i, mark: yesno(ka.fhds), refDefault: 'FHDS', reasonBad: 'Section 2 and/or Section 3 are not completed as required; please send the completed FHDS' },
+    // Wording stays year-neutral on purpose: Section 2B/2C is only owed by a
+    // pre-2010 home, so naming "Section 2" here would chase sellers of newer
+    // homes for boxes their own form tells them to leave blank. identify()
+    // already applies the year rule when it sets ka.fhds.
+    { re: /\bfhds\b|fire\s*hardening/i, mark: yesno(ka.fhds), refDefault: 'FHDS', reasonBad: 'it is not completed as required for this property; please complete the sections that apply and send the completed FHDS' },
     { re: /\b7e\b|pre[-\s]*1978|lead[-\s]*based\s*paint/i, mark: yesno(ka.spq_7e), refDefault: 'SPQ 7E', reasonBad: 'the property was built before 1978, so it should be Yes' },
   ];
   const confirmedReadings = [];
