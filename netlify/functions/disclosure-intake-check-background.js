@@ -709,8 +709,11 @@ const ANSWER_REVIEW_PROMPT =
   'each such line as the conditional of the item DIRECTLY ABOVE it. CRITICAL - adjacent identical conditionals: 13C ' +
   'and 13D print the SAME "If yes, is it operational?" text on consecutive lines, so read each letter\'s operational ' +
   'box SEPARATELY and align it to THAT letter\'s own parent. It is common and correct for one to be blank and the ' +
-  'next filled (13C pool heater = No, so its "is it operational?" correctly stays blank, while 13D spa heater = Yes, ' +
-  'so its "is it operational?" is answered). NEVER carry a blank from one letter\'s conditional onto the adjacent ' +
+  'next filled: whichever letter\'s parent is No has its "is it operational?" line correctly blank, and whichever ' +
+  'letter\'s parent is Yes has that line answered. READ THE ACTUAL BOXES on the page to decide which is which. ' +
+  'This document may have either polarity, or both letters the same. NEVER assume a letter is Yes or No because an ' +
+  'instruction, an example, or a previous document said so, and NEVER report an answer you did not directly observe ' +
+  'on this page. NEVER carry a blank from one letter\'s conditional onto the adjacent ' +
   'letter; before flagging a conditional blank, confirm THAT letter\'s OWN parent is marked Yes AND the box on THAT ' +
   'letter\'s own line is truly empty. ' +
   'Do NOT flag a conditional sub-item when its parent is No or blank, since ' +
@@ -723,11 +726,25 @@ const ANSWER_REVIEW_PROMPT =
   'raise a yes_no_explanation flag for it. Never infer Yes from a written explanation, a neighboring sub-item, or a ' +
   'shared item-level explanation line: on the SPQ and TDS a single Explanation line serves the whole numbered item, ' +
   'so it belongs to whichever sub-item(s) are actually Yes, not to one marked No. ' +
-  'The rule is universal: every Yes on a Q&A form must have its own written explanation, on ' +
+  'The rule is universal APART FROM the one narrow exception stated at the end of this rule: every Yes on a Q&A form ' +
+  'must have its own written explanation, on ' +
   'the TDS and the SPQ alike, regardless of which question or letter it is. Check each Yes sub-item SEPARATELY: when ' +
   'several sub-items in a row are marked Yes but only ONE explanation is written, do NOT assume that one explanation ' +
   'covers the others. Determine which sub-item the explanation actually addresses, and flag every OTHER Yes sub-item ' +
-  'as missing its explanation, naming the exact sub-item;\n' +
+  'as missing its explanation, naming the exact sub-item. ' +
+  'EXCEPTION - SPQ 13B, 13C, 13D and any "If yes, is it operational?" line: these ask whether a feature EXISTS or ' +
+  'WORKS, not whether something is wrong. A Yes means the Property HAS operational sprinklers, a pool heater, or a ' +
+  'spa heater. That is not an adverse condition, and the form already asks the follow-up directly underneath - ' +
+  '13B(1) automatic vs manual, 13B(2) areas not covered, and the "is it operational?" line beneath 13C and 13D. ' +
+  'Those follow-ups ARE the detail, so they cover it. A Yes on 13B, on 13C, on 13D, or on an "is it operational?" ' +
+  'line NEVER needs a written explanation and must NEVER be flagged "yes_no_explanation" or ' +
+  '"explanation_on_addendum" for a missing explanation. Do not flag these as unexplained even when the item-level ' +
+  '"If Yes to any, provide explanation" line is blank or addresses only a different sub-item. ' +
+  'This exception covers ONLY those items and ONLY the missing-explanation rule - it does not stop you flagging them ' +
+  'under any other rule, such as a genuinely unanswered box. Everything else in item 13 is unaffected: 13A (diseases ' +
+  'or infestations), 13B(2) (areas the sprinklers do not cover) and 13E (defects, leaks, cracks, repairs, or other ' +
+  'problems) all report actual problems, so a Yes on any of those DOES require its own written explanation and is ' +
+  'flagged as usual;\n' +
   '(b2) SEPARATE EXPLANATION ADDENDUM. Sellers often write their explanations on a separate sheet instead of on the ' +
   'form ("Attach additional sheets if necessary" is printed on the TDS itself). That sheet is usually titled ' +
   'something like "Disclosure / Questionnaire Explanations", and it numbers its entries at the ITEM level (e.g. "7.", ' +
