@@ -34,7 +34,6 @@
 
 console.log('[compliance-check] module loading');
 
-const zlib = require('zlib');
 const { canonicalAddress } = require('./lib/address');
 const usageLog = require('./lib/usage-log');
 const { callClaude: callClaudeShared } = require('./lib/claude');
@@ -120,59 +119,10 @@ async function fetchComplianceListByAddress(address) {
 
 // ---------------------------------------------------------------------------
 // Document loading (zip-aware, Drive-interstitial-aware). Mirrors disclosure
-// intake so a large packet or a zipped bundle both work.
+// intake so a large packet or a zipped bundle both work. The zip readers and the
+// recursive nested-zip walk are shared from lib/unzip.js.
 // ---------------------------------------------------------------------------
-const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
-const PDF_MAGIC = Buffer.from('%PDF');
-
-function looksZip(buf, name, contentType) {
-  if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(ZIP_MAGIC)) return true;
-  if (/\.zip$/i.test(name || '')) return true;
-  if (/zip/i.test(contentType || '')) return true;
-  return false;
-}
-function looksPdf(buf, name) {
-  if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC)) return true;
-  return /\.pdf$/i.test(name || '');
-}
-function unzipEntries(buf) {
-  const out = [];
-  const EOCD_SIG = 0x06054b50;
-  let eocd = -1;
-  const minStart = Math.max(0, buf.length - 22 - 65536);
-  for (let i = buf.length - 22; i >= minStart; i--) {
-    if (buf.readUInt32LE(i) === EOCD_SIG) { eocd = i; break; }
-  }
-  if (eocd < 0) throw new Error('no end-of-central-directory record');
-  const cdCount = buf.readUInt16LE(eocd + 10);
-  let p = buf.readUInt32LE(eocd + 16);
-  for (let n = 0; n < cdCount; n++) {
-    if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) break;
-    const method = buf.readUInt16LE(p + 10);
-    const compSize = buf.readUInt32LE(p + 20);
-    const nameLen = buf.readUInt16LE(p + 28);
-    const extraLen = buf.readUInt16LE(p + 30);
-    const commentLen = buf.readUInt16LE(p + 32);
-    const localOffset = buf.readUInt32LE(p + 42);
-    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
-    p += 46 + nameLen + extraLen + commentLen;
-    if (name.endsWith('/')) continue;
-    if (compSize === 0xffffffff || localOffset === 0xffffffff) continue;
-    if (localOffset + 30 > buf.length || buf.readUInt32LE(localOffset) !== 0x04034b50) continue;
-    const lNameLen = buf.readUInt16LE(localOffset + 26);
-    const lExtraLen = buf.readUInt16LE(localOffset + 28);
-    const dataStart = localOffset + 30 + lNameLen + lExtraLen;
-    const comp = buf.subarray(dataStart, dataStart + compSize);
-    let data;
-    try {
-      if (method === 0) data = comp;
-      else if (method === 8) data = zlib.inflateRawSync(comp);
-      else continue;
-    } catch (e) { continue; }
-    out.push({ name: name.split('/').pop(), data });
-  }
-  return out;
-}
+const { PDF_MAGIC, looksZip, collectPdfs } = require('./lib/unzip');
 
 function describeBuffer(buf, contentType) {
   const head = buf.subarray(0, 16);
@@ -225,17 +175,20 @@ async function loadDocuments(documents) {
       } else continue;
 
       if (looksZip(buf, name, contentType)) {
-        let entries;
-        try { entries = unzipEntries(buf); }
-        catch (e) { console.warn(`[compliance-check] could not unzip ${name}: ${e.message} | ${describeBuffer(buf, contentType)}`); continue; }
-        let kept = 0;
-        for (const e of entries) {
-          if (!looksPdf(e.data, e.name)) continue;
-          if (e.data.length > MAX_DOC_BYTES) continue;
-          out.push({ name: e.name, base64: e.data.toString('base64') });
-          kept++;
+        // Recursive: a nested .zip is expanded, not discarded. The old loop kept
+        // only top-level PDFs, so a zip-inside-a-zip (Zapier bundles the email's
+        // attachments, the agent attached their own zip of disclosures) was
+        // dropped with no log line at all.
+        const { kept, skipped, truncated } = collectPdfs(buf, name, { maxDocBytes: MAX_DOC_BYTES });
+        if (!kept.length && !skipped.length) {
+          console.warn(`[compliance-check] could not unzip ${name} | ${describeBuffer(buf, contentType)}`);
+          continue;
         }
-        console.log(`[compliance-check] unzipped ${name}: kept ${kept} PDF(s)`);
+        for (const k of kept) out.push({ name: k.name, base64: k.data.toString('base64') });
+        console.log(`[compliance-check] unzipped ${name}: kept ${kept.length} PDF(s)`
+          + (kept.length ? ` (${kept.map(k => k.path).join(', ')})` : '')
+          + (skipped.length ? `, skipped ${skipped.length} (${skipped.join(', ')})` : '')
+          + (truncated ? ' [TRUNCATED — hit a recursion/size guard, some documents were not read]' : ''));
         continue;
       }
 

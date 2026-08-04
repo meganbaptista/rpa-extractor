@@ -41,7 +41,6 @@
 
 console.log('[disclosure-intake] module loading');
 
-const zlib = require('zlib');
 const crypto = require('crypto');
 const { getStore } = require('@netlify/blobs');
 const { canonicalAddress } = require('./lib/address');
@@ -433,12 +432,12 @@ function findOutdatedForms(received, versions) {
 
 // ----------------------------------------------------------------------------
 // ZIP support. Zapier's "Upload File" step bundles all the email's attachments
-// into ONE .zip on Drive, so a single document URL can actually be 22 PDFs. We
-// detect the zip, extract the PDFs, drop blocked/non-PDF entries, and feed the
-// real PDFs downstream. Pure Node built-ins (zlib) — no extra dependency.
+// into ONE .zip on Drive, so a single document URL can actually be 22 PDFs — and
+// agents often attach their own zip of disclosures inside that, so the real
+// documents can sit one or more levels down. Detection, extraction and the
+// recursive walk live in lib/unzip.js and are shared with compliance-check.
 // ----------------------------------------------------------------------------
-const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04"
-const PDF_MAGIC = Buffer.from('%PDF');
+const { PDF_MAGIC, looksZip, unzipEntries, collectPdfs } = require('./lib/unzip');
 
 // Filenames we never want to send to the model (big non-disclosure reports +
 // invoices). Mirrors the Zapier Code-step BLOCK list, plus invoice.
@@ -464,65 +463,6 @@ const NEVER_BLOCK = /(\bavid\b|agent\s*visual\s*inspection|buyer'?s?\s*inspectio
 function isBlockedName(name) {
   const n = name || '';
   return (BLOCK_NAME.test(n) || BOOKLET_NAME.test(n)) && !NEVER_BLOCK.test(n);
-}
-
-function looksZip(buf, name, contentType) {
-  if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(ZIP_MAGIC)) return true;
-  // Magic bytes win over a misleading name/content-type: a single PDF sometimes
-  // arrives named "attachments.zip" served as application/octet-stream. Real PDF
-  // bytes are never a zip, so don't route them into the unzip path.
-  if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC)) return false;
-  if (/\.zip$/i.test(name || '')) return true;
-  if (/zip/i.test(contentType || '')) return true;
-  return false;
-}
-function looksPdf(buf, name) {
-  if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC)) return true;
-  return /\.pdf$/i.test(name || '');
-}
-
-// Minimal ZIP reader: walk the central directory and inflate each entry. Handles
-// stored (method 0) and deflate (method 8) — i.e. every normal zip. Skips
-// directories, zip64-only entries, and anything it can't inflate.
-function unzipEntries(buf) {
-  const out = [];
-  const EOCD_SIG = 0x06054b50;
-  let eocd = -1;
-  const minStart = Math.max(0, buf.length - 22 - 65536);
-  for (let i = buf.length - 22; i >= minStart; i--) {
-    if (buf.readUInt32LE(i) === EOCD_SIG) { eocd = i; break; }
-  }
-  if (eocd < 0) throw new Error('no end-of-central-directory record');
-  const cdCount = buf.readUInt16LE(eocd + 10);
-  let p = buf.readUInt32LE(eocd + 16);
-
-  for (let n = 0; n < cdCount; n++) {
-    if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) break;
-    const method = buf.readUInt16LE(p + 10);
-    const compSize = buf.readUInt32LE(p + 20);
-    const nameLen = buf.readUInt16LE(p + 28);
-    const extraLen = buf.readUInt16LE(p + 30);
-    const commentLen = buf.readUInt16LE(p + 32);
-    const localOffset = buf.readUInt32LE(p + 42);
-    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
-    p += 46 + nameLen + extraLen + commentLen;
-
-    if (name.endsWith('/')) continue; // directory entry
-    if (compSize === 0xffffffff || localOffset === 0xffffffff) continue; // zip64, skip
-    if (localOffset + 30 > buf.length || buf.readUInt32LE(localOffset) !== 0x04034b50) continue;
-    const lNameLen = buf.readUInt16LE(localOffset + 26);
-    const lExtraLen = buf.readUInt16LE(localOffset + 28);
-    const dataStart = localOffset + 30 + lNameLen + lExtraLen;
-    const comp = buf.subarray(dataStart, dataStart + compSize);
-    let data;
-    try {
-      if (method === 0) data = comp;
-      else if (method === 8) data = zlib.inflateRawSync(comp);
-      else continue;
-    } catch (e) { continue; }
-    out.push({ name: name.split('/').pop(), data });
-  }
-  return out;
 }
 
 // Diagnostic: short, log-safe description of what we actually fetched.
@@ -606,16 +546,18 @@ async function loadDocuments(documents) {
           if (!(buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC))) continue;
         }
         if (entries) {
-          let kept = 0;
-          const skippedNames = [];
-          for (const e of entries) {
-            if (!looksPdf(e.data, e.name)) { skippedNames.push(e.name + ' [not pdf]'); continue; }
-            if (isBlockedName(e.name)) { skippedNames.push(e.name + ' [blocked]'); continue; }
-            if (e.data.length > MAX_DOC_BYTES) { skippedNames.push(e.name + ' [too large]'); continue; }
-            out.push({ name: e.name, base64: e.data.toString('base64') });
-            kept++;
-          }
-          console.log(`[disclosure-intake] unzipped ${name}: kept ${kept} PDF(s)` + (skippedNames.length ? `, skipped ${skippedNames.length} (${skippedNames.join(', ')})` : ''));
+          // Recursive: a nested .zip is expanded, not discarded. Agents routinely
+          // attach their own disclosure zip to the email Zapier already zipped,
+          // so the PDFs commonly live one level down from here.
+          const { kept, skipped, truncated } = collectPdfs(buf, name, {
+            maxDocBytes: MAX_DOC_BYTES,
+            isBlocked: isBlockedName,
+          });
+          for (const k of kept) out.push({ name: k.name, base64: k.data.toString('base64') });
+          console.log(`[disclosure-intake] unzipped ${name}: kept ${kept.length} PDF(s)`
+            + (kept.length ? ` (${kept.map(k => k.path).join(', ')})` : '')
+            + (skipped.length ? `, skipped ${skipped.length} (${skipped.join(', ')})` : '')
+            + (truncated ? ' [TRUNCATED — hit a recursion/size guard, some documents were not read]' : ''));
           continue;
         }
         // entries === null and bytes are a PDF: fall through to single-document handling.
