@@ -39,9 +39,32 @@ function looksZip(buf, name, contentType) {
   return false;
 }
 
+// Name-tolerant check, for callers that may not hold the bytes yet.
 function looksPdf(buf, name) {
   if (buf && buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC)) return true;
   return /\.pdf$/i.test(name || '');
+}
+
+// Bytes-only check. Inside a zip we ALWAYS have the bytes, so the filename gets
+// no vote: a macOS AppleDouble sidecar is literally named "._Real_Report.pdf"
+// and would sail through the name fallback, then blow up the Anthropic call with
+// "The PDF specified was not valid" and take the whole identify batch with it.
+//
+// The %PDF header is allowed to sit a little way into the file (some writers emit
+// a BOM or stray bytes first), so scan the head rather than demanding offset 0.
+function isPdfBytes(buf) {
+  if (!buf || buf.length < 4) return false;
+  return buf.subarray(0, Math.min(buf.length, 1024)).indexOf(PDF_MAGIC) !== -1;
+}
+
+// macOS writes a parallel "._Name.ext" resource-fork file for every real file when
+// it zips a folder, plus a __MACOSX/ directory to hold them. They carry the same
+// extension as the file they shadow, so they double the apparent document count
+// and every one of them is unreadable garbage to a PDF parser. unzipEntries()
+// reduces names to a basename, so the "._" test also catches "__MACOSX/._x.pdf".
+function isMacMetadata(name) {
+  const n = name || '';
+  return n.startsWith('._') || n === '.DS_Store' || /(^|\/)__MACOSX(\/|$)/.test(n);
 }
 
 // Minimal ZIP reader: walk the central directory and inflate each entry. Handles
@@ -157,7 +180,9 @@ function collectPdfs(buf, rootName, opts) {
         continue;
       }
 
-      if (!looksPdf(e.data, e.name)) { skipped.push(`${path} [not pdf]`); continue; }
+      if (isMacMetadata(e.name)) { skipped.push(`${path} [macOS metadata]`); continue; }
+      // Bytes, not filename — see isPdfBytes.
+      if (!isPdfBytes(e.data)) { skipped.push(`${path} [not pdf]`); continue; }
       if (isBlocked && isBlocked(e.name)) { skipped.push(`${path} [blocked]`); continue; }
       if (e.data.length > maxDocBytes) { skipped.push(`${path} [too large]`); continue; }
       if (totalBytes + e.data.length > maxTotalBytes) {
@@ -174,11 +199,55 @@ function collectPdfs(buf, rootName, opts) {
   return { kept, skipped, truncated };
 }
 
+// ----------------------------------------------------------------------------
+// One-line, log-safe summary of a collectPdfs() result.
+//
+// The naive version printed every kept path in full. With a nested zip that is
+// 38 absolute paths on one line and the interesting part (what got dropped and
+// why) is buried past the fold. This keeps the kept documents as bare basenames,
+// names the containers once, and groups the skips by reason with counts.
+// ----------------------------------------------------------------------------
+function summarizeCollect(result, rootName) {
+  const { kept, skipped, truncated } = result;
+
+  // Every distinct container a kept file came out of, minus the root itself.
+  const containers = [];
+  for (const k of kept) {
+    const dir = k.path.slice(0, k.path.length - k.name.length - 1);
+    if (dir && dir !== rootName && !containers.includes(dir)) containers.push(dir);
+  }
+
+  // Group "path [reason]" into "reason: n (examples)".
+  const byReason = new Map();
+  for (const s of skipped) {
+    const m = s.match(/\[([^\]]+)\]\s*$/);
+    const reason = m ? m[1] : 'skipped';
+    const name = s.slice(0, m ? s.length - m[0].length : s.length).trim().split('/').pop();
+    if (!byReason.has(reason)) byReason.set(reason, []);
+    byReason.get(reason).push(name);
+  }
+  const skipParts = [];
+  for (const [reason, names] of byReason) {
+    const shown = names.slice(0, 4).join(', ');
+    const more = names.length > 4 ? `, +${names.length - 4} more` : '';
+    skipParts.push(`${names.length} ${reason} (${shown}${more})`);
+  }
+
+  return `kept ${kept.length} PDF(s), skipped ${skipped.length}`
+    + (containers.length ? ` | expanded: ${containers.join(', ')}` : '')
+    + (kept.length ? ` | kept: ${kept.map(k => k.name).join(', ')}` : '')
+    + (skipParts.length ? ` | skipped: ${skipParts.join('; ')}` : '')
+    + (truncated ? ' | TRUNCATED — hit a recursion/size guard, some documents were not read' : '');
+}
+
 module.exports = {
   ZIP_MAGIC,
   PDF_MAGIC,
   looksZip,
   looksPdf,
+  isPdfBytes,
+  isMacMetadata,
   unzipEntries,
   collectPdfs,
+  summarizeCollect,
 };

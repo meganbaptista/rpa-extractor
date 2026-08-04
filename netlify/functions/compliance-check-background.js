@@ -122,7 +122,7 @@ async function fetchComplianceListByAddress(address) {
 // intake so a large packet or a zipped bundle both work. The zip readers and the
 // recursive nested-zip walk are shared from lib/unzip.js.
 // ---------------------------------------------------------------------------
-const { PDF_MAGIC, looksZip, collectPdfs } = require('./lib/unzip');
+const { PDF_MAGIC, looksZip, collectPdfs, summarizeCollect } = require('./lib/unzip');
 
 function describeBuffer(buf, contentType) {
   const head = buf.subarray(0, 16);
@@ -179,16 +179,13 @@ async function loadDocuments(documents) {
         // only top-level PDFs, so a zip-inside-a-zip (Zapier bundles the email's
         // attachments, the agent attached their own zip of disclosures) was
         // dropped with no log line at all.
-        const { kept, skipped, truncated } = collectPdfs(buf, name, { maxDocBytes: MAX_DOC_BYTES });
-        if (!kept.length && !skipped.length) {
+        const result = collectPdfs(buf, name, { maxDocBytes: MAX_DOC_BYTES });
+        if (!result.kept.length && !result.skipped.length) {
           console.warn(`[compliance-check] could not unzip ${name} | ${describeBuffer(buf, contentType)}`);
           continue;
         }
-        for (const k of kept) out.push({ name: k.name, base64: k.data.toString('base64') });
-        console.log(`[compliance-check] unzipped ${name}: kept ${kept.length} PDF(s)`
-          + (kept.length ? ` (${kept.map(k => k.path).join(', ')})` : '')
-          + (skipped.length ? `, skipped ${skipped.length} (${skipped.join(', ')})` : '')
-          + (truncated ? ' [TRUNCATED — hit a recursion/size guard, some documents were not read]' : ''));
+        for (const k of result.kept) out.push({ name: k.name, base64: k.data.toString('base64') });
+        console.log(`[compliance-check] unzipped ${name}: ${summarizeCollect(result, name)}`);
         continue;
       }
 

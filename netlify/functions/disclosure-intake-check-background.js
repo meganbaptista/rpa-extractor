@@ -437,7 +437,7 @@ function findOutdatedForms(received, versions) {
 // documents can sit one or more levels down. Detection, extraction and the
 // recursive walk live in lib/unzip.js and are shared with compliance-check.
 // ----------------------------------------------------------------------------
-const { PDF_MAGIC, looksZip, unzipEntries, collectPdfs } = require('./lib/unzip');
+const { PDF_MAGIC, looksZip, unzipEntries, collectPdfs, summarizeCollect } = require('./lib/unzip');
 
 // Filenames we never want to send to the model (big non-disclosure reports +
 // invoices). Mirrors the Zapier Code-step BLOCK list, plus invoice.
@@ -549,15 +549,12 @@ async function loadDocuments(documents) {
           // Recursive: a nested .zip is expanded, not discarded. Agents routinely
           // attach their own disclosure zip to the email Zapier already zipped,
           // so the PDFs commonly live one level down from here.
-          const { kept, skipped, truncated } = collectPdfs(buf, name, {
+          const result = collectPdfs(buf, name, {
             maxDocBytes: MAX_DOC_BYTES,
             isBlocked: isBlockedName,
           });
-          for (const k of kept) out.push({ name: k.name, base64: k.data.toString('base64') });
-          console.log(`[disclosure-intake] unzipped ${name}: kept ${kept.length} PDF(s)`
-            + (kept.length ? ` (${kept.map(k => k.path).join(', ')})` : '')
-            + (skipped.length ? `, skipped ${skipped.length} (${skipped.join(', ')})` : '')
-            + (truncated ? ' [TRUNCATED — hit a recursion/size guard, some documents were not read]' : ''));
+          for (const k of result.kept) out.push({ name: k.name, base64: k.data.toString('base64') });
+          console.log(`[disclosure-intake] unzipped ${name}: ${summarizeCollect(result, name)}`);
           continue;
         }
         // entries === null and bytes are a PDF: fall through to single-document handling.
