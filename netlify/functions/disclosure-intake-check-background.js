@@ -322,10 +322,17 @@ async function fetchAuditListByAddress(address) {
   }
 }
 
-// Deal context (Year Built, HOA) from the master sheet — facts the disclosure
-// package may not contain (sourced from MLS/PP) that we cross-check answers against.
+// Deal context (Year Built, HOA, high fire hazard zone) from the master sheet —
+// facts the disclosure package may not contain (sourced from MLS/PP) that we
+// cross-check answers against.
+//
+// High fire hazard is here so the SPQ brush-clearance answer (17F/17G by revision)
+// is checked on its own, independent of whether the compliance list happens to
+// carry a matching verify line. Relying on that list meant a fire-zone property
+// whose list was generated before the list generator was fixed had NOTHING
+// checking 17G, and a No sailed through in silence.
 async function fetchDealContext(address) {
-  const empty = { yearBuilt: null, hasHoa: null };
+  const empty = { yearBuilt: null, hasHoa: null, highFireHazard: null };
   if (!AUDIT_LIST_CSV_URL || !address) return empty;
   try {
     const res = await fetch(AUDIT_LIST_CSV_URL);
@@ -336,6 +343,8 @@ async function fetchDealContext(address) {
     let addrCol = header.findIndex((h) => h.includes('address'));
     const yearCol = header.findIndex((h) => /year\s*built|yr\s*built|\byear\b/.test(h));
     const hoaCol = header.findIndex((h) => /\bhoa\b|common\s*interest/.test(h));
+    const fireCol = header.findIndex((h) => /high\s*fire|fire\s*hazard|fire\s*zone|fhsz/.test(h));
+    if (fireCol < 0) console.warn('[disclosure-intake] master sheet has no high-fire-hazard column — SPQ brush-clearance cross-check is inactive');
     if (addrCol < 0) addrCol = 0;
     // Last matching row wins (newest after a re-open).
     let ctx = empty;
@@ -343,9 +352,14 @@ async function fetchDealContext(address) {
       if (!addrMatch(r[addrCol] || '', address)) continue;
       const ym = yearCol >= 0 ? String(r[yearCol] || '').match(/\b(1[89]\d{2}|20\d{2})\b/) : null;
       const hoaRaw = hoaCol >= 0 ? String(r[hoaCol] || '').trim().toLowerCase() : '';
+      const fireRaw = fireCol >= 0 ? String(r[fireCol] || '').trim().toLowerCase() : '';
       ctx = {
         yearBuilt: ym ? parseInt(ym[1], 10) : null,
         hasHoa: hoaRaw ? /^y|true|1/.test(hoaRaw) : null,
+        // "Very high" counts as well as "high": Civil Code and C.A.R. Form FHDS both
+        // scope their requirements to a "high OR VERY HIGH fire hazard severity zone",
+        // so "high" is matched unanchored to catch "very high" too.
+        highFireHazard: fireRaw ? /^y|true|1|high/.test(fireRaw) : null,
       };
     }
     return ctx;
@@ -884,7 +898,14 @@ const ANSWER_REVIEW_PROMPT =
   'Keep each reason to ONE concise sentence, state FACTS only, do NOT use "appears", "may", or "possibly", and do ' +
   'NOT use em or en dashes in any field.\n' +
   'ALSO return key_answers for the facts we cross-check against our own records: "spq_7e" = the marked answer to ' +
-  'SPQ question 7E (one of "yes" / "no" / "blank", or "na" if there is no SPQ in the package); "hoa_any_no" = ' +
+  'SPQ question 7E, which is the PARENT line reading "Whether the Property was built before 1978 (if No, leave (1) ' +
+  'and (2) blank)" — one of "yes" / "no" / "blank", or "na" if there is no SPQ in the package. READ THE BOX ON THAT ' +
+  'PARENT LINE ITSELF. 7E is immediately followed by its own sub-items 7E(1) (whether lead-based paint renovations ' +
+  'were started or completed) and 7E(2) (whether those renovations complied with the EPA Lead-Based Paint Renovation ' +
+  'Rule), and EACH has its own Yes/No boxes on the lines directly beneath 7E. A Yes on 7E sitting above a No on ' +
+  '7E(1) and/or 7E(2) is NORMAL AND CORRECT — the seller is saying the home predates 1978 but no such renovation ' +
+  'happened. NEVER take 7E\'s value from 7E(1) or 7E(2). Reporting a sub-item\'s No as the parent\'s answer makes us ' +
+  'send the seller a "should be Yes" correction for an answer that is already right; "hoa_any_no" = ' +
   '"yes" if ANY HOA / common-interest question (TDS Section C items C12/C13/C14, SPQ 6G, SPQ Section 14) is marked ' +
   'No or left blank, "no" if they are all Yes, "na" if those forms are not present; "fire_clearance" = the marked ' +
   'answer ("yes" / "no" / "blank", or "na" if there is no SPQ) to the SPQ GOVERNMENTAL-section question asking ' +
@@ -2020,7 +2041,11 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const norm7e = String(ka.spq_7e || '').toLowerCase();
   const sev = (/\bna\b|not\s*applicable/.test(norm7e)) ? '' : ((/\byes\b/.test(norm7e) || norm7e === 'y') ? 'yes' : ((/\bno\b/.test(norm7e) || norm7e === 'n') ? 'no' : ''));
   const hoaNo = /\byes\b/.test(String(ka.hoa_any_no || '').toLowerCase());
-  const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no} fire_clearance=${ka.fire_clearance || 'na'}(${ka.fire_clearance_item || '?'}) fhds=${ka.fhds || 'na'}`;
+  // Same tolerant parse as 7E, for the brush/vegetation clearance answer.
+  const normFire = String(ka.fire_clearance || '').toLowerCase();
+  const fireSev = (/\bna\b|not\s*applicable/.test(normFire)) ? '' : ((/\byes\b/.test(normFire) || normFire === 'y') ? 'yes' : ((/\bno\b/.test(normFire) || normFire === 'n') ? 'no' : (/blank/.test(normFire) ? 'blank' : '')));
+  const ctxFireItem = String(ka.fire_clearance_item || '').trim() || '17G';
+  const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} highFireHazard=${ctx.highFireHazard} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no} fire_clearance=${ka.fire_clearance || 'na'}(->${fireSev || 'na'})(${ka.fire_clearance_item || '?'}) fhds=${ka.fhds || 'na'}`;
   console.log(`[disclosure-intake] context check ${address}: ${debugContext}`);
   const ctxFlags = [];
   const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.reason || ''}`));
@@ -2033,6 +2058,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   }
   if (ctx.hasHoa === true && hoaNo && !hasFlag(/hoa|common\s*interest|c1[234]|6g|section\s*14/i)) {
     ctxFlags.push({ form: 'SPQ', item: '14', issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: 'No', should_be: 'Yes', reason: 'the property is in an HOA' });
+  }
+  // Brush / vegetation clearance (17F on the 12/24 SPQ, 17G on 6/26). Annual clearance
+  // is a standard obligation in a high or very high fire hazard severity zone, so a No
+  // or a blank contradicts the zone. Checked here rather than only through the
+  // compliance list so it fires even when that list has no brush line.
+  if (ctx.highFireHazard === true && fireSev && fireSev !== 'yes'
+      && !hasFlag(/brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i)) {
+    ctxFlags.push({ form: 'SPQ', item: ctxFireItem, issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: fireSev === 'blank' ? 'blank' : 'No', should_be: 'Yes', reason: 'the property is in a high or very high fire hazard severity zone' });
   }
   if (ctxFlags.length) responseFlags = (Array.isArray(responseFlags) ? responseFlags : []).concat(ctxFlags);
 

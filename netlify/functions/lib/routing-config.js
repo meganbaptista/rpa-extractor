@@ -168,7 +168,12 @@ const ROSTER = [
       + 'package and closing documents, closing statement / final closing / final '
       + 'settlement statement, FIRPTA / QS. '
       + 'MLS SOLD copy. Amended/revised commission (the commission amount, from an agent), '
-      + 'and commission QUESTIONS or concerns. Lender LOAN-STATUS / loan-progress updates — '
+      + 'and commission QUESTIONS or concerns. CDA (commission disbursement authorization) — '
+      + 'Belle owns the whole CDA lane: a request to PREPARE, MODIFY, correct or re-issue a '
+      + 'CDA, a QUESTION about a CDA, and a request to have an agent reimbursed through the '
+      + 'CDA at closing. (A finished CDA merely being delivered as an attachment by '
+      + 'commission finance is still NO_TAG — see the no-tag rules.) '
+      + 'Lender LOAN-STATUS / loan-progress updates — '
       + 'a "loan update" from the lender: loan approval received, conditions or ICD requested, '
       + 'underwriting or appraisal progress. (This is distinct from the physical loan DOCS '
       + 'arriving or signing logistics, which stay NO_TAG.) '
@@ -257,7 +262,7 @@ const ROSTER = [
       + 'Modification of Terms (MT / MOT). Referrals / W9 for referral. Anything from Dan '
       + 'Smith (dan@anvilre.com) or Anvil. Emails from Zapier. Broker Complete File — a '
       + 'reply with a question/comment/concern after we sent their broker complete file. '
-      + 'CDA (commission disbursement authorization) requests. Requests for an MT-BR or '
+      + 'Requests for an MT-BR or '
       + 'MT-LA. Requests to take on new clients / inquiries about our services. TC check / '
       + 'TC fee / Megan check / where to send the check or commission. A QUESTION about '
       + 'escrow due dates (a plain confirmation of due dates is NO TAG). '
@@ -287,20 +292,17 @@ const ROSTER = [
 //
 // To retire a pair: delete its entry. Nothing else references it.
 // ---------------------------------------------------------------------------
-const PAIRS = [
-  {
-    name: 'Belle+Megan',
-    members: ['Belle', 'Megan'],
-    when: 'AGENT REIMBURSEMENT AT CLOSING — an agent paid out of pocket for a deal '
-      + 'expense (an inspection, a repair, a report, a utility or HOA fee) and asks to be '
-      + 'repaid out of the proceeds at closing. E.g. "[agent] paid $150 toward the pool leak '
-      + 'inspection today, please have the buyers reimburse her at closing." The example is '
-      + 'illustrative — any out-of-pocket expense and any amount qualifies. This counts '
-      + 'whether or not the email says "CDA", and whether or not an invoice is attached. '
-      + 'Belle owns the escrow-side instruction that gets the money moved; Megan owns the '
-      + 'CDA the reimbursement flows through — both must act, so tag both.',
-  },
-];
+// Currently EMPTY, on purpose. The only entry was Belle+Megan for agent
+// reimbursements at closing, which existed solely because the two halves had
+// different owners: Belle the escrow-side instruction that moves the money,
+// Megan the CDA it flows through. Megan handed the whole CDA lane to Belle, so
+// Belle now owns both halves and there is nothing left to bridge — reimbursement
+// is Belle alone (see the AGENT REIMBURSEMENT rule in the guidance below).
+//
+// An empty list is a supported state: person-classifier renders no pair options,
+// so every email gets exactly one person label. To add a pair later, append an
+// entry with { name, members, when } — nothing else needs to change.
+const PAIRS = [];
 
 // ---------------------------------------------------------------------------
 // NO-TAG CONTENT RULES — real (non-acknowledgment) emails that get NO person
@@ -320,7 +322,7 @@ const NO_TAG_RULES = [
   'Third-party deposit form.',
   'CONFIRMING escrow due dates (only a confirmation — a QUESTION about due dates goes to Megan).',
   'Notice to Perform PDF received (no action beyond filing to drive).',
-  'A routine incoming CDA DOCUMENT delivery from Christie\'s commission finance (csfinance@ciresocal.com or jennifer@ciresocal.com) whose only purpose is to DELIVER an attached CDA (e.g. subject "CDA - [address]", body just "please find the attached CDA", no question or request) is a no-action document drop (file to drive) -> NO_TAG, even though it carries the CDA attachment. This applies ONLY to csfinance@ciresocal.com or jennifer@ciresocal.com simply attaching a finished CDA; a CDA REQUEST, a request to prepare or modify a CDA, or a CDA question still goes to Megan.',
+  'A routine incoming CDA DOCUMENT delivery from Christie\'s commission finance (csfinance@ciresocal.com or jennifer@ciresocal.com) whose only purpose is to DELIVER an attached CDA (e.g. subject "CDA - [address]", body just "please find the attached CDA", no question or request) is a no-action document drop (file to drive) -> NO_TAG, even though it carries the CDA attachment. This applies ONLY to csfinance@ciresocal.com or jennifer@ciresocal.com simply attaching a finished CDA; a CDA REQUEST, a request to prepare or modify a CDA, or a CDA question still goes to Belle.',
   'Accepted calendar invite.',
   'Automatic Reply / Out of Office.',
   'Subject line that is just "Split on [address]".',
@@ -350,7 +352,7 @@ const ROUTING_NOTES = [
   'LETTERHEAD / SOURCE is a strong signal. A document on the ESCROW COMPANY\'s letterhead (escrow instructions, escrow amendments, escrow statements — the escrow office\'s own paperwork) -> Belle. A CAR (California Association of Realtors) form is contract paperwork -> its owner: addenda / amendments -> Jill; disclosures -> Ethan or Edelyn by side.',
   'AMENDMENTS split by WHO issues them: amended ESCROW INSTRUCTIONS issued/returned by the ESCROW OFFICER (escrow-company paperwork — amended instructions, an escrow amendment for a price reduction, amended commission instructions) -> Belle. CONTRACT-side amendments on CAR forms requested or sent by an AGENT (CAR addendum, a CAR Purchase Price Amendment form, seller credit addendum, AOAA) -> Jill. So the SAME price reduction is Belle when it arrives as the escrow officer\'s amended instructions, but Jill when an agent sends a CAR Purchase Price Amendment form.',
   'Commission: the commission AMOUNT / amended-revised commission from an agent -> Belle; a commission QUESTION or concern -> Belle; amended commission INSTRUCTIONS from escrow -> Belle (Belle owns all escrow-officer amended instructions).',
-  'AGENT REIMBURSEMENT is the Belle+Megan pair, not either one alone. When an agent paid out of pocket for a deal expense and asks to be repaid at closing, do NOT route it to Belle alone as an inspection receipt just because a report or invoice PDF is attached, and do NOT route it to Megan alone as a CDA request just because it touches the CDA. An invoice attached to a reimbursement email is EVIDENCE OF THE AMOUNT owed, not an inspection report being filed — the ask is the money, not the document. This holds even when the email never says "CDA".',
+  'AGENT REIMBURSEMENT AT CLOSING is BELLE. An agent paid out of pocket for a deal expense (an inspection, a repair, a report, a utility or HOA fee) and asks to be repaid out of the proceeds at closing — e.g. "[agent] paid $150 toward the pool leak inspection today, please have the buyers reimburse her at closing". Any expense and any amount qualifies. Belle owns BOTH halves: the escrow-side instruction that moves the money and the CDA it flows through. Route the WHOLE email to Belle, and never to Megan. The ask is the MONEY, not the document, so do NOT downgrade it to a filed inspection receipt just because a report or invoice PDF is attached — an invoice here is EVIDENCE OF THE AMOUNT owed. This holds whether or not the email says "CDA" and whether or not anything is attached.',
   'Leases: CAR form "LR" -> Megan; but RLAS / SIP (leaseback or seller-in-possession after sale) -> Jill.',
   'Milestone receipts count only when in the NEWEST message (EMD received, funded, recorded/closed) and route to Belle; the same words quoted from an older message do not.',
   'Loan emails split two ways: a lender LOAN-STATUS / progress update (approval received, conditions/ICD requested, appraisal progress, "loan update") -> Belle. But the physical loan DOCS arriving, buyer signing loan docs / scheduling the signing, and a bare appraisal-scheduling email stay NO_TAG.',
