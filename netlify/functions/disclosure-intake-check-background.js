@@ -2050,6 +2050,20 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // check below AND by the compliance-list VERIFY reading further down, so both
   // routes to "17G should be Yes" agree. See lib/property-type.js.
   const brushExempt = isBrushClearanceExempt({ address });
+  // Agent-facing wording for the brush-clearance item, Megan's phrasing (2026-09-02).
+  //
+  // Deliberately a QUESTION, not an assertion. 17G has legitimate exceptions, a condo
+  // owns no ground, so telling the listing side "this should be Yes" overstates what
+  // we know. Asking them to confirm is both more accurate and easier to action.
+  //
+  // It also replaces a genuinely broken line. The generic template concatenated the
+  // compliance-list item text with "marked No, but ...", which rendered as the run-on
+  // "SPQ 17G: Yes, high fire brush clearance SPQ present; confirm 17G: marked No, but
+  // the property is in a high fire hazard area, so it should be Yes."
+  //
+  // The renderer appends the full stop, so this string must NOT end in one.
+  const BRUSH_ASK = 'The property is marked as a high fire hazard area. Please confirm if the '
+    + 'seller should have marked this as a "Yes" for annual brush clearance';
   const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} highFireHazard=${ctx.highFireHazard} brushExempt=${brushExempt} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no} fire_clearance=${ka.fire_clearance || 'na'}(->${fireSev || 'na'})(${ka.fire_clearance_item || '?'}) fhds=${ka.fhds || 'na'}`;
   console.log(`[disclosure-intake] context check ${address}: ${debugContext}`);
   const ctxFlags = [];
@@ -2079,7 +2093,10 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   }
   if (!brushExempt && ctx.highFireHazard === true && fireSev && fireSev !== 'yes'
       && !hasFlag(/brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i)) {
-    ctxFlags.push({ form: 'SPQ', item: ctxFireItem, issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: fireSev === 'blank' ? 'blank' : 'No', should_be: 'Yes', reason: 'the property is in a high or very high fire hazard severity zone' });
+    // issue is verify_mismatch so this renders as "<ref>: <reason>." and carries
+    // BRUSH_ASK verbatim. marked/should_be stay on the object for any downstream
+    // consumer that reads them.
+    ctxFlags.push({ form: 'SPQ', item: ctxFireItem, issue: 'verify_mismatch', discrepancy_type: 'incorrect', marked: fireSev === 'blank' ? 'blank' : 'No', should_be: 'Yes', reason: BRUSH_ASK });
   }
   if (ctxFlags.length) responseFlags = (Array.isArray(responseFlags) ? responseFlags : []).concat(ctxFlags);
 
@@ -2134,7 +2151,10 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const hoaReading = ka.hoa_any_no === 'no' ? 'yes' : (ka.hoa_any_no === 'yes' ? 'no' : 'na');
   const VERIFY_READINGS = [
     { re: /hoa|common\s*interest|\bc\s*,?\s*1[234]\b|\b6g\b|section\s*14/i, mark: hoaReading, refDefault: 'HOA disclosures', reasonBad: 'the property is in an HOA / common interest development, so it should be Yes' },
-    { re: /brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i, mark: yesno(ka.fire_clearance), refDefault: `SPQ ${fireItem}`, reasonBad: 'the property is in a high fire hazard area, so it should be Yes', condoExempt: true },
+    // askForm/askItem/askReason override the generic "marked X, but <reasonBad>"
+    // wording, which read as a run-on once the compliance-list item text was
+    // concatenated onto it. reasonBad is kept for reference only.
+    { re: /brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i, mark: yesno(ka.fire_clearance), refDefault: `SPQ ${fireItem}`, reasonBad: 'the property is in a high fire hazard area, so it should be Yes', condoExempt: true, askForm: 'SPQ', askItem: ctxFireItem, askReason: BRUSH_ASK },
     // Wording stays year-neutral on purpose: Section 2B/2C is only owed by a
     // pre-2010 home, so naming "Section 2" here would chase sellers of newer
     // homes for boxes their own form tells them to leave blank. identify()
@@ -2167,6 +2187,12 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     const ref = `${v.item ? v.item + ' ' : ''}${String(v.note || '').replace(/^\s*confirm\s+/i, '').replace(/\s*marked\s+(yes|no)\b.*$/i, '').trim()}`.trim() || r.refDefault;
     if (r.mark === expected) {
       confirmedReadings.push(`${ref}: marked ${expected === 'yes' ? 'Yes' : 'No'} as expected`);
+    } else if (r.askReason) {
+      // Bespoke wording. Uses a clean locator (e.g. "SPQ 17G") instead of the
+      // compliance-list item text, so the line does not run on.
+      responseFlags = (Array.isArray(responseFlags) ? responseFlags : []).concat([
+        { form: r.askForm || '', item: r.askItem || '', issue: 'verify_mismatch', reason: r.askReason },
+      ]);
     } else {
       const markWord = r.mark === 'no' ? 'No' : (r.mark === 'blank' ? 'left blank' : r.mark);
       const reason = /not\s*completed|send the completed/i.test(r.reasonBad) ? r.reasonBad : `marked ${markWord}, but ${r.reasonBad}`;
