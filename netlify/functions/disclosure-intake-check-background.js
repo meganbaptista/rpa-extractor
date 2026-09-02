@@ -149,6 +149,59 @@ function receivedHas(received, rx) {
   return (received || []).some((f) => rx.test(`${(f && f.code) || ''} ${(f && f.name) || ''}`));
 }
 
+const RX_AVID = /\bavid\b|agent\s*visual\s*inspection/i;
+// "LA AVID", "LA AVID #2". Must not match "BA AVID": ours, prepared in-house.
+const RX_LA_AVID = /\bla\s*avid\b/i;
+
+/**
+ * Any AVID that arrives satisfies the listing agent's AVID.
+ *
+ * WHY DETERMINISTIC: identify only returns {code, name, revision}, so reconcile
+ * sees a bare "AVID — Agent Visual Inspection Disclosure" with no side or
+ * brokerage on it, while the audit list carries BOTH "LA AVID" and "BA AVID".
+ * The model therefore had to guess which one it satisfied. On 14018 Valley
+ * Vista it credited BA AVID (which then swept into prepared-by-us) and left
+ * LA AVID outstanding, so a filled, DocuSigned AVID sitting on pages 22-24 was
+ * chased from the listing side as missing.
+ *
+ * The reasoning that makes this safe: this pipeline is buyer-side only (see the
+ * reconcile prompt), and our own BA AVID is prepared in-house and never arrives
+ * by email. So an AVID in a listing-side delivery can only be theirs.
+ *
+ * Megan confirmed the rule 2026-09-02: "any AVID that arrives satisfies."
+ */
+function applyAvidRule(result, received) {
+  if (!result || !receivedHas(received, RX_AVID)) return { applied: false };
+
+  const still = Array.isArray(result.still_needed) ? result.still_needed : [];
+  const present = Array.isArray(result.present) ? result.present : [];
+  const satisfied = [];
+  const kept = [];
+  for (const item of still) {
+    if (RX_LA_AVID.test(String(item))) satisfied.push(String(item));
+    else kept.push(item);
+  }
+  if (!satisfied.length) return { applied: false };
+
+  for (const s of satisfied) if (!present.some((p) => String(p) === s)) present.push(s);
+  result.still_needed = kept;
+  result.present = present;
+
+  // A duplex list carries "LA AVID" AND "LA AVID #2" (one per unit). The AVID
+  // form has its own "for ALL units (or only unit(s) ___)" checkbox, so one form
+  // CAN cover both, but we do not get to assume it did. Credit them and hand the
+  // coverage question to a human rather than chasing a form that may already be
+  // complete.
+  let note = '';
+  if (satisfied.length > 1) {
+    note = 'more than one LA AVID is on the list (one per unit); confirm the received AVID is marked '
+      + 'for ALL units rather than a single unit';
+    result.verify = Array.isArray(result.verify) ? result.verify : [];
+    result.verify.push({ item: 'LA AVID', note });
+  }
+  return { applied: true, satisfied, note };
+}
+
 function applyExemptSellerRules(result, received) {
   if (!result || !receivedHas(received, RX_ESD)) return { exempt: false };
 
@@ -2028,6 +2081,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // Exempt-seller path: an ESD retires the TDS/SPQ (and the FHDS + Residential
   // Earthquake Hazards Report) and makes the WHSD required. Deterministic backstop
   // so it always fires when an ESD is in hand, regardless of the original list.
+  // Any AVID that arrives satisfies LA AVID. Runs before the exempt-seller rules
+  // so both see a consistent still_needed list.
+  const avidInfo = applyAvidRule(result, received);
+  if (avidInfo.applied) {
+    console.log(`[disclosure-intake] LA AVID satisfied by a received AVID: ${avidInfo.satisfied.join(', ')}`
+      + `${avidInfo.note ? ` (verify added: ${avidInfo.note})` : ''}`);
+  }
+
   const exemptInfo = applyExemptSellerRules(result, received);
   if (exemptInfo.exempt) {
     console.log(`[disclosure-intake] exempt seller (ESD present): retired ${(exemptInfo.removed || []).join(', ') || '(nothing on list)'}; WHSD ${exemptInfo.whsdReceived ? 'received' : 'requested'}`);
