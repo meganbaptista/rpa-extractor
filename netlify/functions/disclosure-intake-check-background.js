@@ -44,6 +44,7 @@ console.log('[disclosure-intake] module loading');
 const crypto = require('crypto');
 const { getStore } = require('@netlify/blobs');
 const { canonicalAddress } = require('./lib/address');
+const { isBrushClearanceExempt } = require('./lib/property-type');
 const usageLog = require('./lib/usage-log');
 const { callClaude: callClaudeShared } = require('./lib/claude');
 // Crisp-render dependency: pdf-parse (pdfjs under the hood) with its CanvasFactory polyfill,
@@ -2045,7 +2046,11 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const normFire = String(ka.fire_clearance || '').toLowerCase();
   const fireSev = (/\bna\b|not\s*applicable/.test(normFire)) ? '' : ((/\byes\b/.test(normFire) || normFire === 'y') ? 'yes' : ((/\bno\b/.test(normFire) || normFire === 'n') ? 'no' : (/blank/.test(normFire) ? 'blank' : '')));
   const ctxFireItem = String(ka.fire_clearance_item || '').trim() || '17G';
-  const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} highFireHazard=${ctx.highFireHazard} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no} fire_clearance=${ka.fire_clearance || 'na'}(->${fireSev || 'na'})(${ka.fire_clearance_item || '?'}) fhds=${ka.fhds || 'na'}`;
+  // Condo exemption for the brush/vegetation clearance rule, used by the context
+  // check below AND by the compliance-list VERIFY reading further down, so both
+  // routes to "17G should be Yes" agree. See lib/property-type.js.
+  const brushExempt = isBrushClearanceExempt({ address });
+  const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} highFireHazard=${ctx.highFireHazard} brushExempt=${brushExempt} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no} fire_clearance=${ka.fire_clearance || 'na'}(->${fireSev || 'na'})(${ka.fire_clearance_item || '?'}) fhds=${ka.fhds || 'na'}`;
   console.log(`[disclosure-intake] context check ${address}: ${debugContext}`);
   const ctxFlags = [];
   const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.reason || ''}`));
@@ -2063,7 +2068,16 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // is a standard obligation in a high or very high fire hazard severity zone, so a No
   // or a blank contradicts the zone. Checked here rather than only through the
   // compliance list so it fires even when that list has no brush line.
-  if (ctx.highFireHazard === true && fireSev && fireSev !== 'yes'
+  //
+  // A condominium is exempt: the unit owner owns no ground and the association
+  // manages the common-area vegetation, so "No" is correct however severe the
+  // zone. Only the address is available here (the deal context has no property
+  // type), and a unit designator is a sound proxy. See lib/property-type.js.
+  if (brushExempt && ctx.highFireHazard === true && fireSev && fireSev !== 'yes') {
+    console.log(`[disclosure-intake] 17G/brush check SUPPRESSED for ${address}: unit-numbered `
+      + `address, so clearance belongs to the association and "${fireSev}" is not a contradiction`);
+  }
+  if (!brushExempt && ctx.highFireHazard === true && fireSev && fireSev !== 'yes'
       && !hasFlag(/brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i)) {
     ctxFlags.push({ form: 'SPQ', item: ctxFireItem, issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: fireSev === 'blank' ? 'blank' : 'No', should_be: 'Yes', reason: 'the property is in a high or very high fire hazard severity zone' });
   }
@@ -2120,7 +2134,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const hoaReading = ka.hoa_any_no === 'no' ? 'yes' : (ka.hoa_any_no === 'yes' ? 'no' : 'na');
   const VERIFY_READINGS = [
     { re: /hoa|common\s*interest|\bc\s*,?\s*1[234]\b|\b6g\b|section\s*14/i, mark: hoaReading, refDefault: 'HOA disclosures', reasonBad: 'the property is in an HOA / common interest development, so it should be Yes' },
-    { re: /brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i, mark: yesno(ka.fire_clearance), refDefault: `SPQ ${fireItem}`, reasonBad: 'the property is in a high fire hazard area, so it should be Yes' },
+    { re: /brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i, mark: yesno(ka.fire_clearance), refDefault: `SPQ ${fireItem}`, reasonBad: 'the property is in a high fire hazard area, so it should be Yes', condoExempt: true },
     // Wording stays year-neutral on purpose: Section 2B/2C is only owed by a
     // pre-2010 home, so naming "Section 2" here would chase sellers of newer
     // homes for boxes their own form tells them to leave blank. identify()
@@ -2135,6 +2149,19 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     const r = VERIFY_READINGS.find((x) => x.re.test(hay));
     if (!r || r.mark === '' || r.mark === 'na') { verifyKept.push(v); continue; }
     if (hasFlag(r.re)) continue; // already resolved via the sheet-based context check above
+    // The compliance list still carries "SPQ 17G: Yes, high fire brush clearance"
+    // for a condo, because the list generator decides that from the fire zone
+    // alone. Do not chase a revision off it. It is also not a clean confirm, so
+    // it goes to VERIFY, the section a human already reads, rather than being
+    // silently dropped. Same destination the addendum case uses below.
+    if (r.condoExempt && brushExempt) {
+      const why = 'unit-numbered address, so brush clearance is the association\'s rather than the '
+        + 'seller\'s; confirm rather than requiring Yes';
+      verifyKept.push({ item: v.item, note: v.note ? `${v.note}; ${why}` : why });
+      console.log(`[disclosure-intake] verify reading for "${v.item || v.note}" routed to VERIFY `
+        + `(condo brush exemption), not chased as a revision`);
+      continue;
+    }
     const expected = /marked\s*no\b|=\s*no\b/i.test(hay) ? 'no' : 'yes';
     // Reference the item the way the compliance list named it (e.g. "TDS C,12,13,14").
     const ref = `${v.item ? v.item + ' ' : ''}${String(v.note || '').replace(/^\s*confirm\s+/i, '').replace(/\s*marked\s+(yes|no)\b.*$/i, '').trim()}`.trim() || r.refDefault;

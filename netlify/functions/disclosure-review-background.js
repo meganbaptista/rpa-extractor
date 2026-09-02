@@ -38,6 +38,7 @@ console.log('[disclosure-review] module loading');
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const usageLog = require('./lib/usage-log');
 const { callClaude: callClaudeShared } = require('./lib/claude');
+const { isBrushClearanceExempt } = require('./lib/property-type');
 
 // Opus 4.8 — materiality is liability-sensitive judgment; use the top tier
 // (same quality bar as the signature audit). Adaptive thinking is configured in
@@ -249,10 +250,23 @@ function item17gAnswerField(fields) {
 
 // If the property is high fire hazard but 17G was answered "No", return a
 // mandated material finding (with Megan's exact wording); else null.
-function fireBrushMandate(fields) {
+//
+// EXCEPT for a condominium. The unit owner owns no ground and the association
+// manages vegetation on the common area, so "No" is the correct answer there
+// however severe the fire zone. Asserting Yes sent a seller a question their
+// own form told them to answer No to. See lib/property-type.js for why the
+// address unit designator is the signal and the HOA flag is not.
+function fireBrushMandate(fields, propertyAddress) {
   const fire = normYesNo((fireHazardField(fields) || {}).value);
   const g17 = normYesNo((item17gAnswerField(fields) || {}).value);
-  console.log(`[disclosure-review] cross-check: fire-hazard=${fire || '(n/a)'} 17G=${g17 || '(n/a)'}`);
+  const exempt = isBrushClearanceExempt({ address: propertyAddress });
+  console.log(`[disclosure-review] cross-check: fire-hazard=${fire || '(n/a)'} 17G=${g17 || '(n/a)'}`
+    + ` brush-exempt=${exempt}`);
+  if (fire === 'yes' && g17 === 'no' && exempt) {
+    console.log('[disclosure-review] 17G mandate SUPPRESSED: unit-numbered address, so brush '
+      + 'clearance belongs to the association and "No" is correct despite the fire zone');
+    return null;
+  }
   if (fire === 'yes' && g17 === 'no') {
     return {
       topic: 'Fire hazard and brush clearance',
@@ -491,7 +505,7 @@ exports.handler = async function (event) {
     // Deterministic cross-checks run on the FULL field set: property-info fields
     // like "High Fire Hazard Area?" get dropped by the disclosure filter, so read
     // them before filtering. A mandate only exists when an inconsistency is real.
-    const mandates = [fireBrushMandate(fields)].filter(Boolean);
+    const mandates = [fireBrushMandate(fields, propertyAddress)].filter(Boolean);
     if (mandates.length) console.log(`[disclosure-review] ${mandates.length} deterministic mandate(s) forced into the review`);
 
     const disclosureFields = fields.filter((f) => isDisclosureField(f.label));
