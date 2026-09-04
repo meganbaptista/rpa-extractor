@@ -11,8 +11,8 @@
 //      required parties (Buyer/Seller/Buyer's Agent/Listing Agent) have signed.
 //   3. Splits the PDF into one file per form with pdf-lib (copyPages).
 //   4. Names each "<CODE> - <Full Name> - <STATUS>.pdf" where STATUS is `FX`
-//      (fully executed) or `Need` + the missing parties (B, S, BA, LA) in fixed
-//      order, e.g. `NeedB`, `NeedB+S`. Duplicates keep both via " (2)".
+//      (fully executed) or `N` + the missing parties (B, S, BA, LA) in fixed
+//      order, e.g. `NB`, `NB+S`. Duplicates keep both via " (2)".
 //   5. Uploads the split files into the property folder (location.propertyFolderId).
 //   6. Archives the original to Incoming/_processed/ and emits `disclosure.split`.
 //
@@ -208,16 +208,18 @@ function isMarkOnlyDoc(form) {
   return !clean(form.code) && MARK_ONLY_DOCS.has(clean(form.name).toLowerCase());
 }
 
-// FX when every required signer is present; else Need<missing, in fixed order>.
+// FX when every required signer is present; else N<missing, in fixed order>.
+// Suffix style is Megan's own filing shorthand (NB, NS, NBA, NLA, NB+S), set
+// 2026-09-04 to match how she hand-names these in the escrow folders.
 function statusSuffix(form) {
   if (isMarkOnlyDoc(form)) {
-    return normSigners(form.present_signers).length ? 'FX' : 'NeedB';
+    return normSigners(form.present_signers).length ? 'FX' : 'NB';
   }
   const required = normSigners(form.required_signers);
   const present = new Set(normSigners(form.present_signers));
   const missing = required.filter((t) => !present.has(t));
   if (!missing.length) return 'FX';
-  return 'Need' + SIGNER_ORDER.filter((t) => missing.includes(t)).join('+');
+  return 'N' + SIGNER_ORDER.filter((t) => missing.includes(t)).join('+');
 }
 
 // Sanitize a form code/name for a filename (Drive tolerates most chars, but keep
