@@ -113,7 +113,7 @@ const LABEL_HINTS = {
 // cost). Keys are lowercased email addresses or bare domains.
 // ---------------------------------------------------------------------------
 const SENDER_ROUTING = {
-  'dan@anvilre.com': 'Megan',        // "Anything from Dan Smith - Anvil" -> Megan
+  'dan@anvilreinc.com': 'Megan',     // "Anything from Dan Smith - Anvil" -> Megan
   'support@planetre.com': 'Lovely',  // resolved 2026-07-15: PlanetRE -> Lovely
 };
 
@@ -282,7 +282,7 @@ const ROSTER = [
       + 'Phone-call requests to Megan directly. Agent asking to send '
       + 'out a Notice to Perform, or asking for a Notice to Perform / NTB draft. '
       + 'Modification of Terms (MT / MOT). Referrals / W9 for referral. Anything from Dan '
-      + 'Smith (dan@anvilre.com) or Anvil. Emails from Zapier. Broker Complete File — a '
+      + 'Smith (dan@anvilreinc.com) or Anvil. Emails from Zapier. Broker Complete File — a '
       + 'reply with a question/comment/concern after we sent their broker complete file. '
       + 'Requests for an MT-BR or '
       + 'MT-LA. Inquiries about our SERVICES from someone NOT bringing a specific deal — a '

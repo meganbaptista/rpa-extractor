@@ -16,7 +16,7 @@ Both branches run the **skip gate first** — it is never a pure lookup.
 
 **Branch B — everything else (the common case):**
 1. Run the skip gate. `skip=true` → mark read, remove from intake, no label.
-2. `skip=false` → **sender override?** (e.g. dan@anvilre.com → Megan) apply that
+2. `skip=false` → **sender override?** (e.g. dan@anvilreinc.com → Megan) apply that
    person, no model call.
 3. Else run the **person-classifier** — the rulebook that automates Belle's
    manual tagging (per-person duties + sender-type + buyer/seller-side rules,
