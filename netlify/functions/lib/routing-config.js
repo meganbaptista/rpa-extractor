@@ -138,6 +138,22 @@ const SUBJECT_ROUTING = [
     person: 'Ethan',
     note: 'DocuSign seller disclosure package (signing) -> seller side',
   },
+  {
+    // "New Listing 1153-1155 S Crescent Heights Blvd LA 90035" — an agent
+    // bringing us a new listing. BELLE owns new-listing/new-file intake and
+    // sets the file up before it reaches Megan. The classifier kept routing
+    // these to Megan because the body asks HER directly ("would you be
+    // available to start working with me on this?"), reading it as a
+    // new-client/services inquiry. Per Megan: a "New Listing" subject is
+    // Belle's first, period.
+    //
+    // Anchored at the start of the subject (past any Re:/Fwd: prefixes) so a
+    // passing mention mid-subject doesn't trigger it, and skipped when the
+    // subject is a LEASE/rental listing — Megan owns the whole lease file.
+    pattern: /^(?:\s*(?:re|fwd|fw)\s*:\s*)*new listing\b(?!.*\b(?:lease|leases|rental|rent)\b)/i,
+    person: 'Belle',
+    note: 'New listing intake -> Belle sets up the new file (lease listings excluded)',
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -181,7 +197,13 @@ const ROSTER = [
       + 'close Friday", "set to close on the 30th", a close-date revision, or an escrow '
       + 'closing audit response with a changed close date) — so Belle can verify or update '
       + 'the close date in Process Street. RLA / residential listing agreement / new listing, listing '
-      + 'agreement received. Rejected offers. Inspection REPORTS/receipts when a PDF is '
+      + 'agreement received. NEW LISTING / NEW DEAL INTAKE is Belle\'s, including an agent '
+      + 'ANNOUNCING a new listing or new deal and ASKING WHETHER WE ARE AVAILABLE to take it '
+      + 'on / start working with them (e.g. "I have a new listing — would you be available to '
+      + 'start working with me on this?", "I have a new one for you"), even when the email is '
+      + 'addressed to Megan by name. Belle opens and sets up the new file first, then hands it '
+      + 'to Megan — so route it to BELLE, not Megan. '
+      + 'Rejected offers. Inspection REPORTS/receipts when a PDF is '
       + 'attached or LINKED (general, termite, HVAC, roof, mold, plumbing, geo, etc.).',
   },
   {
@@ -263,7 +285,10 @@ const ROSTER = [
       + 'Smith (dan@anvilre.com) or Anvil. Emails from Zapier. Broker Complete File — a '
       + 'reply with a question/comment/concern after we sent their broker complete file. '
       + 'Requests for an MT-BR or '
-      + 'MT-LA. Requests to take on new clients / inquiries about our services. TC check / '
+      + 'MT-LA. Inquiries about our SERVICES from someone NOT bringing a specific deal — a '
+      + 'cold/new contact asking what we do, our pricing, or whether we have capacity in '
+      + 'general. This does NOT include an agent who has an actual new listing or new deal in '
+      + 'hand and asks if we can start on it: that is new-file intake -> BELLE. TC check / '
       + 'TC fee / Megan check / where to send the check or commission. A QUESTION about '
       + 'escrow due dates (a plain confirmation of due dates is NO TAG). '
       + 'An agent, TC, escrow/title officer, or other industry contact ANNOUNCING a new brokerage / '
@@ -353,6 +378,7 @@ const ROUTING_NOTES = [
   'AMENDMENTS split by WHO issues them: amended ESCROW INSTRUCTIONS issued/returned by the ESCROW OFFICER (escrow-company paperwork — amended instructions, an escrow amendment for a price reduction, amended commission instructions) -> Belle. CONTRACT-side amendments on CAR forms requested or sent by an AGENT (CAR addendum, a CAR Purchase Price Amendment form, seller credit addendum, AOAA) -> Jill. So the SAME price reduction is Belle when it arrives as the escrow officer\'s amended instructions, but Jill when an agent sends a CAR Purchase Price Amendment form.',
   'Commission: the commission AMOUNT / amended-revised commission from an agent -> Belle; a commission QUESTION or concern -> Belle; amended commission INSTRUCTIONS from escrow -> Belle (Belle owns all escrow-officer amended instructions).',
   'AGENT REIMBURSEMENT AT CLOSING is BELLE. An agent paid out of pocket for a deal expense (an inspection, a repair, a report, a utility or HOA fee) and asks to be repaid out of the proceeds at closing — e.g. "[agent] paid $150 toward the pool leak inspection today, please have the buyers reimburse her at closing". Any expense and any amount qualifies. Belle owns BOTH halves: the escrow-side instruction that moves the money and the CDA it flows through. Route the WHOLE email to Belle, and never to Megan. The ask is the MONEY, not the document, so do NOT downgrade it to a filed inspection receipt just because a report or invoice PDF is attached — an invoice here is EVIDENCE OF THE AMOUNT owed. This holds whether or not the email says "CDA" and whether or not anything is attached.',
+  'NEW LISTING / NEW DEAL INTAKE goes to BELLE FIRST, even when the email is addressed to Megan by name and asks for HER availability ("Hi Megan — I have a new listing, would you be available to start working with me on this?"). Belle opens and sets up every new file before it reaches Megan. Being addressed to Megan is NOT a routing signal here; the ask is a new file. Route to MEGAN only when there is NO specific deal — a general inquiry about our services, pricing, or capacity from someone not bringing a listing — or when the thread is a LEASE (Megan owns the whole lease file). A phone-call request to Megan is still Megan.',
   'Leases: CAR form "LR" -> Megan; but RLAS / SIP (leaseback or seller-in-possession after sale) -> Jill.',
   'Milestone receipts count only when in the NEWEST message (EMD received, funded, recorded/closed) and route to Belle; the same words quoted from an older message do not.',
   'Loan emails split two ways: a lender LOAN-STATUS / progress update (approval received, conditions/ICD requested, appraisal progress, "loan update") -> Belle. But the physical loan DOCS arriving, buyer signing loan docs / scheduling the signing, and a bare appraisal-scheduling email stay NO_TAG.',
