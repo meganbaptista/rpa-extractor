@@ -40,10 +40,12 @@ const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 // Anthropic list prices, USD per 1M tokens (input / output). Cache reads bill at
 // ~0.1x input, cache writes at ~1.25x input. Keep this in sync with pricing.
 const PRICES = {
+  'claude-fable-5-1': { in: 10, out: 50 },
+  'claude-opus-5': { in: 5, out: 25 },
   'claude-opus-4-8': { in: 5, out: 25 },
   'claude-opus-4-7': { in: 5, out: 25 },
   'claude-opus-4-6': { in: 5, out: 25 },
-  'claude-sonnet-5': { in: 3, out: 15 },
+  'claude-sonnet-5': { in: 2, out: 10 },
   'claude-sonnet-4-6': { in: 3, out: 15 },
   'claude-haiku-4-5': { in: 1, out: 5 },
 };
@@ -107,7 +109,12 @@ async function getSheetsToken() {
 // Sonnet snapshot later) still prices instead of silently logging $0.
 function estimateCost(model, u) {
   const p = PRICES[model] || PRICES[String(model || '').replace(/-\d{8}$/, '')];
-  if (!p) return 0;
+  if (!p) {
+    // A model missing from PRICES logs $0 forever and looks like "we didn't spend
+    // anything" rather than "we didn't price it" — say so in the function logs.
+    console.warn(`[usage-log] no price for model '${model}' — row logged at $0`);
+    return 0;
+  }
   const inTok = u.input_tokens || 0;
   const outTok = u.output_tokens || 0;
   const cacheRead = u.cache_read_input_tokens || 0;
