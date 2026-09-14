@@ -45,6 +45,7 @@ const crypto = require('crypto');
 const { getStore } = require('@netlify/blobs');
 const { canonicalAddress } = require('./lib/address');
 const { isBrushClearanceExempt } = require('./lib/property-type');
+const { parseRequestBody } = require('./lib/parse-body');
 const usageLog = require('./lib/usage-log');
 const { callClaude: callClaudeShared } = require('./lib/claude');
 // Crisp-render dependency: pdf-parse (pdfjs under the hood) with its CanvasFactory polyfill,
@@ -2531,9 +2532,22 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 }
 
 exports.handler = async function (event) {
-  let body;
-  try { body = JSON.parse(event.body || '{}'); }
-  catch { console.error('[disclosure-intake] invalid JSON body'); return { statusCode: 400 }; }
+  // Parsed through lib/parse-body rather than a bare JSON.parse so that (a) a
+  // base64 or form-encoded body is RECOVERED instead of rejected, and (b) when
+  // the body genuinely cannot be parsed the log NAMES THE CAUSE. The previous
+  // one-liner here logged only "invalid JSON body", which is unactionable: it
+  // discarded the length, the content type, the base64 flag and the offending
+  // characters, i.e. everything that distinguishes a 6MB truncation from an
+  // unescaped quote in a Zapier field. See that module's header.
+  const parsed = parseRequestBody(event);
+  if (!parsed.ok) {
+    console.error(`[disclosure-intake] invalid request body - ${parsed.diagnostic}`);
+    return { statusCode: 400 };
+  }
+  const body = parsed.body;
+  // Only set when the body had to be recovered. Worth a line in the logs: it
+  // means the caller is not posting clean JSON and should be corrected upstream.
+  if (parsed.note) console.warn(`[disclosure-intake] ${parsed.note}`);
 
   // Modes:
   //   default       — { documents, ... }            ingest + reconcile + callback (single delivery)
