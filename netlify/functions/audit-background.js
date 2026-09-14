@@ -75,6 +75,7 @@ console.log('[audit-background] @netlify/blobs loaded');
 // failure is swallowed inside logUsage, so it can never fail an audit.
 const usageLog = require('./lib/usage-log');
 const { callClaude: callClaudeShared } = require('./lib/claude');
+const { parseRequestBody } = require('./lib/parse-body');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 
@@ -581,13 +582,22 @@ async function sendToAuditZapier(jobId, payload) {
 }
 
 exports.handler = async function (event) {
-  let body;
-  try {
-    body = JSON.parse(event.body || '{}');
-  } catch (err) {
-    console.error('[audit-background] invalid JSON body');
+  // Parsed through lib/parse-body rather than a bare JSON.parse so that (a) a
+  // base64 or form-encoded body is RECOVERED instead of rejected, and (b) when
+  // the body genuinely cannot be parsed the log NAMES THE CAUSE. The previous
+  // one-liner here logged only "invalid JSON body", which is unactionable: it
+  // discarded the length, the content type, the base64 flag and the offending
+  // characters, i.e. everything that distinguishes a 6MB truncation from an
+  // unescaped quote in a mapped Zapier field. See that module's header.
+  const parsedBody = parseRequestBody(event);
+  if (!parsedBody.ok) {
+    console.error(`[audit-background] invalid request body - ${parsedBody.diagnostic}`);
     return { statusCode: 400 };
   }
+  const body = parsedBody.body;
+  // Only set when the body had to be recovered. Worth a line in the logs: it
+  // means the caller is not posting clean JSON and should be fixed upstream.
+  if (parsedBody.note) console.warn(`[audit-background] ${parsedBody.note}`);
 
   const { jobId, buyerCount = 1, sellerCount = 1, sellerEntity, buyerEntity,
           propertyAddress = '', apn = '' } = body;

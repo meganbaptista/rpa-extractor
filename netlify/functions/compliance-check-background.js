@@ -123,6 +123,7 @@ async function fetchComplianceListByAddress(address) {
 // recursive nested-zip walk are shared from lib/unzip.js.
 // ---------------------------------------------------------------------------
 const { PDF_MAGIC, looksZip, collectPdfs, summarizeCollect } = require('./lib/unzip');
+const { parseRequestBody } = require('./lib/parse-body');
 
 function describeBuffer(buf, contentType) {
   const head = buf.subarray(0, 16);
@@ -335,9 +336,22 @@ async function sendCallback(callbackUrl, payload) {
 }
 
 exports.handler = async function (event) {
-  let body;
-  try { body = JSON.parse(event.body || '{}'); }
-  catch { console.error('[compliance-check] invalid JSON body'); return { statusCode: 400 }; }
+  // Parsed through lib/parse-body rather than a bare JSON.parse so that (a) a
+  // base64 or form-encoded body is RECOVERED instead of rejected, and (b) when
+  // the body genuinely cannot be parsed the log NAMES THE CAUSE. The previous
+  // one-liner here logged only "invalid JSON body", which is unactionable: it
+  // discarded the length, the content type, the base64 flag and the offending
+  // characters, i.e. everything that distinguishes a 6MB truncation from an
+  // unescaped quote in a mapped Zapier field. See that module's header.
+  const parsedBody = parseRequestBody(event);
+  if (!parsedBody.ok) {
+    console.error(`[compliance-check] invalid request body - ${parsedBody.diagnostic}`);
+    return { statusCode: 400 };
+  }
+  const body = parsedBody.body;
+  // Only set when the body had to be recovered. Worth a line in the logs: it
+  // means the caller is not posting clean JSON and should be fixed upstream.
+  if (parsedBody.note) console.warn(`[compliance-check] ${parsedBody.note}`);
 
   const { complianceList, propertyAddress = '', callbackUrl, ref = '' } = body;
   const callback = callbackUrl || CALLBACK_URL_ENV;
