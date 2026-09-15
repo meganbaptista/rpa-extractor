@@ -203,6 +203,60 @@ function applyAvidRule(result, received) {
   return { applied: true, satisfied, note };
 }
 
+// ----------------------------------------------------------------------------
+// THE SELLER'S EARTHQUAKE REPORT, WHATEVER THE LIST CALLS IT.
+//
+// Audit lists name it "Earthquake Hazard Report 1960" (the pre-1960 construction
+// trigger). C.A.R.'s current form is titled "Residential Earthquake Risk
+// Disclosure Statement", and identify reports it together with its source
+// booklet in parentheses:
+//
+//   Residential Earthquake Risk Disclosure Statement (Homeowner's Guide to Earthquake Safety)
+//
+// Those two strings share not one word, so reconcile left the list item
+// outstanding on 3499 Beverly Glen (2026-09-14) while the signed, executed form
+// sat in the package and identify had already named it. Deterministic, like
+// applyAvidRule, so a shorthand the model has not been shown cannot chase a form
+// that already arrived.
+//
+// MATCHED ON THE FORM TITLE, not on "earthquake but not guide". RX_EQ_KEEP
+// (/receipt|booklet|guide/i) exists to stop the booklet receipt satisfying the
+// report, but the real form's identify name CONTAINS "Guide" in that
+// parenthetical, so gating the received side on RX_EQ_KEEP would reject the very
+// form being credited. The booklet receipt is excluded by receipt/booklet/
+// pamphlet alone, which its name ("Earthquake/Environmental Hazards Booklet
+// Receipt") carries and the report's name does not. Both are in this same
+// packet, so this distinction is load-bearing, not hypothetical.
+// ----------------------------------------------------------------------------
+const RX_EQ_REPORT_FORM = /residential\s*earthquake\s*(?:hazards?|risk)\s*(?:disclosure|report)|earthquake\s*(?:risk|hazards?)\s*disclosure\s*statement|earthquake\s*hazards?\s*report/i;
+const RX_EQ_NOT_THE_REPORT = /\breceipts?\b|\bbooklet\b|\bpamphlet\b/i;
+
+function applyEarthquakeReportRule(result, received) {
+  const hasReport = (received || []).some((f) => {
+    const s = `${(f && f.code) || ''} ${(f && f.name) || ''}`;
+    return RX_EQ_REPORT_FORM.test(s) && !RX_EQ_NOT_THE_REPORT.test(s);
+  });
+  if (!result || !hasReport) return { applied: false };
+
+  const still = Array.isArray(result.still_needed) ? result.still_needed : [];
+  const present = Array.isArray(result.present) ? result.present : [];
+  const satisfied = [];
+  const kept = [];
+  for (const item of still) {
+    const s = String(item);
+    // RX_EQ_KEEP is right on the NEEDED side: a list item asking for the booklet
+    // RECEIPT is a different obligation and this report does not satisfy it.
+    if (RX_EQ_REPORT.test(s) && !RX_EQ_KEEP.test(s)) satisfied.push(s);
+    else kept.push(item);
+  }
+  if (!satisfied.length) return { applied: false };
+
+  for (const s of satisfied) if (!present.some((x) => String(x) === s)) present.push(s);
+  result.still_needed = kept;
+  result.present = present;
+  return { applied: true, satisfied };
+}
+
 function applyExemptSellerRules(result, received) {
   if (!result || !receivedHas(received, RX_ESD)) return { exempt: false };
 
@@ -1466,6 +1520,33 @@ function selectQAPagesFromText(texts, pageCount) {
     else if (hasSellerAwareQuestion(text)) mark(num, 'answer');
   }
 
+  // Complete each coded form INSTANCE from its own "(PAGE m OF n)" footer.
+  //
+  // pageSpanOf has existed since this selector was written and was NEVER CALLED, so a multi-page
+  // Q&A form was only ever as complete as the pages that independently matched a code. Both FHDS
+  // pages happen to stamp "FHDS REVISED" in their footer, so it has not bitten yet. It will: a
+  // continuation page with a damaged text layer, or a footer shape formCodeOf does not know, drops
+  // out in silence and the form is then judged on half its pages. Ruling Section 2 complete or
+  // incomplete while holding only page 2 of 2 is precisely the false-blank failure this file has
+  // already been bitten by once, and the review has no way to know a page is missing.
+  //
+  // Extends only to pages carrying the SAME code or NO code at all. A page that announces a
+  // different form IS a different form, however its neighbour's span reads. Over-inclusion costs
+  // one rendered page the review finds nothing on, which is the stated bias of this whole selector.
+  for (const n of [...include]) {
+    const code = why.get(n);
+    if (!code || !QA_FORM_CODES.has(code)) continue;
+    const span = pageSpanOf(byNum.get(n) || '');
+    if (!span) continue;
+    const first = n - (span.m - 1);
+    for (let j = first; j <= first + (span.n - 1); j++) {
+      if (j < 1 || j > pageCount || include.has(j)) continue;
+      const jc = formCodeOf(byNum.get(j) || '');
+      if (jc && jc !== code) continue;
+      mark(j, code);
+    }
+  }
+
   // Footerless Q&A forms (title/answer matched) have no "(PAGE m OF n)" span to complete, so pull in
   // an immediately-adjacent continuation page — but only a blank/continuation page, never one that is
   // clearly its own titled form or an advisory. This is what recovers the earthquake report's second
@@ -1721,7 +1802,37 @@ function validateAddendumFlags(flags, entries) {
   });
 }
 
-// First non-"na" value wins per field (the SPQ/TDS usually land in one batch).
+// ----------------------------------------------------------------------------
+// MERGING THE fhds KEY ANSWER ACROSS BATCHES.
+//
+// fhds is a COMPLETENESS reading ("an FHDS is present AND complete"), not a
+// seller answer, so the "first non-na answer wins" rule the other key answers use
+// is wrong the moment one delivery carries MORE THAN ONE copy of the form. A
+// vendor NHD / Wildfire report bundles a BLANK FHDS as an attachment: when its
+// batch runs first it answers "no" and the signed copy's "yes" is thrown away.
+// That is how 3499 Beverly Glen logged fhds=no with a fully completed, signed
+// FHDS sitting in the package.
+//
+// Complete-somewhere-in-the-package is the truth, so a "yes" from ANY batch wins.
+// Same principle as applyAvidRule: any AVID satisfies the requirement.
+//
+// Deliberately NOT applied to spq_7e / hoa_any_no / fire_clearance. Those are
+// seller ANSWERS rather than completeness, and letting a "yes" win there could
+// mask a real "No", which is the expensive direction to be wrong in.
+//
+// Shared by BOTH merge sites (the per-delivery batch loop and the
+// accumulate/finalize path) because this file's history is one copy of a rule
+// quietly drifting from the other.
+// ----------------------------------------------------------------------------
+function mergeFhdsAnswer(current, incoming) {
+  if (incoming === 'yes') return 'yes';
+  if (current === 'na' && incoming && incoming !== 'na') return incoming;
+  return current;
+}
+
+// First non-"na" value wins per field (the SPQ/TDS usually land in one batch) —
+// EXCEPT fhds, which is a completeness reading rather than a seller answer and so
+// takes a "yes" from any batch. See mergeFhdsAnswer for why.
 function mergeKeyAnswers(acc, next) {
   if (!next) return acc;
   if (acc.spq_7e === 'na' && next.spq_7e && next.spq_7e !== 'na') acc.spq_7e = next.spq_7e;
@@ -1730,7 +1841,7 @@ function mergeKeyAnswers(acc, next) {
     acc.fire_clearance = next.fire_clearance;
     if (next.fire_clearance_item) acc.fire_clearance_item = next.fire_clearance_item;
   }
-  if (acc.fhds === 'na' && next.fhds && next.fhds !== 'na') acc.fhds = next.fhds;
+  acc.fhds = mergeFhdsAnswer(acc.fhds, next.fhds);
   return acc;
 }
 
@@ -1823,6 +1934,88 @@ function mergeForms(a, b) {
   return out;
 }
 
+// ----------------------------------------------------------------------------
+// THE SAME FORM ARRIVING TWICE IN ONE DELIVERY.
+//
+// A listing side's NHD / Wildfire vendor report ships BLANK copies of the FHDS
+// and the DSDT as attachments. Those are templates, not the seller's form, but
+// the answer review sees a real FHDS with empty sections and correctly reports
+// it empty. On 3499 Beverly Glen (2026-09-14) that put two lines into the chase
+// email, "the FHDS is present but Section 2 / Section 3 is not completed", while
+// the SIGNED FHDS sat complete in the disclosure packet, in a different
+// document, raising no flag at all. Nothing hallucinated: the model reviewed a
+// blank form that was never the seller's.
+//
+// The signal is entirely local and needs no filename guessing: the same form was
+// identified in more than one document of this delivery, and at least one of
+// those documents did NOT flag it. The unflagged copy is the executed one.
+//
+// SCOPED TO SECTION-COMPLETENESS FLAGS on purpose (item "Section 2", "Section
+// 3", "Section III"). Those assert that a whole block is unfilled, which is a
+// property of WHICH COPY you are holding. A content flag, e.g. the TDS built-in
+// BBQ contradiction, is about an answer the seller actually wrote and must never
+// be suppressed by the existence of a second copy.
+//
+// These are NOT dropped. They move to VERIFY, the same destination the
+// explanation-on-addendum flags use, because "two copies of this form arrived
+// and they disagree" is a question for a person: not something to chase an agent
+// over, and not something to discard in silence. This file's history includes a
+// No sailing through unnoticed; the fix for a false positive is never a silent
+// delete.
+// ----------------------------------------------------------------------------
+const RX_SECTION_ITEM = /^\s*(?:section|paragraph)\b/i;
+
+// Every name a batch's forms are known by, lowercased: identify returns a code
+// ("FHDS") for C.A.R. forms and only a name for the rest.
+function formKeysOf(forms) {
+  const out = new Set();
+  for (const f of forms || []) {
+    for (const v of [f && f.code, f && f.name]) {
+      const k = String(v == null ? '' : v).trim().toLowerCase();
+      if (k) out.add(k);
+    }
+  }
+  return out;
+}
+
+function sectionFlagsFor(flags, formKey) {
+  return (flags || []).filter((g) => g
+    && String(g.form || '').trim().toLowerCase() === formKey
+    && RX_SECTION_ITEM.test(String(g.item || '')));
+}
+
+// Mutates the flag objects in place (callers hold the same references via
+// concat) and returns a summary for logging.
+function markContestedSectionFlags(perBatch) {
+  const contested = [];
+  if (!Array.isArray(perBatch) || perBatch.length < 2) return contested;
+  const keysPer = perBatch.map((b) => formKeysOf(b.forms));
+
+  for (let i = 0; i < perBatch.length; i++) {
+    for (const flag of perBatch[i].flags || []) {
+      if (!flag || !RX_SECTION_ITEM.test(String(flag.item || ''))) continue;
+      const formKey = String(flag.form || '').trim().toLowerCase();
+      if (!formKey) continue;
+
+      // Which OTHER documents here carry this form, and did any of them pass it
+      // without a section flag of its own?
+      const clean = [];
+      for (let j = 0; j < perBatch.length; j++) {
+        if (j === i || !keysPer[j].has(formKey)) continue;
+        if (!sectionFlagsFor(perBatch[j].flags, formKey).length) clean.push(...(perBatch[j].docs || []));
+      }
+      if (!clean.length) continue;
+
+      flag.issue = 'duplicate_form_copy';
+      flag.document = (perBatch[i].docs || []).join(', ');
+      flag.other_document = clean.join(', ');
+      contested.push(`${flag.form} ${flag.item} (blank in ${flag.document || '?'}, `
+        + `complete in ${flag.other_document})`);
+    }
+  }
+  return contested;
+}
+
 // Identify across MANY docs (e.g. 22 PDFs from one unzipped attachment bundle) by
 // batching them under Claude's request-size limit, identifying each batch, and
 // merging the forms. The first non-empty address wins. One unzipped bundle can
@@ -1909,6 +2102,9 @@ async function identifyFormsChunked(docs) {
   }
 
   let allForms = [], address = '', dropped = [], responseFlags = [];
+  // Per-batch attribution, kept so a section flag can be checked against the OTHER
+  // documents in the same delivery. See markContestedSectionFlags above.
+  const perBatch = [];
   const keyAnswers = { ...EMPTY_KEY_ANSWERS };
   let anyIncomplete = false;
   for (let i = 0; i < batches.length; i++) {
@@ -1927,6 +2123,13 @@ async function identifyFormsChunked(docs) {
     if (r.reviewIncomplete) anyIncomplete = true;
     allForms = mergeForms(allForms, r.forms);
     if (r.responseFlags && r.responseFlags.length) responseFlags = responseFlags.concat(r.responseFlags);
+    // concat copies references, so mutating these flag objects later also updates
+    // the copies in responseFlags.
+    perBatch.push({
+      docs: batches[i].map((d) => d && d.name).filter(Boolean),
+      forms: r.forms || [],
+      flags: r.responseFlags || [],
+    });
     // First batch with a real (non-na) answer wins — the SPQ/TDS live in one batch.
     if (r.keyAnswers) {
       if (keyAnswers.spq_7e === 'na' && r.keyAnswers.spq_7e && r.keyAnswers.spq_7e !== 'na') keyAnswers.spq_7e = r.keyAnswers.spq_7e;
@@ -1935,12 +2138,18 @@ async function identifyFormsChunked(docs) {
         keyAnswers.fire_clearance = r.keyAnswers.fire_clearance;
         if (r.keyAnswers.fire_clearance_item) keyAnswers.fire_clearance_item = r.keyAnswers.fire_clearance_item;
       }
-      if (keyAnswers.fhds === 'na' && r.keyAnswers.fhds && r.keyAnswers.fhds !== 'na') keyAnswers.fhds = r.keyAnswers.fhds;
+      keyAnswers.fhds = mergeFhdsAnswer(keyAnswers.fhds, r.keyAnswers.fhds);
     }
     if (!address && r.propertyAddress) address = r.propertyAddress;
     if (r.dropped && r.dropped.length) dropped = dropped.concat(r.dropped);
     console.log(`[disclosure-intake] identify batch ${i + 1}/${batches.length} (${batches[i].length} doc[s]): ${r.forms.length} form(s), ${(r.responseFlags || []).length} response flag(s)`);
   }
+  const contested = markContestedSectionFlags(perBatch);
+  if (contested.length) {
+    console.log(`[disclosure-intake] ${contested.length} section flag(s) contested by a second copy of `
+      + `the same form in this delivery, routed to VERIFY (NOT chased): ${contested.join('; ')}`);
+  }
+
   return { propertyAddress: address, forms: allForms, responseFlags, keyAnswers, dropped, reviewIncomplete: anyIncomplete };
 }
 
@@ -2088,6 +2297,12 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   if (avidInfo.applied) {
     console.log(`[disclosure-intake] LA AVID satisfied by a received AVID: ${avidInfo.satisfied.join(', ')}`
       + `${avidInfo.note ? ` (verify added: ${avidInfo.note})` : ''}`);
+  }
+
+  const eqInfo = applyEarthquakeReportRule(result, received);
+  if (eqInfo.applied) {
+    console.log('[disclosure-intake] earthquake report satisfied by the received Residential '
+      + `Earthquake Risk/Hazards Disclosure: ${eqInfo.satisfied.join(', ')}`);
   }
 
   const exemptInfo = applyExemptSellerRules(result, received);
@@ -2277,7 +2492,31 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // person does. That is the whole point.
   const allFlags = Array.isArray(responseFlags) ? responseFlags : [];
   const addendumFlags = allFlags.filter((f) => f.issue === 'explanation_on_addendum');
-  const flags = allFlags.filter((f) => f.issue !== 'explanation_on_addendum');
+  // Same reasoning as the addendum flags, one step earlier in the pipeline: the
+  // section really is blank on the copy that was reviewed, but a complete copy of
+  // the same form arrived in another document, so this is neither a revise nor a
+  // confirm. It leaves the flag list (out of the chase email and out of
+  // followupCount) and becomes a VERIFY line.
+  const duplicateFlags = allFlags.filter((f) => f.issue === 'duplicate_form_copy');
+  const flags = allFlags.filter((f) => f.issue !== 'explanation_on_addendum'
+    && f.issue !== 'duplicate_form_copy');
+  for (const f of duplicateFlags) {
+    const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
+    const blankIn = String(f.document || '').trim();
+    const completeIn = String(f.other_document || '').trim();
+    verify.push({
+      item: ref,
+      note: `${f.form || 'this form'} arrived more than once in this delivery. `
+        + `${blankIn ? `The copy in ${blankIn} has this part blank` : 'One copy has this part blank'}`
+        + `${completeIn ? `, the copy in ${completeIn} does not` : ''}. A blank copy is usually a `
+        + 'template bundled inside a vendor report, so confirm the executed copy is the one on file '
+        + 'before requesting anything',
+    });
+  }
+  if (duplicateFlags.length) {
+    console.log(`[disclosure-intake] ${duplicateFlags.length} duplicate-copy flag(s) routed to VERIFY `
+      + `(NOT chased): ${duplicateFlags.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
+  }
   for (const f of addendumFlags) {
     const noDash = (s) => String(s || '').replace(/\s*[—–]\s*/g, ', ').trim();
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
@@ -2600,7 +2839,7 @@ exports.handler = async function (event) {
               batchKeyAnswers.fire_clearance = item.keyAnswers.fire_clearance;
               if (item.keyAnswers.fire_clearance_item) batchKeyAnswers.fire_clearance_item = item.keyAnswers.fire_clearance_item;
             }
-            if (batchKeyAnswers.fhds === 'na' && item.keyAnswers.fhds && item.keyAnswers.fhds !== 'na') batchKeyAnswers.fhds = item.keyAnswers.fhds;
+            batchKeyAnswers.fhds = mergeFhdsAnswer(batchKeyAnswers.fhds, item.keyAnswers.fhds);
           }
         }
       }
