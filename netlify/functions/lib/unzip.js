@@ -74,7 +74,14 @@ function isMacMetadata(name) {
 // `name` is deliberately reduced to the basename. Downstream blocklists match on
 // filename patterns, and a folder path (or a parent zip name) leaking into that
 // string would let one badly named container block everything inside it.
-function unzipEntries(buf) {
+function unzipEntries(buf, opts) {
+  const o = opts || {};
+  // Called with the CENTRAL-DIRECTORY metadata, before any inflate. Return false
+  // to reject an entry for free. This is the whole memory story: without it every
+  // byte of a 105MB Dropbox folder zip is decompressed and only then discarded
+  // for being a jpeg, a receipt, or too large.
+  const shouldInflate = typeof o.shouldInflate === 'function' ? o.shouldInflate : null;
+  const onSkip = typeof o.onSkip === 'function' ? o.onSkip : null;
   const out = [];
   const EOCD_SIG = 0x06054b50;
   let eocd = -1;
@@ -90,6 +97,9 @@ function unzipEntries(buf) {
     if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) break;
     const method = buf.readUInt16LE(p + 10);
     const compSize = buf.readUInt32LE(p + 20);
+    // Uncompressed size, read straight from the index. This is what an entry will
+    // COST in memory, known before we spend it.
+    const uncompSize = buf.readUInt32LE(p + 24);
     const nameLen = buf.readUInt16LE(p + 28);
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
@@ -99,6 +109,14 @@ function unzipEntries(buf) {
 
     if (name.endsWith('/')) continue; // directory entry
     if (compSize === 0xffffffff || localOffset === 0xffffffff) continue; // zip64, skip
+
+    // Reject BEFORE inflating. `name` here is still the FULL path inside the zip
+    // ("Buyer Reports/whatever.pdf"), which the basename passed downstream loses,
+    // so this is also the only place a caller can reason about folders.
+    if (shouldInflate && !shouldInflate({ path: name, uncompSize, compSize, method })) {
+      if (onSkip) onSkip(name, uncompSize);
+      continue;
+    }
     if (localOffset + 30 > buf.length || buf.readUInt32LE(localOffset) !== 0x04034b50) continue;
     const lNameLen = buf.readUInt16LE(localOffset + 26);
     const lExtraLen = buf.readUInt16LE(localOffset + 28);
@@ -113,6 +131,20 @@ function unzipEntries(buf) {
     out.push({ name: name.split('/').pop(), data });
   }
   return out;
+}
+
+// Is this a readable zip, without inflating a single byte? Just locates the
+// end-of-central-directory record. The intake used to answer this by calling
+// unzipEntries() and throwing the result away, which decompressed the whole
+// archive purely to validate it — then collectPdfs() decompressed it AGAIN.
+// On a 105MB folder zip that is ~220MB of inflated data nobody ever reads.
+function hasCentralDirectory(buf) {
+  if (!buf || buf.length < 22) return false;
+  const minStart = Math.max(0, buf.length - 22 - 65536);
+  for (let i = buf.length - 22; i >= minStart; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) return true;
+  }
+  return false;
 }
 
 // ----------------------------------------------------------------------------
@@ -132,6 +164,52 @@ function unzipEntries(buf) {
 //   maxEntries     total entries examined across all levels (default 500)
 //   maxTotalBytes  cumulative uncompressed bytes kept (default 400MB)
 // ----------------------------------------------------------------------------
+// Folders and filenames that are NOT seller disclosures. Not an exclusion — a
+// DEPRIORITISATION. A Dropbox folder for one deal routinely holds Buyer Reports,
+// Receipts, Prelim/Permits and photo sets alongside the disclosures, and those
+// are where the hundred megabytes live. When a byte budget has to bite, it must
+// bite here and not on the TDS. Anything unrecognised keeps normal priority, so
+// a folder named something we have never seen is never quietly demoted.
+const LOW_PRIORITY_PATH = /buyer\s*report|receipt|invoice|prelim|permit|\btitle\b|photo|floor\s*plan|\bphotos?\b|inspection\s*report/i;
+
+// Extensions worth inflating at all. A .jpg/.docx/.xlsx would be inflated in
+// full and then dropped by the isPdfBytes check, which is pure waste.
+const INFLATABLE_EXT = /\.(?:pdf|zip)$/i;
+
+// ----------------------------------------------------------------------------
+// NON-DISCLOSURE FOLDERS, for whole-folder share links (opt-in via
+// excludeNonDisclosureFolders; OFF by default so other callers are untouched).
+//
+// A Dropbox folder for one deal is organised for the deal, not for a disclosure
+// audit. 1428 El Paso Dr shared 105MB across Seller Disclosures, Seller Reports,
+// Buyer Reports, Receipts, "Provident Title Company - Prelim and Permits",
+// NHD + 9A and Tesla Solar Lease. After the name blocklist that still left 42
+// PDFs and 55.8MB, about ten times a normal delivery, which is a cost and
+// 15-minute-timeout problem rather than a memory one.
+//
+// Matched against DIRECTORY SEGMENTS ONLY, never the filename, so a disclosure
+// that merely says "permit" in its name is unaffected.
+// ----------------------------------------------------------------------------
+const EXCLUDED_FOLDER_PATTERNS = [
+  /\bbuyer\s*reports?\b/i,
+  /\breceipts?\b/i,
+  /\bprelim/i,
+  /\bpermits?\b/i,
+  /\btitle\s*(?:company|co\.?|report)\b/i,
+];
+
+// A seller's explanation sheet is routinely filed in whatever folder the agent
+// had open — 1428 El Paso Dr has "Letter from Buyer #1 + Seller Explanation and
+// Receipts.pdf". Losing one of those is the exact failure this pipeline spent a
+// morning fixing, so a name like this overrides the folder every time.
+const RESCUE_NAME = /explanation|addendum|disclosure|\bspq\b|\btds\b|\bavid\b/i;
+
+function inExcludedFolder(path) {
+  const parts = String(path).split('/');
+  parts.pop();                                   // directories only, not the file
+  return parts.some((dir) => EXCLUDED_FOLDER_PATTERNS.some((re) => re.test(dir)));
+}
+
 function collectPdfs(buf, rootName, opts) {
   const o = opts || {};
   const maxDepth = o.maxDepth != null ? o.maxDepth : DEFAULT_MAX_DEPTH;
@@ -139,25 +217,72 @@ function collectPdfs(buf, rootName, opts) {
   const maxTotalBytes = o.maxTotalBytes != null ? o.maxTotalBytes : DEFAULT_MAX_TOTAL_BYTES;
   const maxDocBytes = o.maxDocBytes != null ? o.maxDocBytes : Infinity;
   const isBlocked = typeof o.isBlocked === 'function' ? o.isBlocked : null;
+  const excludeFolders = o.excludeNonDisclosureFolders === true;
 
   const kept = [];
   const skipped = [];
   let truncated = false;
   let examined = 0;
   let totalBytes = 0;
+  let budgetHit = false;
+  // Bytes we have COMMITTED to inflating. Distinct from totalBytes, which counts
+  // what was finally kept and is only known after the walks. The budget has to
+  // accumulate DURING the walk or it sees zero every time and only rejects
+  // entries individually larger than the whole budget — which let 26MB through a
+  // an 18MB budget in testing.
+  let plannedBytes = 0;
+
+  // Evaluated from the zip index, before any inflate. Every one of these was
+  // previously checked AFTER decompressing the entry.
+  //
+  // Returns '' to accept, or a reason string to reject.
+  const rejectReason = ({ path, uncompSize }) => {
+    const base = String(path).split('/').pop();
+    if (isMacMetadata(path) || isMacMetadata(base)) return 'macOS metadata';
+    if (!INFLATABLE_EXT.test(base)) return 'not a pdf or zip';
+    if (uncompSize > maxDocBytes && !/\.zip$/i.test(base)) return `too large (${uncompSize}B)`;
+    if (isBlocked && isBlocked(base)) return 'blocked';
+    if (excludeFolders && inExcludedFolder(path) && !RESCUE_NAME.test(base)) return 'non-disclosure folder';
+    // Hard memory bound: refuse the entry rather than inflate past the budget.
+    if (plannedBytes + uncompSize > maxTotalBytes) { budgetHit = true; return 'byte budget reached'; }
+    // Accepted, so commit the cost now. A .pdf whose bytes turn out not to be a
+    // PDF is still counted, which over-counts slightly — the safe direction.
+    plannedBytes += uncompSize;
+    return '';
+  };
 
   // Work queue of zips still to open. Start with the outer one.
   const queue = [{ buf, path: rootName || 'archive.zip', depth: 0 }];
 
   while (queue.length) {
     const job = queue.shift();
+    // TWO INDEX WALKS, likely-disclosures first.
+    //
+    // Sorting AFTER unzipEntries would be useless: the byte budget is spent
+    // inside it, in archive order, so by the time a sort could run the budget has
+    // already gone to whatever happened to come first — Buyer Reports, on this
+    // Dropbox layout. Walking the index twice is free (the index is metadata; no
+    // inflating), and the two passes are mutually exclusive on tier, so no entry
+    // is ever inflated twice.
+    const preSkipped = [];
+    const walk = (wantLowPriority) => unzipEntries(job.buf, {
+      shouldInflate: (meta) => {
+        const isLow = LOW_PRIORITY_PATH.test(meta.path);
+        if (isLow !== wantLowPriority) return false;   // the other pass's job
+        const why = rejectReason(meta);
+        if (why) { preSkipped.push(`${job.path}/${meta.path} [${why}, not inflated]`); return false; }
+        return true;
+      },
+    });
+
     let entries;
     try {
-      entries = unzipEntries(job.buf);
+      entries = walk(false).concat(walk(true));
     } catch (e) {
       skipped.push(`${job.path} [unreadable zip: ${e.message}]`);
       continue;
     }
+    for (const sk of preSkipped) skipped.push(sk);
 
     for (const e of entries) {
       if (examined >= maxEntries) {
@@ -196,6 +321,7 @@ function collectPdfs(buf, rootName, opts) {
     }
   }
 
+  if (budgetHit) truncated = true;
   return { kept, skipped, truncated };
 }
 
@@ -241,6 +367,8 @@ function summarizeCollect(result, rootName) {
 }
 
 module.exports = {
+  hasCentralDirectory,
+  inExcludedFolder,
   ZIP_MAGIC,
   PDF_MAGIC,
   looksZip,

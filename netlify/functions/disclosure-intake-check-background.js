@@ -78,6 +78,12 @@ const IDENTIFY_CACHE_STORE = 'disclosure-intake-identify-cache';
 
 // Safety cap on a single document we will pull into memory / send to the model.
 const MAX_DOC_BYTES = 28 * 1024 * 1024;
+// Cumulative inflated bytes allowed out of one archive. See the collectPdfs call.
+const MAX_UNZIP_TOTAL_BYTES = 120 * 1024 * 1024;
+// Refuse a fetch larger than this outright. A Dropbox whole-folder zip is ~105MB;
+// anything much past that is a folder nobody meant to send us for a disclosure
+// audit, and buffering it is how this function dies with no useful log line.
+const MAX_FETCH_BYTES = 160 * 1024 * 1024;
 
 // Items the BUYER side assembles in-house (title/MLS/AVID/receipts). Never request
 // these from the listing side and don't count them as "still needed" — they move to
@@ -560,7 +566,7 @@ function findOutdatedForms(received, versions) {
 // documents can sit one or more levels down. Detection, extraction and the
 // recursive walk live in lib/unzip.js and are shared with compliance-check.
 // ----------------------------------------------------------------------------
-const { PDF_MAGIC, looksZip, unzipEntries, collectPdfs, summarizeCollect } = require('./lib/unzip');
+const { PDF_MAGIC, looksZip, hasCentralDirectory, collectPdfs, summarizeCollect } = require('./lib/unzip');
 
 // Filenames we never want to send to the model (big non-disclosure reports +
 // invoices). Mirrors the Zapier Code-step BLOCK list, plus invoice.
@@ -615,15 +621,48 @@ function driveConfirmUrl(html, originalUrl) {
   return u;
 }
 
+// Dropbox share links: dl=0 serves the HTML PREVIEW page, which is useless to us.
+// dl=1 serves the file, and for a shared FOLDER (/scl/fo/) it serves the WHOLE
+// folder as a zip, subfolders included — which collectPdfs already handles.
+//
+// The Zap that extracts these links rewrites dl=1 itself, so this is a backstop:
+// it also covers a link pasted into a payload by hand, or a future caller that
+// forwards the URL verbatim. Cheap, and the failure it prevents is silent (an
+// HTML page fetched, found not to be a PDF, and skipped).
+function dropboxDirectUrl(url) {
+  if (!/dropbox\.com\/(?:scl\/fo|sh|s)\//i.test(url)) return url;
+  let u = url.replace(/([?&])dl=0\b/i, '$1dl=1');
+  if (!/[?&]dl=1\b/i.test(u)) u += (u.indexOf('?') >= 0 ? '&' : '?') + 'dl=1';
+  return u;
+}
+
 // Fetch a URL to a Buffer, transparently resolving the Google Drive scan-warning
-// interstitial. Returns { buf, contentType } or null.
+// interstitial and rewriting Dropbox preview links. Returns { buf, contentType }
+// or null.
 async function fetchToBuffer(url, name) {
-  let res = await fetch(url);
+  const direct = dropboxDirectUrl(url);
+  if (direct !== url) console.log(`[disclosure-intake] ${name}: rewrote Dropbox share link to dl=1 (serves the folder as a zip)`);
+  let res = await fetch(direct);
   if (!res.ok) { console.warn(`[disclosure-intake] could not fetch ${name} (${res.status})`); return null; }
   let contentType = res.headers.get('content-type') || '';
+  // Refuse an oversized body BEFORE buffering it. Without this the function dies
+  // on an out-of-memory with no log line explaining why, which is the worst way
+  // for this to fail: the delivery looks like it silently vanished.
+  const declared = parseInt(res.headers.get('content-length') || '0', 10);
+  if (declared > MAX_FETCH_BYTES) {
+    console.warn(`[disclosure-intake] ${name}: refusing a ${(declared / 1048576).toFixed(0)}MB download `
+      + `(ceiling ${(MAX_FETCH_BYTES / 1048576).toFixed(0)}MB). If this is a whole-folder share link, `
+      + 'ask the listing side for the disclosures folder on its own.');
+    return null;
+  }
   let buf = Buffer.from(await res.arrayBuffer());
-  if (/google\.com/i.test(url) && isHtml(buf, contentType)) {
-    const real = driveConfirmUrl(buf.toString('latin1'), url);
+  if (buf.length > MAX_FETCH_BYTES) {
+    console.warn(`[disclosure-intake] ${name}: downloaded ${(buf.length / 1048576).toFixed(0)}MB, over the `
+      + `${(MAX_FETCH_BYTES / 1048576).toFixed(0)}MB ceiling (no content-length was declared), skipping`);
+    return null;
+  }
+  if (/google\.com/i.test(direct) && isHtml(buf, contentType)) {
+    const real = driveConfirmUrl(buf.toString('latin1'), direct);
     if (real) {
       console.log(`[disclosure-intake] ${name}: got Drive interstitial, refetching via confirm URL`);
       const res2 = await fetch(real);
@@ -659,22 +698,40 @@ async function loadDocuments(documents) {
 
       // ZIP: expand into the PDFs inside, filtering blocked/non-PDF entries.
       if (looksZip(buf, name, contentType)) {
-        let entries = null;
-        try { entries = unzipEntries(buf); }
-        catch (e) {
-          console.warn(`[disclosure-intake] could not unzip ${name}: ${e.message} | ${describeBuffer(buf, contentType)}`);
+        // Validity is now checked by LOCATING the central directory, not by
+        // inflating the archive and discarding the result. That probe was a second
+        // full decompression on top of collectPdfs's — ~220MB of inflated data
+        // nobody reads, on a 105MB Dropbox folder zip.
+        const readable = hasCentralDirectory(buf);
+        if (!readable) {
+          console.warn(`[disclosure-intake] could not unzip ${name}: no end-of-central-directory record | ${describeBuffer(buf, contentType)}`);
           // Not a real zip. If the bytes are actually a PDF (e.g. a single PDF mis-named
           // attachments.zip), fall through to single-document handling below; otherwise
           // skip (likely an HTML interstitial / permission page).
           if (!(buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC))) continue;
         }
-        if (entries) {
+        if (readable) {
           // Recursive: a nested .zip is expanded, not discarded. Agents routinely
           // attach their own disclosure zip to the email Zapier already zipped,
           // so the PDFs commonly live one level down from here.
           const result = collectPdfs(buf, name, {
             maxDocBytes: MAX_DOC_BYTES,
             isBlocked: isBlockedName,
+            // A hard ceiling on cumulative INFLATED bytes, enforced from the zip
+            // index before each entry is decompressed. The library default is
+            // 400MB, which is more than this function's memory headroom: it
+            // already peaks near 600MB doing the actual work. A whole-folder
+            // Dropbox share is 105MB compressed and mostly photo-heavy buyer
+            // reports, so this stops well short of them while leaving room for
+            // every real disclosure (a full combined packet measures ~13MB).
+            maxTotalBytes: MAX_UNZIP_TOTAL_BYTES,
+            // Whole-folder share links (a Dropbox /scl/fo/ zip) carry the deal's
+            // ENTIRE folder: Buyer Reports, Receipts, Prelim and Permits. Those
+            // are not seller disclosures and they are where the bulk sits. Files
+            // named like an explanation, addendum or a C.A.R. form override the
+            // folder, because a seller explanation is routinely filed in whatever
+            // folder the agent had open. See lib/unzip.js.
+            excludeNonDisclosureFolders: true,
           });
           for (const k of result.kept) out.push({ name: k.name, base64: k.data.toString('base64') });
           console.log(`[disclosure-intake] unzipped ${name}: ${summarizeCollect(result, name)}`);
