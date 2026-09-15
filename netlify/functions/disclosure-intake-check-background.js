@@ -886,7 +886,16 @@ const ANSWER_REVIEW_PROMPT =
   'cover a sub-item it does not address. If in doubt, use "yes_no_explanation": asking a seller to explain ' +
   'something they already explained is recoverable, but silently treating an unanswered question as answered is ' +
   'not;\n' +
-  'ALSO return "addendum_entries": list EVERY entry you can see on any separate explanations sheet in this package, ' +
+  '(b3) YOU ARE SEEING A SELECTED SUBSET OF THE PACKAGE, NOT ALL OF IT. A 66-page packet is commonly reduced to '
+  + 'the ~14 pages that carry seller answers, so the explanation sheets, renovation/improvement lists and addenda a '
+  + 'Yes answer points to are OFTEN NOT AMONG THE PAGES YOU WERE GIVEN, even though they are in the package. '
+  + 'Therefore you MUST NEVER state that a cited attachment is "not in the package", "not attached" or "not '
+  + 'included". You cannot see the package; you can see these pages. When a Yes answer cites an attachment you '
+  + 'cannot find in front of you, say exactly that and no more: set "issue":"explanation_on_addendum", "document" '
+  + 'to the attachment as the answer names it (e.g. "renovations list"), leave "addendum_item" empty, and set '
+  + '"reason" to the verbatim text of the answer that cites it. That routes it to a human who can look at the whole '
+  + 'package. Concluding absence from a partial view is how a seller gets chased for work they already did;\n'
+  + 'ALSO return "addendum_entries": list EVERY entry you can see on any separate explanations sheet in this package, ' +
   'as {"form":"SPQ|TDS","item":"<entry number exactly as printed, e.g. 7 or C>","text":"<verbatim text>"}. List ' +
   'them all, even ones no Yes sub-item needs. Return [] if there is no such sheet in this package. Every ' +
   '"explanation_on_addendum" you raise MUST correspond to one of these entries;\n' +
@@ -1965,6 +1974,36 @@ function mergeForms(a, b) {
 // ----------------------------------------------------------------------------
 const RX_SECTION_ITEM = /^\s*(?:section|paragraph)\b/i;
 
+// ----------------------------------------------------------------------------
+// A CITED ATTACHMENT THE REVIEW COULD NOT SEE IS NOT A MISSING ATTACHMENT.
+//
+// The answer review is handed the SELECTED Q&A pages, routinely ~14 of 66. The
+// explanation sheets and renovation lists a Yes answer points to are usually in
+// the other 52. So when the review says "the explanation refers to an attached
+// renovations list that is not in the package", it is reporting what it could
+// see and drawing a conclusion it has no standing to draw. On 3499 Beverly Glen
+// that produced seven chase lines for explanations the seller had written and
+// signed, all sitting in the packet on pages nobody rendered.
+//
+// The prompt now forbids the claim (see (b3)), but a prompt is a request and this
+// review is nondeterministic: the same 14 images produced 1 flag one day and 8
+// the next. So the guarantee is here, deterministically. A flag that BOTH cites
+// an attachment AND asserts it is absent routes to VERIFY, where a human who can
+// open the whole package decides.
+//
+// BOTH conditions are required. "no explanation is provided" on its own stays a
+// chase: that is about the form itself, which the review did see, and it is what
+// validateAddendumFlags emits after checking real addendum entries.
+// ----------------------------------------------------------------------------
+const RX_CITES_ATTACHMENT = /\b(?:attach(?:ed|ment|ments)|addendum|addenda|exhibit|supplement|renovations?\s+list|improvements?\s+list|separate\s+(?:sheet|page|list))\b/i;
+const RX_ASSERTS_ABSENT = /\bnot\s+(?:in\b|included|attached|present|enclosed|found|part\s+of)|\bis\s+missing\b|\bwas\s+not\s+(?:included|attached|provided|sent)\b|\bcannot\s+be\s+found\b|\bnowhere\s+in\b/i;
+
+function citesAnUnseenAttachment(flag) {
+  if (!flag) return false;
+  const reason = String(flag.reason || '');
+  return RX_CITES_ATTACHMENT.test(reason) && RX_ASSERTS_ABSENT.test(reason);
+}
+
 // Every name a batch's forms are known by, lowercased: identify returns a code
 // ("FHDS") for C.A.R. forms and only a name for the rest.
 function formKeysOf(forms) {
@@ -2491,6 +2530,17 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // already reads. The pipeline never decides whether that paragraph covers the sub-item. A
   // person does. That is the whole point.
   const allFlags = Array.isArray(responseFlags) ? responseFlags : [];
+  // A flag claiming a cited attachment is absent is a claim the review cannot
+  // support (see citesAnUnseenAttachment). Retag before the filtering below so it
+  // takes the VERIFY route instead of the chase email.
+  const unseenAttachment = [];
+  for (const f of allFlags) {
+    if (!f || f.issue === 'explanation_on_addendum' || f.issue === 'duplicate_form_copy') continue;
+    if (!citesAnUnseenAttachment(f)) continue;
+    f.issue = 'cited_attachment_unseen';
+    unseenAttachment.push(f);
+  }
+
   const addendumFlags = allFlags.filter((f) => f.issue === 'explanation_on_addendum');
   // Same reasoning as the addendum flags, one step earlier in the pipeline: the
   // section really is blank on the copy that was reviewed, but a complete copy of
@@ -2499,7 +2549,22 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // followupCount) and becomes a VERIFY line.
   const duplicateFlags = allFlags.filter((f) => f.issue === 'duplicate_form_copy');
   const flags = allFlags.filter((f) => f.issue !== 'explanation_on_addendum'
-    && f.issue !== 'duplicate_form_copy');
+    && f.issue !== 'duplicate_form_copy'
+    && f.issue !== 'cited_attachment_unseen');
+  for (const f of unseenAttachment) {
+    const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
+    verify.push({
+      item: ref,
+      note: 'the answer cites an attachment that was not among the pages reviewed, which is normal '
+        + 'because only the seller-answer pages are rendered. Confirm it is in the package before '
+        + `requesting anything. The review reported: "${String(f.reason || '').trim()}"`,
+    });
+  }
+  if (unseenAttachment.length) {
+    console.log(`[disclosure-intake] ${unseenAttachment.length} flag(s) claimed a cited attachment was `
+      + `absent from a PARTIAL page view, routed to VERIFY (NOT chased): `
+      + `${unseenAttachment.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
+  }
   for (const f of duplicateFlags) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
     const blankIn = String(f.document || '').trim();
