@@ -1952,13 +1952,99 @@ async function reviewAnswers(docs) {
     // The selection record rides along on batch 1 so the ledger row shows not just which pages
     // WERE reviewed but which were skipped — a miss is then visible in the Sheet, not silent.
     const selectionNote = i === 0 && selections.length ? ` || selection: ${selections.join(' ; ')}` : '';
-    const raw = await callClaude(content, 48000, `answer-review-images | batch ${i + 1}/${batches.length} | ${batches[i].length} page(s): ${labels.join(', ')}${selectionNote}`);
-    const parsed = parseAnswerReview(raw);
-    if (parsed.responseFlags.length) responseFlags = responseFlags.concat(parsed.responseFlags);
-    mergeKeyAnswers(keyAnswers, parsed.keyAnswers);
-    console.log(`[disclosure-intake] answer-review image batch ${i + 1}/${batches.length} (${batches[i].length} page[s]): ${parsed.responseFlags.length} flag(s)`);
+    const note = `answer-review-images | batch ${i + 1}/${batches.length} | ${batches[i].length} page(s): ${labels.join(', ')}${selectionNote}`;
+    const settled = await Promise.allSettled(
+      Array.from({ length: ANSWER_REVIEW_PASSES }, (_, k) => callClaude(
+        content, 48000, `${note}${ANSWER_REVIEW_PASSES > 1 ? ` | pass ${k + 1}/${ANSWER_REVIEW_PASSES}` : ''}`)));
+
+    const passes = [];
+    for (let k = 0; k < settled.length; k++) {
+      if (settled[k].status === 'fulfilled') { passes.push(parseAnswerReview(settled[k].value)); continue; }
+      console.warn(`[disclosure-intake] answer-review batch ${i + 1}/${batches.length} pass ${k + 1}/`
+        + `${ANSWER_REVIEW_PASSES} FAILED (${settled[k].reason && settled[k].reason.message}); `
+        + 'continuing on the other pass(es)');
+    }
+    // Every pass failing is the pre-existing single-pass failure, so behave as before
+    // and let the caller's per-batch isolation handle it.
+    if (!passes.length) throw (settled[0] && settled[0].reason) || new Error('answer review returned nothing');
+
+    const merged = unionReviewFlags(passes.map((x) => x.responseFlags));
+    if (merged.length) responseFlags = responseFlags.concat(merged);
+    for (const x of passes) mergeKeyAnswers(keyAnswers, x.keyAnswers);
+    // Log per-pass counts AND what the union recovered. This is the telemetry that
+    // says whether the second pass is worth its money: "+N only pass 2 saw" is a
+    // finding one pass would have dropped on the floor.
+    const counts = passes.map((x) => x.responseFlags.length);
+    const best = Math.max(0, ...counts);
+    console.log(`[disclosure-intake] answer-review image batch ${i + 1}/${batches.length} `
+      + `(${batches[i].length} page[s]): ${merged.length} flag(s)`
+      + (passes.length > 1
+        ? ` [${passes.length} passes: ${counts.join(' / ')} -> ${merged.length} unioned`
+          + `${merged.length > best ? `, +${merged.length - best} no single pass caught` : ''}]`
+        : ''));
   }
   return { responseFlags, keyAnswers, dropped: [], incomplete: false };
+}
+
+// ----------------------------------------------------------------------------
+// TWO REVIEW PASSES, UNIONED — because ONE pass silently drops real findings.
+//
+// Measured on 3499 Beverly Glen, four runs over a byte-identical packet: the
+// answer review returned 1, 8, 9 and 8 flags. The genuine TDS finding (operating
+// condition marked No while "built-in BBQ" is written on the explanation line)
+// appeared in only TWO of the four. A real defect on a document the buyer signs
+// was invisible half the time.
+//
+// The usual fix, temperature 0, IS NOT AVAILABLE HERE. These calls run
+// `thinking: { type: 'adaptive' }`, and the API rejects temperature changes when
+// extended thinking is on, so sampling is pinned at the default 1.0. Turning
+// thinking off to buy determinism would strip careful reasoning from the one pass
+// that needs it most.
+//
+// So: ask twice and keep anything either pass found. That does not make the
+// review deterministic, it makes a MISS have to happen twice. Union, never
+// intersect — the failure mode here is omission, not invention.
+//
+// This is only safe now. Before the 2026-09-15 fixes a union would have doubled
+// the noise, because the volatile flag classes were the unprovable ones
+// (attachment-citation claims, vendor-bundle section flags). Those are now
+// filtered to VERIFY deterministically, so extra recall costs VERIFY lines rather
+// than false chases to an agent.
+//
+// The two passes run CONCURRENTLY, so wall clock is the slower of the two rather
+// than the sum — this function already runs ~280s against a 15-minute ceiling.
+// allSettled, not all: one pass failing must degrade to single-pass behaviour,
+// never discard a batch that did come back.
+//
+// Dedup on form|item|issue. When both passes report an item the SAME way it
+// appears once; when they characterise it differently both survive, because
+// choosing between them would be us deciding which pass was right. The
+// redundancy lands mostly in VERIFY, where a human is reading anyway.
+//
+// COST LEVER: ANSWER_REVIEW_PASSES, clamped 1-3. Set it to 1 to go back to one
+// pass without a deploy.
+// ----------------------------------------------------------------------------
+const ANSWER_REVIEW_PASSES = Math.max(1, Math.min(3,
+  parseInt(process.env.ANSWER_REVIEW_PASSES || '2', 10) || 2));
+
+const reviewFlagKey = (f) => [
+  String((f && f.form) || '').trim().toLowerCase(),
+  String((f && f.item) || '').trim().toLowerCase(),
+  String((f && f.issue) || '').trim().toLowerCase(),
+].join('|');
+
+function unionReviewFlags(lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const f of list || []) {
+      const k = reviewFlagKey(f);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(f);
+    }
+  }
+  return out;
 }
 
 // Merge two form lists, de-duping on code (case-insensitive), then name.
