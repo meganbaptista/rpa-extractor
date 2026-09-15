@@ -891,10 +891,12 @@ const ANSWER_REVIEW_PROMPT =
   + 'Yes answer points to are OFTEN NOT AMONG THE PAGES YOU WERE GIVEN, even though they are in the package. '
   + 'Therefore you MUST NEVER state that a cited attachment is "not in the package", "not attached" or "not '
   + 'included". You cannot see the package; you can see these pages. When a Yes answer cites an attachment you '
-  + 'cannot find in front of you, say exactly that and no more: set "issue":"explanation_on_addendum", "document" '
-  + 'to the attachment as the answer names it (e.g. "renovations list"), leave "addendum_item" empty, and set '
-  + '"reason" to the verbatim text of the answer that cites it. That routes it to a human who can look at the whole '
-  + 'package. Concluding absence from a partial view is how a seller gets chased for work they already did;\n'
+  + 'cannot find in front of you, say exactly that and no more: set "issue":"cited_attachment_unseen", "document" '
+  + 'to the attachment as the answer names it (e.g. "renovations list"), and set "reason" to the verbatim text of '
+  + 'the answer that cites it. Use THIS issue, not "explanation_on_addendum" — that one is only for an entry you '
+  + 'can actually READ on a sheet in front of you, and it is rejected when you cite an entry you cannot show. '
+  + 'cited_attachment_unseen routes to a human who can open the whole package. Concluding absence from a partial '
+  + 'view is how a seller gets chased for work they already did;\n'
   + 'ALSO return "addendum_entries": list EVERY entry you can see on any separate explanations sheet in this package, ' +
   'as {"form":"SPQ|TDS","item":"<entry number exactly as printed, e.g. 7 or C>","text":"<verbatim text>"}. List ' +
   'them all, even ones no Yes sub-item needs. Return [] if there is no such sheet in this package. Every ' +
@@ -1039,7 +1041,7 @@ const ANSWER_REVIEW_PROMPT =
   'shows the property was built in 2010 or later, a blank 2B/2C is CORRECT and the form still counts as "yes" ' +
   'provided Section 3 is done. Never return "no" solely because Section 2 is blank on a 2010-or-later property.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
-  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_on_addendum|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect; for explanation_on_addendum, a short quote of the addendum entry>","other_form":"<for inconsistent>","document":"<for document; for explanation_on_addendum, the sheet it was found on>","source":"<for transaction>"}],' +
+  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_on_addendum|cited_attachment_unseen|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect; for explanation_on_addendum, a short quote of the addendum entry>","other_form":"<for inconsistent>","document":"<for document; for explanation_on_addendum, the sheet it was found on>","source":"<for transaction>"}],' +
   '"addendum_entries":[{"form":"SPQ","item":"7","text":"<verbatim text of that entry>"}],' +
   '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na","fire_clearance":"yes|no|blank|na","fire_clearance_item":"17F","fhds":"yes|no|na"}}';
 
@@ -1484,6 +1486,11 @@ function isTextLayerUsable(texts) {
   return readable >= 0.6 * texts.length;
 }
 
+// Longest a C.A.R. seller Q&A form runs, used to tell a FORM footer ("FHDS PAGE 1 OF 2")
+// from a DOCUMENT footer ("PAGE 2 OF 38" on a 38-page NHD report). 8 is comfortably
+// above the longest real one (SPQ at 4-6 pages) and far below any vendor report.
+const MAX_FORM_SPAN_PAGES = 8;
+
 // The last "(PAGE m OF n)" on a page is the form footer (earlier ones are body-text mentions).
 function pageSpanOf(text) {
   const ms = [...text.matchAll(/\(?\s*PAGE\s+(\d+)\s+OF\s+(\d+)\s*\)?/gi)];
@@ -1542,11 +1549,19 @@ function selectQAPagesFromText(texts, pageCount) {
   // Extends only to pages carrying the SAME code or NO code at all. A page that announces a
   // different form IS a different form, however its neighbour's span reads. Over-inclusion costs
   // one rendered page the review finds nothing on, which is the stated bias of this whole selector.
+  //
+  // THE CAP IS NOT OPTIONAL. pageSpanOf reads any "(PAGE m OF n)" it finds, and a
+  // vendor report's footer is DOCUMENT-level: the NHD Report stamps "PAGE 2 OF 38".
+  // Without the cap that computes a 38-page span and marks nearly the whole report,
+  // which took NHD Report.pdf from 4 selected pages to 34 on 2026-09-15 — 30 extra
+  // hi-res renders and a 3-batch answer review, on every delivery. C.A.R. Q&A forms
+  // are short (TDS 3pp, SPQ 4-6, FHDS 2, LPD 2, SFLS 2), so a span longer than this
+  // is a document footer, not a form.
   for (const n of [...include]) {
     const code = why.get(n);
     if (!code || !QA_FORM_CODES.has(code)) continue;
     const span = pageSpanOf(byNum.get(n) || '');
-    if (!span) continue;
+    if (!span || span.n > MAX_FORM_SPAN_PAGES) continue;
     const first = n - (span.m - 1);
     for (let j = first; j <= first + (span.n - 1); j++) {
       if (j < 1 || j > pageCount || include.has(j)) continue;
@@ -1796,6 +1811,22 @@ function validateAddendumFlags(flags, entries) {
     const ok = !!entry && !!wanted && (!cited || cited === wanted);
     if (ok) return f;
     const ref = [f.form, f.item].filter(Boolean).join(' ');
+    // NO ENTRIES VISIBLE AT ALL is a different situation from a claim that does not
+    // match one. The downgrade below exists to stop the model stretching entry 5 to
+    // cover 6G, which is only possible when it can SEE the sheet. When the reviewed
+    // pages contain no addendum entries whatsoever, the sheet was never rendered —
+    // the answer review gets the ~14 seller-answer pages of a 66-page packet and the
+    // explanation sheets live among the other 52. The model is blind here, not
+    // overreaching, so downgrading to yes_no_explanation turns "I could not see it"
+    // into "the seller never wrote it" and chases them for signed work. That is the
+    // 3499 Beverly Glen failure: nine items downgraded with "entries seen: none".
+    // Route to VERIFY, where a human can open the whole package.
+    if (!entries.length) {
+      console.warn(`[disclosure-intake] ${ref}: cites an explanation on a separate sheet, but NO `
+        + 'addendum entries were visible in the reviewed pages, so the sheet was never rendered '
+        + '— routed to VERIFY, NOT chased.');
+      return { ...f, issue: 'cited_attachment_unseen' };
+    }
     console.warn(`[disclosure-intake] ${ref}: claimed an addendum explanation`
       + `${cited ? ` (cited entry "${f.addendum_item}")` : ' (cited no entry)'}`
       + `, but the sheet has no entry "${wanted}" for ${form || 'that form'}`
@@ -2535,7 +2566,12 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // takes the VERIFY route instead of the chase email.
   const unseenAttachment = [];
   for (const f of allFlags) {
-    if (!f || f.issue === 'explanation_on_addendum' || f.issue === 'duplicate_form_copy') continue;
+    if (!f) continue;
+    // Already tagged upstream by validateAddendumFlags (it saw zero addendum entries).
+    // MUST be collected here too: the filter below removes this issue from `flags`, so
+    // a tagged flag that was not also pushed to verify would vanish silently.
+    if (f.issue === 'cited_attachment_unseen') { unseenAttachment.push(f); continue; }
+    if (f.issue === 'explanation_on_addendum' || f.issue === 'duplicate_form_copy') continue;
     if (!citesAnUnseenAttachment(f)) continue;
     f.issue = 'cited_attachment_unseen';
     unseenAttachment.push(f);
