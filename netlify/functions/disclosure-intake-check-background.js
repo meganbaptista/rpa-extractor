@@ -2056,6 +2056,72 @@ function unionReviewFlags(lists) {
   return out;
 }
 
+// ----------------------------------------------------------------------------
+// FLAG ORDER. Megan's rule, 2026-09-15: TDS first, then SPQ, then the rest.
+//
+// The flag list was rendered in arrival order — model output order, batch by
+// batch — so the same packet listed FHDS, then SPQ, then TDS one run and a
+// different order the next. An agent reading the email cannot scan an arbitrary
+// order against the forms on their desk, and a list that reshuffles every run
+// reads as machine noise rather than a considered request.
+//
+// Forms not named in FORM_ORDER fall in alphabetically after the named ones, so
+// a new form needs no code change. Flags with no form at all (the compliance-list
+// readings carry form:'') sort last: they are not about one document.
+//
+// Within a form, items sort NATURALLY, so 7A comes before 12A before 15E. Plain
+// string order puts "12A" ahead of "7A", which is exactly the small wrongness
+// that makes a careful list look generated.
+// ----------------------------------------------------------------------------
+const FORM_ORDER = ['TDS', 'SPQ'];
+
+// [bucket, tiebreak] — 0 = explicitly ordered, 1 = other named form, 2 = no form.
+function formRank(form) {
+  const f = String(form == null ? '' : form).trim().toUpperCase();
+  if (!f) return [2, ''];
+  const i = FORM_ORDER.indexOf(f);
+  return i >= 0 ? [0, String(i).padStart(3, '0')] : [1, f];
+}
+
+// "7A" -> ["7","a"], so digit runs can be compared as numbers rather than text.
+function naturalChunks(v) {
+  return String(v == null ? '' : v).toLowerCase().match(/\d+|\D+/g) || [];
+}
+
+function compareNatural(a, b) {
+  const x = naturalChunks(a);
+  const y = naturalChunks(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const p = x[i];
+    const q = y[i];
+    if (p === undefined) return -1;
+    if (q === undefined) return 1;
+    const pIsNum = /^\d/.test(p);
+    const qIsNum = /^\d/.test(q);
+    if (pIsNum && qIsNum) {
+      const d = parseInt(p, 10) - parseInt(q, 10);
+      if (d) return d;
+      continue;
+    }
+    // A numbered sub-item sorts ahead of a named one: TDS 1 before TDS "Section III".
+    if (pIsNum !== qIsNum) return pIsNum ? -1 : 1;
+    if (p !== q) return p < q ? -1 : 1;
+  }
+  return 0;
+}
+
+// Array.sort is stable in Node, so two flags on the same form AND item keep the
+// order the review reported them in.
+function sortFlags(list) {
+  return (list || []).slice().sort((a, b) => {
+    const [ra, ta] = formRank(a && a.form);
+    const [rb, tb] = formRank(b && b.form);
+    if (ra !== rb) return ra - rb;
+    if (ta !== tb) return ta < tb ? -1 : 1;
+    return compareNatural(a && a.item, b && b.item);
+  });
+}
+
 // Merge two form lists, de-duping on code (case-insensitive), then name.
 function mergeForms(a, b) {
   const seen = new Set();
@@ -2679,9 +2745,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // confirm. It leaves the flag list (out of the chase email and out of
   // followupCount) and becomes a VERIFY line.
   const duplicateFlags = allFlags.filter((f) => f.issue === 'duplicate_form_copy');
-  const flags = allFlags.filter((f) => f.issue !== 'explanation_on_addendum'
+  // Sorted, not in arrival order. See sortFlags: the list used to come out in
+  // whatever order the model emitted it, batch by batch, so the same packet
+  // produced a different running order every run. Sorting HERE, before the
+  // revise/confirm split, means the email, the Process Street comment and
+  // response_flags_text all share one order.
+  const flags = sortFlags(allFlags.filter((f) => f.issue !== 'explanation_on_addendum'
     && f.issue !== 'duplicate_form_copy'
-    && f.issue !== 'cited_attachment_unseen');
+    && f.issue !== 'cited_attachment_unseen'));
   for (const f of unseenAttachment) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
     verify.push({
