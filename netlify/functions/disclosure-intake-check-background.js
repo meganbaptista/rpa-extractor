@@ -807,6 +807,26 @@ const IDENTIFY_PROMPT =
 // prompt instead of competing with form-ID + revision reading in one overloaded
 // call. Reads the same PDFs; returns response_flags + key_answers only.
 // ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// DO NOT RE-ADD A "YOU ARE SEEING A SUBSET" PARAGRAPH TO THIS PROMPT.
+//
+// One was added on 2026-09-15 telling the review it sees only the selected pages
+// and must never claim a cited attachment is missing. It worked, and it cost a
+// real finding. The TDS operating-condition contradiction (box marked No while
+// "built-in BBQ" is written on the explanation line, i.e. rule (c)) was caught in
+// 2 of 2 runs before that paragraph and 0 of 4 passes after it. The paragraph sat
+// immediately ahead of rule (c) and appears to have pulled attention off it.
+// Reverted the same day.
+//
+// The protection does NOT need the model's cooperation and is not in this prompt:
+// citesAnUnseenAttachment and the empty-entries branch of validateAddendumFlags
+// both route those claims to VERIFY deterministically, whatever wording the
+// review uses. Adding prompt text here to chase noise that is already filtered
+// downstream trades a guaranteed fix for an unguaranteed one.
+//
+// Anything added to this prompt must be re-measured against rule (c) on 3499
+// Beverly Glen (~/Downloads/Disclosures.pdf) before it ships.
+// ----------------------------------------------------------------------------
 const ANSWER_REVIEW_PROMPT =
   'These PDFs are a buyer-side disclosure delivery (one combined packet and/or several single-form PDFs). Review the ' +
   'SELLER\'S MARKED ANSWERS on every form that has questions/answers (SPQ and its addendum, TDS, SBSA, ESD and similar ' +
@@ -886,18 +906,7 @@ const ANSWER_REVIEW_PROMPT =
   'cover a sub-item it does not address. If in doubt, use "yes_no_explanation": asking a seller to explain ' +
   'something they already explained is recoverable, but silently treating an unanswered question as answered is ' +
   'not;\n' +
-  '(b3) YOU ARE SEEING A SELECTED SUBSET OF THE PACKAGE, NOT ALL OF IT. A 66-page packet is commonly reduced to '
-  + 'the ~14 pages that carry seller answers, so the explanation sheets, renovation/improvement lists and addenda a '
-  + 'Yes answer points to are OFTEN NOT AMONG THE PAGES YOU WERE GIVEN, even though they are in the package. '
-  + 'Therefore you MUST NEVER state that a cited attachment is "not in the package", "not attached" or "not '
-  + 'included". You cannot see the package; you can see these pages. When a Yes answer cites an attachment you '
-  + 'cannot find in front of you, say exactly that and no more: set "issue":"cited_attachment_unseen", "document" '
-  + 'to the attachment as the answer names it (e.g. "renovations list"), and set "reason" to the verbatim text of '
-  + 'the answer that cites it. Use THIS issue, not "explanation_on_addendum" — that one is only for an entry you '
-  + 'can actually READ on a sheet in front of you, and it is rejected when you cite an entry you cannot show. '
-  + 'cited_attachment_unseen routes to a human who can open the whole package. Concluding absence from a partial '
-  + 'view is how a seller gets chased for work they already did;\n'
-  + 'ALSO return "addendum_entries": list EVERY entry you can see on any separate explanations sheet in this package, ' +
+  'ALSO return "addendum_entries": list EVERY entry you can see on any separate explanations sheet in this package, ' +
   'as {"form":"SPQ|TDS","item":"<entry number exactly as printed, e.g. 7 or C>","text":"<verbatim text>"}. List ' +
   'them all, even ones no Yes sub-item needs. Return [] if there is no such sheet in this package. Every ' +
   '"explanation_on_addendum" you raise MUST correspond to one of these entries;\n' +
@@ -1041,7 +1050,7 @@ const ANSWER_REVIEW_PROMPT =
   'shows the property was built in 2010 or later, a blank 2B/2C is CORRECT and the form still counts as "yes" ' +
   'provided Section 3 is done. Never return "no" solely because Section 2 is blank on a 2010-or-later property.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
-  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_on_addendum|cited_attachment_unseen|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect; for explanation_on_addendum, a short quote of the addendum entry>","other_form":"<for inconsistent>","document":"<for document; for explanation_on_addendum, the sheet it was found on>","source":"<for transaction>"}],' +
+  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_on_addendum|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect; for explanation_on_addendum, a short quote of the addendum entry>","other_form":"<for inconsistent>","document":"<for document; for explanation_on_addendum, the sheet it was found on>","source":"<for transaction>"}],' +
   '"addendum_entries":[{"form":"SPQ","item":"7","text":"<verbatim text of that entry>"}],' +
   '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na","fire_clearance":"yes|no|blank|na","fire_clearance_item":"17F","fhds":"yes|no|na"}}';
 
