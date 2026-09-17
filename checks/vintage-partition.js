@@ -8,7 +8,7 @@
 // being exempt, so its ESD put a regular sale on the exempt path.
 
 const intake = require('../netlify/functions/disclosure-intake-check-background.js');
-const { parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty } = intake._internal;
+const { parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS } = intake._internal;
 const { inPriorTransactionFolder } = require('../netlify/functions/lib/unzip.js');
 
 let failed = 0;
@@ -189,6 +189,60 @@ ok('no baseline means no quarantine', partitionByVintage(noBase, pvNow).historic
 // Stopwords: a trust name must not reduce to nothing but boilerplate.
 ok('trust boilerplate is dropped', [...nameTokens('The Wood Family Revocable Living Trust')].sort(), ['wood']);
 ok('a two-surname couple survives', [...nameTokens('Jose Molina; Laure Molina')].sort(), ['jose', 'laure', 'molina']);
+
+
+// --- a form that never arrived is a request, not a verification -----------
+// 28935's compliance list carries ONE FHDS line, worded as an instruction:
+// "FHDS w. Boxes Checked in Sec 2 and YES Checked in Sec 3". Reconcile filed it
+// under verify, the reading came back na because no FHDS was in the package, and
+// VERIFY is excluded from the chase email. A required disclosure went un-asked-for.
+const FHDS_LINE = 'FHDS w. Boxes Checked in Sec 2 and YES Checked in Sec 3';
+const d = (o) => verifyItemDisposition(o);
+
+ok('the FHDS line becomes a request when no FHDS arrived',
+  d({ label: FHDS_LINE, requiresForm: RX_FHDS, formPresent: false, stillNeeded: ['NHD Receipt Signed', 'LPD 1978'], exempt: false }),
+  'request');
+
+ok('but stays a verification when the FHDS IS in the package',
+  d({ label: FHDS_LINE, requiresForm: RX_FHDS, formPresent: true, stillNeeded: [], exempt: false }),
+  'verify');
+
+// The no-duplicates guard: the list carries "SPQ" AND four SPQ answer lines. A
+// missing SPQ should produce one request, not five.
+ok('an SPQ answer line is covered by the SPQ request',
+  d({ label: 'SPQ 7E: Yes, property built prior to 1978', requiresForm: RX_SPQ, formPresent: false, stillNeeded: ['SPQ', 'TDS'], exempt: false }),
+  'covered');
+
+ok('and another one',
+  d({ label: 'SPQ 17G: Yes, high fire brush clearance', requiresForm: RX_SPQ, formPresent: false, stillNeeded: ['SPQ'], exempt: false }),
+  'covered');
+
+// An item that never names the form it depends on is NOT covered by that form's
+// request: asking for the SPQ does not ask for the HOA documents.
+ok('an item that does not name the form is still requested',
+  d({ label: 'HOA disclosures', requiresForm: RX_SPQ, formPresent: false, stillNeeded: ['SPQ'], exempt: false }),
+  'request');
+
+// On the exempt path the FHDS is not owed at all, so promoting it would chase the
+// listing side for a form this deal does not need.
+ok('no FHDS is chased on a genuine exempt deal',
+  d({ label: FHDS_LINE, requiresForm: RX_FHDS, formPresent: false, stillNeeded: [], exempt: true }),
+  'not-applicable');
+
+ok('nor the seller earthquake report',
+  d({ label: 'Earthquake Hazard Report 1960', requiresForm: RX_FHDS, formPresent: false, stillNeeded: [], exempt: true }),
+  'not-applicable');
+
+// The booklet RECEIPT is a different obligation and survives the exempt path.
+ok('the earthquake booklet receipt is not retired',
+  d({ label: 'Earthquake Booklet Receipt', requiresForm: RX_FHDS, formPresent: false, stillNeeded: [], exempt: true }),
+  'request');
+
+// A reading with no form dependency is untouched, and so is an item that matched
+// no reading at all.
+ok('a reading with no form dependency stays a verification',
+  d({ label: 'MLS CLIENT TO SIGN', requiresForm: null, formPresent: false, stillNeeded: [], exempt: false }),
+  'verify');
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

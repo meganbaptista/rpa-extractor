@@ -263,6 +263,28 @@ function applyEarthquakeReportRule(result, received) {
   return { applied: true, satisfied };
 }
 
+// ----------------------------------------------------------------------------
+// WHAT A COMPLIANCE-LIST "VERIFY" ITEM ACTUALLY IS, once we know whether the form
+// it checks is in hand. Pure on purpose: this decides whether a required
+// disclosure gets chased, and the last two silent misses in this pipeline were
+// both decisions buried inside a 500-line function where nothing could test them.
+//
+//   'verify'          the form is here; a human should eyeball the answer
+//   'request'         the form is NOT here, so this is a missing document
+//   'covered'         not here, but the form is already being requested by name
+//   'not-applicable'  not owed at all on the exempt path
+// ----------------------------------------------------------------------------
+function verifyItemDisposition({ label, requiresForm, formPresent, stillNeeded, exempt }) {
+  if (!requiresForm || formPresent) return 'verify';
+  const t = String(label || '');
+  if (exempt && (RX_FHDS.test(t) || (RX_EQ_REPORT.test(t) && !RX_EQ_KEEP.test(t)))) return 'not-applicable';
+  // Only the form's OWN name being on the request list covers this line. An item
+  // that never names the form it depends on ("HOA disclosures", read off SPQ
+  // section 14) is not covered by a request for the SPQ.
+  if (requiresForm.test(t) && (stillNeeded || []).some((x) => requiresForm.test(String(x)))) return 'covered';
+  return 'request';
+}
+
 function applyExemptSellerRules(result, received) {
   if (!result || !receivedHas(received, RX_ESD)) return { exempt: false };
 
@@ -3091,23 +3113,83 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // all Yes?) is its inverse.
   const hoaReading = ka.hoa_any_no === 'no' ? 'yes' : (ka.hoa_any_no === 'yes' ? 'no' : 'na');
   const VERIFY_READINGS = [
-    { re: /hoa|common\s*interest|\bc\s*,?\s*1[234]\b|\b6g\b|section\s*14/i, mark: hoaReading, refDefault: 'HOA disclosures', reasonBad: 'the property is in an HOA / common interest development, so it should be Yes' },
+    { re: /hoa|common\s*interest|\bc\s*,?\s*1[234]\b|\b6g\b|section\s*14/i, mark: hoaReading, requiresForm: RX_SPQ, refDefault: 'HOA disclosures', reasonBad: 'the property is in an HOA / common interest development, so it should be Yes' },
     // askForm/askItem/askReason override the generic "marked X, but <reasonBad>"
     // wording, which read as a run-on once the compliance-list item text was
     // concatenated onto it. reasonBad is kept for reference only.
-    { re: /brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i, mark: yesno(ka.fire_clearance), refDefault: `SPQ ${fireItem}`, reasonBad: 'the property is in a high fire hazard area, so it should be Yes', condoExempt: true, askForm: 'SPQ', askItem: ctxFireItem, askReason: BRUSH_ASK },
+    { re: /brush|defensible|vegetation|fire\s*hazard|wildfire|17\s*[fg]\b/i, mark: yesno(ka.fire_clearance), requiresForm: RX_SPQ, refDefault: `SPQ ${fireItem}`, reasonBad: 'the property is in a high fire hazard area, so it should be Yes', condoExempt: true, askForm: 'SPQ', askItem: ctxFireItem, askReason: BRUSH_ASK },
     // Wording stays year-neutral on purpose: Section 2B/2C is only owed by a
     // pre-2010 home, so naming "Section 2" here would chase sellers of newer
     // homes for boxes their own form tells them to leave blank. identify()
     // already applies the year rule when it sets ka.fhds.
-    { re: /\bfhds\b|fire\s*hardening/i, mark: yesno(ka.fhds), refDefault: 'FHDS', reasonBad: 'it is not completed as required for this property; please complete the sections that apply and send the completed FHDS' },
-    { re: /\b7e\b|pre[-\s]*1978|lead[-\s]*based\s*paint/i, mark: yesno(ka.spq_7e), refDefault: 'SPQ 7E', reasonBad: 'the property was built before 1978, so it should be Yes' },
+    { re: /\bfhds\b|fire\s*hardening/i, mark: yesno(ka.fhds), requiresForm: RX_FHDS, refDefault: 'FHDS', reasonBad: 'it is not completed as required for this property; please complete the sections that apply and send the completed FHDS' },
+    { re: /\b7e\b|pre[-\s]*1978|lead[-\s]*based\s*paint/i, mark: yesno(ka.spq_7e), requiresForm: RX_SPQ, refDefault: 'SPQ 7E', reasonBad: 'the property was built before 1978, so it should be Yes' },
   ];
+  // ----------------------------------------------------------------------------
+  // A FORM THAT NEVER ARRIVED IS A REQUEST, NOT A VERIFICATION.
+  //
+  // 28935 Palos Verdes Dr E, 2026-09-17. The compliance list's only FHDS line is
+  // phrased as an instruction to check something: "FHDS w. Boxes Checked in Sec 2
+  // and YES Checked in Sec 3". Reconcile filed it under verify, the FHDS reading
+  // came back "na" because there was no FHDS in the package to read, and the
+  // branch below kept it under VERIFY - which is deliberately excluded from the
+  // chase email. So a required disclosure that was never sent was never asked for,
+  // and nothing anywhere said so.
+  //
+  // THE RULE ALREADY EXISTS IN THE RECONCILE PROMPT: verify is "reserved ONLY for
+  // genuine per-answer content confirmations WHERE THE FORM IS PRESENT". The model
+  // simply did not apply it to a line that reads like an instruction. Per this
+  // file's own history, the answer to that is not more prompt text - it is a
+  // deterministic guarantee that does not need the model's cooperation.
+  //
+  // "na" means two different things and they must not share a branch: the form is
+  // here and the answer could not be read (VERIFY is right, a human should look),
+  // or the form is not here at all (a request). Only the received set can tell
+  // them apart.
+  //
+  // WHY IT IS NOT A BLANKET PROMOTION. Suppressed when the item NAMES a form that
+  // is already being requested in its own right: the list carries both "SPQ" and
+  // "SPQ 7E: Yes, property built prior to 1978", and a missing SPQ should produce
+  // one line asking for the SPQ, not four. An item that does NOT name the form it
+  // depends on ("HOA disclosures", resolved from SPQ section 14) is promoted, since
+  // the SPQ request does not cover it.
+  //
+  // And never on the exempt path, where the FHDS and the seller's earthquake report
+  // are not owed at all - promoting one there would chase the listing side for a
+  // form this deal does not need. That is the same rule applyExemptSellerRules
+  // applies to still_needed; this is the verify-side half of it.
+  // ----------------------------------------------------------------------------
+  const promotedToRequest = [];
+
   const confirmedReadings = [];
   const verifyKept = [];
   for (const v of verify) {
     const hay = `${v.item || ''} ${v.note || ''}`;
     const r = VERIFY_READINGS.find((x) => x.re.test(hay));
+
+    const label = String(v.item || '').trim() || (r && r.refDefault) || 'this item';
+    const disposition = verifyItemDisposition({
+      label,
+      requiresForm: r && r.requiresForm,
+      formPresent: r && r.requiresForm ? receivedHas(currentForms, r.requiresForm) : true,
+      stillNeeded: result.still_needed,
+      exempt: exemptInfo.exempt,
+    });
+    if (disposition === 'not-applicable') {
+      na.push({ item: label, note: 'Seller is exempt, not required (ESD received in lieu of TDS/SPQ)' });
+      console.log(`[disclosure-intake] "${label}" not required on the exempt path, moved to NOT APPLICABLE`);
+      continue;
+    }
+    if (disposition === 'covered') {
+      console.log(`[disclosure-intake] "${label}" dropped from VERIFY: the form it names is already being requested`);
+      continue;
+    }
+    if (disposition === 'request') {
+      result.still_needed = (result.still_needed || []).concat([label]);
+      promotedToRequest.push(label);
+      continue;
+    }
+
     if (!r || r.mark === '' || r.mark === 'na') { verifyKept.push(v); continue; }
     if (hasFlag(r.re)) continue; // already resolved via the sheet-based context check above
     // The compliance list still carries "SPQ 17G: Yes, high fire brush clearance"
@@ -3141,6 +3223,11 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     }
   }
   verify = verifyKept;
+
+  if (promotedToRequest.length) {
+    console.log(`[disclosure-intake] ${address}: ${promotedToRequest.length} VERIFY item(s) moved to REQUEST `
+      + `because the form they check is not in the package: ${promotedToRequest.join('; ')}`);
+  }
 
   // Counted, but old enough to ask about. A listing that sat, or a long escrow,
   // legitimately produces disclosures signed months before the offer, so this is a
@@ -3526,7 +3613,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty };
+module.exports._internal = { parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold
