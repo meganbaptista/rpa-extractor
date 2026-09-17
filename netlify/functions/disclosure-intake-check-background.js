@@ -388,15 +388,117 @@ function monthsSince(ms, nowMs) {
   return (nowMs - ms) / (1000 * 60 * 60 * 24 * 30.4375);
 }
 
-function vintageOf(form, nowMs) {
+// ----------------------------------------------------------------------------
+// A SELLER WHO HAS NOTHING TO DO WITH THIS DEAL.
+//
+// The date was originally the ONLY gate, on the reasoning that trusts, LLCs and
+// "as Trustee" suffixes make name matching a coin flip. 28935 Palos Verdes Dr E
+// on 2026-09-17 disproved that: every current form read "Lindsay Mclain, Ryan
+// Mclain" signed 8/12/2026, and the prior sale's ESD read "Wood Family Trust"
+// with NO signature date on it at all. Nothing to compare on the one axis being
+// checked, and a form naming a different family sailed through as current and
+// put the deal back on the exempt path.
+//
+// The names were not a coin flip. They shared not one token. So the name IS a
+// usable signal - not as a fuzzy similarity score, but as a test for sharing NO
+// name token with the seller this delivery's own dated forms agree on.
+//
+// SURNAME OVERLAP, NOT EQUALITY. "Mclain Family Trust" against "Lindsay Mclain"
+// shares "mclain" and must stay; that is the real pattern this was feared to
+// break, sellers holding title in a trust and signing some forms as trustees.
+// "Wood Family Trust" against "Lindsay Mclain, Ryan Mclain" shares nothing.
+//
+// THE BASELINE COMES FROM THE DELIVERY, never from a roster. The deal's seller is
+// whoever the currently-dated forms name, so a package with nothing dated has no
+// baseline and this check does nothing at all.
+//
+// A MISMATCHED NAME ALONE DOES NOT QUARANTINE. It quarantines only when the form
+// ALSO has no readable date to defend itself. A form with a CURRENT date and a
+// mismatched name is a different animal - an AVID whose signer is the listing
+// agent, a co-trustee, a name read off the wrong line - and it goes to VERIFY for
+// a human instead. A prior transaction's paperwork is old or undated; it does not
+// usually carry this week's date.
+// ----------------------------------------------------------------------------
+
+// Words that identify no person. "trust" and "family" are the whole reason a
+// trust name and its trustee's name look unrelated to a string comparison.
+const NAME_STOPWORDS = new Set([
+  'the', 'and', 'or', 'of', 'as', 'by', 'for', 'dated', 'date',
+  'trust', 'trustee', 'trustees', 'family', 'living', 'revocable', 'irrevocable',
+  'survivors', 'survivor', 'successor', 'co', 'llc', 'inc', 'incorporated', 'corp',
+  'corporation', 'company', 'estate', 'executor', 'administrator', 'attorney',
+  'fact', 'poa', 'etal', 'jr', 'sr', 'ii', 'iii', 'iv', 'mr', 'mrs', 'ms',
+  'seller', 'sellers', 'transferor', 'owner', 'owners', 'husband', 'wife',
+]);
+
+function nameTokens(s) {
+  const out = new Set();
+  for (const raw of String(s || '').toLowerCase().split(/[^a-z]+/)) {
+    const t = raw.trim();
+    if (t.length < 3 || NAME_STOPWORDS.has(t)) continue;
+    out.add(t);
+  }
+  return out;
+}
+
+// The seller this delivery's own currently-dated forms agree on. Frequency-weighted
+// so one misread name cannot become the baseline everything else is judged against.
+function dealSellerTokens(received, nowMs) {
+  const counts = new Map();
+  for (const f of (received || [])) {
+    if (!f || !f.seller) continue;
+    const t = parseSignedDate(f.signed);
+    if (t == null) continue;                                  // undated forms cannot vote
+    const months = monthsSince(t, nowMs);
+    if (months < 0 || months > QUERY_VINTAGE_AFTER_MONTHS) continue;   // nor can old ones
+    for (const tok of nameTokens(f.seller)) counts.set(tok, (counts.get(tok) || 0) + 1);
+  }
+  // A token has to appear on at least TWO dated forms to be the deal's seller.
+  //
+  // WHY, and it is not a tuning choice: with a one-form threshold a form votes for
+  // the baseline it is then judged against, so it can never disagree with itself.
+  // An AVID dated this month and signed by the listing agent put "whitfield" into
+  // the baseline and then matched it, which is how a genuinely odd signer would go
+  // unreported. Corroboration breaks the circularity.
+  //
+  // The cost is that a delivery with only one dated seller form yields an EMPTY
+  // baseline and this check abstains entirely. That is the right direction to fail:
+  // no corroboration, no verdict. The age test is unaffected and still applies.
+  const keep = new Set();
+  for (const [tok, n] of counts) if (n >= 2) keep.add(tok);
+  return keep;
+}
+
+// true when the form names a seller and shares NO token with the deal's seller.
+function isDifferentParty(form, dealTokens) {
+  if (!dealTokens || !dealTokens.size) return false;          // no baseline, no opinion
+  const mine = nameTokens(form && form.seller);
+  if (!mine.size) return false;                               // no name, no opinion
+  for (const t of mine) if (dealTokens.has(t)) return false;
+  return true;
+}
+
+function vintageOf(form, nowMs, dealTokens) {
+  const otherParty = isDifferentParty(form, dealTokens);
   const t = parseSignedDate(form && form.signed);
-  if (t == null) return { band: 'current', months: null, signed: '' };
+
+  // No date to judge by. The seller name is then the only evidence there is, and
+  // a name belonging to another family is enough on its own.
+  if (t == null) {
+    return otherParty
+      ? { band: 'historical', months: null, signed: '', reason: 'party' }
+      : { band: 'current', months: null, signed: '', reason: 'none' };
+  }
+
   const months = monthsSince(t, nowMs);
-  if (months < 0) return { band: 'current', months: null, signed: '' };   // misread year
+  if (months < 0) return { band: 'current', months: null, signed: '', reason: 'none' };  // misread year
   const signed = String(form.signed).trim();
-  if (months > HISTORICAL_AFTER_MONTHS) return { band: 'historical', months, signed };
-  if (months > QUERY_VINTAGE_AFTER_MONTHS) return { band: 'aging', months, signed };
-  return { band: 'current', months, signed };
+  if (months > HISTORICAL_AFTER_MONTHS) return { band: 'historical', months, signed, reason: 'age' };
+  if (months > QUERY_VINTAGE_AFTER_MONTHS) return { band: 'aging', months, signed, reason: 'age' };
+  // Current date, different name. Ambiguous rather than historical, so a person
+  // decides: see the header on why this is not a quarantine.
+  if (otherParty) return { band: 'aging', months, signed, reason: 'party' };
+  return { band: 'current', months, signed, reason: 'none' };
 }
 
 // Split an accumulated received set into what counts for THIS deal and what
@@ -405,14 +507,15 @@ function vintageOf(form, nowMs) {
 // is a subset of `current` that also earns a VERIFY line.
 function partitionByVintage(received, nowMs) {
   const current = [], historical = [], aging = [];
+  const dealTokens = dealSellerTokens(received, nowMs);
   for (const f of (received || [])) {
     if (!f) continue;
-    const vintage = vintageOf(f, nowMs);
+    const vintage = vintageOf(f, nowMs, dealTokens);
     if (vintage.band === 'historical') { historical.push({ ...f, vintage }); continue; }
     current.push(f);
     if (vintage.band === 'aging') aging.push({ ...f, vintage });
   }
-  return { current, historical, aging };
+  return { current, historical, aging, dealTokens };
 }
 
 // "ESD Exempt Seller Disclosure, signed 4/12/2024, seller John Smith Family Trust"
@@ -420,7 +523,10 @@ function vintageLabel(f) {
   const title = [f.code, f.name].filter(Boolean).join(' ') || 'unidentified form';
   const who = String(f.seller || '').trim();
   const when = (f.vintage && f.vintage.signed) || '';
-  return `${title}${when ? `, signed ${when}` : ''}${who ? `, seller ${who}` : ''}`;
+  const why = (f.vintage && f.vintage.reason) === 'party' && !when
+    ? ', no signature date on it'
+    : '';
+  return `${title}${when ? `, signed ${when}` : ''}${who ? `, seller ${who}` : ''}${why}`;
 }
 
 // ----------------------------------------------------------------------------
@@ -2833,11 +2939,12 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // what reconcile and every deterministic rule below consume: a prior sale's ESD
   // must not put this deal on the exempt path, and a prior sale's TDS must not
   // count as this seller's. See the historical-documents section.
-  const { current: currentForms, historical, aging } = partitionByVintage(received, Date.now());
+  const { current: currentForms, historical, aging, dealTokens } = partitionByVintage(received, Date.now());
   if (historical.length) {
-    console.warn(`[disclosure-intake] ${address}: ${historical.length} form(s) signed over ${HISTORICAL_AFTER_MONTHS} `
-      + 'months ago, read as a PRIOR SALE and quarantined (not counted, not shown to the rules): '
-      + historical.map((f) => vintageLabel(f)).join('; '));
+    console.warn(`[disclosure-intake] ${address}: ${historical.length} form(s) read as a PRIOR TRANSACTION `
+      + `and quarantined (not counted, not shown to the rules); this deal's seller reads as `
+      + `[${[...(dealTokens || [])].join(' ') || 'unknown'}]: `
+      + historical.map((f) => `${vintageLabel(f)} (${(f.vintage && f.vintage.reason) === 'party' ? 'different party' : 'too old'})`).join('; '));
   }
 
   let listText = (auditList && String(auditList).trim()) || '';
@@ -3042,9 +3149,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   for (const f of aging) {
     verify.push({
       item: [f.code, f.name].filter(Boolean).join(' ') || 'received form',
-      note: `signed ${f.vintage.signed}, about ${Math.round(f.vintage.months)} months ago`
-        + `${f.seller ? ` by ${f.seller}` : ''}. Confirm it belongs to THIS sale and not an earlier `
-        + 'one before relying on it',
+      note: f.vintage.reason === 'party'
+        // Current date, but a seller name with nothing in common with this deal's.
+        // Usually a signer read off the wrong line, so it is a question, not a verdict.
+        ? `names "${f.seller}" as seller, which matches nobody else on this file, but it is `
+          + `dated ${f.vintage.signed}. Confirm whose form this is before relying on it`
+        : `signed ${f.vintage.signed}, about ${Math.round(f.vintage.months)} months ago`
+          + `${f.seller ? ` by ${f.seller}` : ''}. Confirm it belongs to THIS sale and not an earlier `
+          + 'one before relying on it',
     });
   }
   if (aging.length) {
@@ -3248,12 +3360,17 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 
   // Historical heads-up. Sits with the exempt alert deliberately: this is the alert
   // that explains why the exempt one is ABSENT on a delivery that contained an ESD.
+  const byAge = historical.filter((f) => f.vintage && f.vintage.reason === 'age').length;
+  const byParty = historical.length - byAge;
+  const historicalWhy = [
+    byAge ? `${byAge} signed more than ${HISTORICAL_AFTER_MONTHS} months ago` : '',
+    byParty ? `${byParty} naming a seller who is not this deal's, with no signature date` : '',
+  ].filter(Boolean).join(' and ');
   const historicalAlert = historical.length
-    ? `NOTE: ${historical.length} document(s) in what has been received were signed more than `
-      + `${HISTORICAL_AFTER_MONTHS} months ago and read as a PRIOR SALE of this property. They are NOT `
-      + 'counted toward this file and did NOT affect the disclosure path (an exempt-seller disclosure among '
-      + 'them does not make this an exempt deal). Request the current seller\'s versions of anything still '
-      + 'outstanding.'
+    ? `NOTE: ${historical.length} document(s) in what has been received read as a PRIOR TRANSACTION on this `
+      + `property (${historicalWhy}). They are NOT counted toward this file and did NOT affect the `
+      + 'disclosure path (an exempt-seller disclosure among them does not make this an exempt deal). '
+      + 'Request the current seller\'s versions of anything still outstanding.'
     : '';
   if (historical.length) console.warn(`[disclosure-intake] ${address}: ${historicalAlert}`);
 
@@ -3409,7 +3526,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules };
+module.exports._internal = { parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold
