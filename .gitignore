@@ -1,0 +1,5 @@
+# Local Netlify folder
+.netlify
+
+# Local scratch: real deal data never enters the repo
+local/

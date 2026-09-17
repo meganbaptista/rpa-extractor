@@ -198,6 +198,53 @@ const EXCLUDED_FOLDER_PATTERNS = [
   /\btitle\s*(?:company|co\.?|report)\b/i,
 ];
 
+// A FOLDER OF A PREVIOUS SALE IS A DIFFERENT TRANSACTION.
+//
+// 2026-09-17: a listing side shared the current disclosures as attachments plus a
+// Dropbox folder holding the property's prior sale. That sale was an exempt trust
+// sale, so its package carried an ESD, which put a regular sale on the exempt
+// path. The signature-date partition in disclosure-intake is the guarantee against
+// that; this is the cheap first pass, filtering a whole folder before a single
+// page is inflated or costs a model token.
+//
+// SEPARATE FROM EXCLUDED_FOLDER_PATTERNS because RESCUE_NAME must NOT override
+// these. That rescue exists so a seller's explanation sheet filed in the wrong
+// folder is never lost, and it matches any filename containing "disclosure" - which
+// is every file in a folder named "Previous Sale Disclosures", i.e. exactly the
+// case being excluded. A prior sale's TDS is not a document of this deal that
+// happens to be misfiled; it belongs to another transaction, and nothing in it is
+// wanted.
+//
+// Deliberately narrow, matched on directory segments only.
+const PRIOR_TRANSACTION_FOLDER_PATTERNS = [
+  /\b(?:previous|prior|past|old|former)\s+(?:sale|transaction|escrow|disclosures?|docs?|file)\b/i,
+  /\b(?:previous|prior|past)\s+owner'?s?\b/i,
+  /\barchived?\b/i,
+  /\bhistorical?\b/i,
+];
+
+// A YEAR-LABELLED ARCHIVE FOLDER ("2019", "2021 Sale"), which agents do use.
+//
+// Two ways to get this wrong, both caught by checks/vintage-partition.js:
+//
+//   A CALIFORNIA STREET NUMBER LOOKS LIKE A YEAR. "2019 Maple Ave" is a property
+//   folder, and a loose year pattern excluded the entire deal's disclosures. So the
+//   segment must be the year ALONE, or the year plus a transaction word - never a
+//   year followed by anything else.
+//
+//   THE CURRENT SALE IS ALSO IN A YEAR. A folder named "2026" in 2026 is this
+//   deal, not an archive, so the cutoff is computed from today rather than hard
+//   coded: only a year at least two behind the current one reads as prior. Last
+//   year stays in bounds because a listing that opened in December and closes in
+//   January is one transaction.
+const PRIOR_YEAR_SEGMENT = /^((?:19|20)\d{2})(?:\s*[-_]?\s*(?:sale|escrow|transaction|disclosures?|docs?|file|listing|closing))?$/i;
+
+function isPriorYearSegment(dir) {
+  const m = String(dir).trim().match(PRIOR_YEAR_SEGMENT);
+  if (!m) return false;
+  return Number(m[1]) <= new Date().getFullYear() - 2;
+}
+
 // A seller's explanation sheet is routinely filed in whatever folder the agent
 // had open — 1428 El Paso Dr has "Letter from Buyer #1 + Seller Explanation and
 // Receipts.pdf". Losing one of those is the exact failure this pipeline spent a
@@ -208,6 +255,14 @@ function inExcludedFolder(path) {
   const parts = String(path).split('/');
   parts.pop();                                   // directories only, not the file
   return parts.some((dir) => EXCLUDED_FOLDER_PATTERNS.some((re) => re.test(dir)));
+}
+
+// A prior-sale folder, which RESCUE_NAME must not pull anything back out of.
+function inPriorTransactionFolder(path) {
+  const parts = String(path).split('/');
+  parts.pop();
+  return parts.some((dir) => isPriorYearSegment(dir)
+    || PRIOR_TRANSACTION_FOLDER_PATTERNS.some((re) => re.test(dir)));
 }
 
 function collectPdfs(buf, rootName, opts) {
@@ -231,17 +286,32 @@ function collectPdfs(buf, rootName, opts) {
   // entries individually larger than the whole budget — which let 26MB through a
   // an 18MB budget in testing.
   let plannedBytes = 0;
+  const thrownBy = [];
 
   // Evaluated from the zip index, before any inflate. Every one of these was
   // previously checked AFTER decompressing the entry.
   //
   // Returns '' to accept, or a reason string to reject.
+  // A caller's isBlocked predicate throwing must not take the delivery with it.
+  // Found the hard way: an isBlocked that threw propagated out of unzipEntries,
+  // was caught by the "unreadable zip" handler below, and reported ZERO documents
+  // from a perfectly good 105MB archive. Silent total loss from a one-line caller
+  // bug is exactly the failure mode this file keeps being bitten by, so the
+  // predicate is treated as untrusted: on a throw, keep the entry and say so.
+  const safeBlocked = (base) => {
+    if (!isBlocked) return false;
+    try { return isBlocked(base); }
+    catch (e) { thrownBy.push(`${base}: ${e.message}`); return false; }
+  };
+
   const rejectReason = ({ path, uncompSize }) => {
     const base = String(path).split('/').pop();
     if (isMacMetadata(path) || isMacMetadata(base)) return 'macOS metadata';
     if (!INFLATABLE_EXT.test(base)) return 'not a pdf or zip';
     if (uncompSize > maxDocBytes && !/\.zip$/i.test(base)) return `too large (${uncompSize}B)`;
-    if (isBlocked && isBlocked(base)) return 'blocked';
+    if (safeBlocked(base)) return 'blocked';
+    // Checked BEFORE the rescue, and not subject to it: see PRIOR_TRANSACTION_FOLDER_PATTERNS.
+    if (excludeFolders && inPriorTransactionFolder(path)) return 'prior-sale folder';
     if (excludeFolders && inExcludedFolder(path) && !RESCUE_NAME.test(base)) return 'non-disclosure folder';
     // Hard memory bound: refuse the entry rather than inflate past the budget.
     if (plannedBytes + uncompSize > maxTotalBytes) { budgetHit = true; return 'byte budget reached'; }
@@ -308,7 +378,9 @@ function collectPdfs(buf, rootName, opts) {
       if (isMacMetadata(e.name)) { skipped.push(`${path} [macOS metadata]`); continue; }
       // Bytes, not filename — see isPdfBytes.
       if (!isPdfBytes(e.data)) { skipped.push(`${path} [not pdf]`); continue; }
-      if (isBlocked && isBlocked(e.name)) { skipped.push(`${path} [blocked]`); continue; }
+      // safeBlocked, not isBlocked: this is the post-inflate belt to the
+      // pre-inflate check, and it must be just as untrusted.
+      if (safeBlocked(e.name)) { skipped.push(`${path} [blocked]`); continue; }
       if (e.data.length > maxDocBytes) { skipped.push(`${path} [too large]`); continue; }
       if (totalBytes + e.data.length > maxTotalBytes) {
         truncated = true;
@@ -322,6 +394,9 @@ function collectPdfs(buf, rootName, opts) {
   }
 
   if (budgetHit) truncated = true;
+  if (thrownBy.length) {
+    skipped.push(`[isBlocked threw on ${thrownBy.length} name(s), entries KEPT rather than lost: ${thrownBy.slice(0, 3).join('; ')}]`);
+  }
   return { kept, skipped, truncated };
 }
 
@@ -369,6 +444,7 @@ function summarizeCollect(result, rootName) {
 module.exports = {
   hasCentralDirectory,
   inExcludedFolder,
+  inPriorTransactionFolder,
   ZIP_MAGIC,
   PDF_MAGIC,
   looksZip,

@@ -300,6 +300,213 @@ function applyExemptSellerRules(result, received) {
   return { exempt: true, removed, whsdReceived };
 }
 
+// ----------------------------------------------------------------------------
+// HISTORICAL DOCUMENTS FROM A PRIOR SALE OF THE SAME PROPERTY.
+//
+// 2026-09-17: a listing side sent the current seller's disclosures as
+// attachments AND a Dropbox link to the property's PREVIOUS sale. That prior
+// sale was an exempt trust sale, so its package carried an ESD. The received set
+// accumulates per deal keyed by the address read off the forms, and a prior sale
+// of the same property reads the SAME address, so those forms merged straight
+// in. applyExemptSellerRules then did exactly what it is written to do and put a
+// regular sale on the exempt path: the TDS, SPQ, FHDS and earthquake report
+// retired on the strength of a document signed years earlier.
+//
+// The visible symptom was the exempt flip. The dangerous one is quieter: the
+// same merge credits a prior sale's TDS and SPQ as PRESENT, so had the current
+// seller's copies not also been in that delivery, the intake would have reported
+// nothing outstanding.
+//
+// The discriminator is the DATE SIGNED, read off the face of the form. NOT the
+// revision stamp, because a prior-sale form can carry a revision that is still
+// current. And NOT the seller name, because trusts, LLCs and "as Trustee"
+// suffixes make name matching a coin flip on exactly the deals where this
+// matters most - so the name is read and PRINTED for the human, never used as a
+// gate.
+//
+// Three bands. The thresholds are FIRM POLICY rather than California law (another
+// TC could answer this differently), so they belong in a settings store when one
+// exists; Megan chose them 2026-09-17, off the deal above:
+//
+//   under 6 months    current; counted normally
+//   6 to 12 months    counted, plus a VERIFY line asking a human to confirm it
+//                     belongs to this sale
+//   over 12 months    HISTORICAL; quarantined. Never counted, never seen by
+//                     reconcile or by the deterministic rules, and reported
+//                     under its own heading so current versions can be asked for
+//
+// A FORM WITH NO READABLE DATE IS TREATED AS CURRENT. Quarantining on absent
+// evidence would silently drop a real disclosure, and this file's history is
+// explicit that the fix for a false positive is never a silent delete.
+//
+// The partition is RECOMPUTED from the stored dates on every run rather than
+// stamped onto the record at ingest. One code path decides it, so a stamp cannot
+// disagree with the dates it came from - and a record written before this existed
+// simply reads as undated, which is why the repair for an already-polluted deal
+// is to clear its state and re-send.
+// ----------------------------------------------------------------------------
+const HISTORICAL_AFTER_MONTHS = Number(process.env.DISCLOSURE_HISTORICAL_MONTHS || 12);
+const QUERY_VINTAGE_AFTER_MONTHS = Number(process.env.DISCLOSURE_AGING_MONTHS || 6);
+
+const MONTH_NAMES = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
+};
+
+// A signature date off the face of a form -> epoch ms, or null when it cannot be
+// read with confidence. Deliberately strict: anything unrecognized comes back
+// null (and so reads as current) rather than as a guess that could quarantine a
+// live disclosure.
+function parseSignedDate(s) {
+  const str = String(s || '').trim();
+  if (!str) return null;
+  let y = 0, m = 0, d = 0, matched = false;
+  let mt = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);                 // 2024-04-12
+  if (mt) { y = +mt[1]; m = +mt[2]; d = +mt[3]; matched = true; }
+  if (!matched) {
+    mt = str.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})$/);       // 4/12/2024, 4-12-24
+    if (mt) { m = +mt[1]; d = +mt[2]; y = +mt[3]; matched = true; }
+  }
+  if (!matched) {
+    mt = str.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/); // April 12, 2024
+    if (mt) {
+      const w = mt[1].toLowerCase();
+      m = MONTH_NAMES[w.slice(0, 4)] || MONTH_NAMES[w.slice(0, 3)] || 0;
+      d = +mt[2]; y = +mt[3]; matched = true;
+    }
+  }
+  if (!matched || !m || !d || !y) return null;
+  if (y < 100) y += 2000;
+  if (m < 1 || m > 12 || d < 1 || d > 31 || y < 1990 || y > 2100) return null;
+  const t = Date.UTC(y, m - 1, d);
+  return Number.isFinite(t) ? t : null;
+}
+
+// Months between a signed date and now. Can be negative: a mistyped year reads as
+// a date in the future, and that must never come out as "very old".
+function monthsSince(ms, nowMs) {
+  return (nowMs - ms) / (1000 * 60 * 60 * 24 * 30.4375);
+}
+
+function vintageOf(form, nowMs) {
+  const t = parseSignedDate(form && form.signed);
+  if (t == null) return { band: 'current', months: null, signed: '' };
+  const months = monthsSince(t, nowMs);
+  if (months < 0) return { band: 'current', months: null, signed: '' };   // misread year
+  const signed = String(form.signed).trim();
+  if (months > HISTORICAL_AFTER_MONTHS) return { band: 'historical', months, signed };
+  if (months > QUERY_VINTAGE_AFTER_MONTHS) return { band: 'aging', months, signed };
+  return { band: 'current', months, signed };
+}
+
+// Split an accumulated received set into what counts for THIS deal and what
+// belongs to an earlier transaction. `current` is what reconcile and every
+// deterministic rule consume; `historical` is reported and never counted; `aging`
+// is a subset of `current` that also earns a VERIFY line.
+function partitionByVintage(received, nowMs) {
+  const current = [], historical = [], aging = [];
+  for (const f of (received || [])) {
+    if (!f) continue;
+    const vintage = vintageOf(f, nowMs);
+    if (vintage.band === 'historical') { historical.push({ ...f, vintage }); continue; }
+    current.push(f);
+    if (vintage.band === 'aging') aging.push({ ...f, vintage });
+  }
+  return { current, historical, aging };
+}
+
+// "ESD Exempt Seller Disclosure, signed 4/12/2024, seller John Smith Family Trust"
+function vintageLabel(f) {
+  const title = [f.code, f.name].filter(Boolean).join(' ') || 'unidentified form';
+  const who = String(f.seller || '').trim();
+  const when = (f.vintage && f.vintage.signed) || '';
+  return `${title}${when ? `, signed ${when}` : ''}${who ? `, seller ${who}` : ''}`;
+}
+
+// ----------------------------------------------------------------------------
+// ONE EMAIL, ONE DRAFT.
+//
+// 2026-09-17, same delivery as above: the email had disclosures attached AND a
+// Dropbox link to more. Two Zaps were watching the same Gmail label, one for
+// attachments and one for links, and each ran the whole cycle and fired its own
+// callback. Two Gmail drafts, both replies in the same thread - and the desktop
+// Gmail UI shows only one of those, so the second was reachable only from the
+// phone app.
+//
+// The primary fix is upstream and needs no code: ONE Zap posts the attachments
+// and the body links into one batchId and calls finalize once. That is what the
+// accumulate/finalize modes were built for - see the handler's note about "the
+// body-Drive-links POST when an email has only attachments".
+//
+// This is the guarantee underneath that wiring, so a duplicated or re-run
+// workflow cannot produce a second draft on its own.
+//
+// LAST CLAIM WINS, AFTER A SHORT HOLD. Every run about to call back stamps a
+// claim for its Gmail thread, waits, then re-reads it; a run that finds a newer
+// claim stops without reconciling. Standing down is safe BECAUSE the accumulated
+// received set is merged into the deal's record before this point, so the run
+// that does call back holds strictly more than the one that yielded. The hold
+// itself is free - no model call happens during it - and the yielding run skips
+// the reconcile entirely, so it also costs less than it used to.
+//
+// Scoped to the Gmail thread id. Without one there is nothing to coordinate on
+// and the call proceeds immediately, which keeps every caller that does not pass
+// a thread id behaving exactly as before.
+//
+// The hold is TRIMMED against this invocation's remaining time. A heavy packet
+// can spend ten minutes in identify and review before reaching here, and a
+// 15-minute function that times out mid-hold produces NO draft, which is far
+// worse than two.
+//
+// NOT applied to the error callback in the handler. Claims are last-wins, so an
+// erroring run that happened to claim last would suppress a good result. An
+// error draft is rare and is the only signal a delivery failed, so it always
+// goes out.
+// ----------------------------------------------------------------------------
+const CALLBACK_HOLD_MS = Number(process.env.DISCLOSURE_CALLBACK_HOLD_MS || 120000);
+// Netlify caps a background function at 15 minutes. Keep this much back for the
+// reconcile call and the callback that follow the hold.
+const CALLBACK_HOLD_RESERVE_MS = 3 * 60 * 1000;
+const FUNCTION_BUDGET_MS = 14 * 60 * 1000;
+
+// Set at handler entry so the hold can tell how much of the invocation is left.
+let invocationStartedAt = 0;
+
+async function claimCallbackSlot(threadId, address) {
+  const thread = String(threadId || '').trim();
+  if (!thread || CALLBACK_HOLD_MS <= 0) return true;
+
+  const elapsed = invocationStartedAt ? Date.now() - invocationStartedAt : 0;
+  const hold = Math.min(CALLBACK_HOLD_MS, FUNCTION_BUDGET_MS - elapsed - CALLBACK_HOLD_RESERVE_MS);
+  if (hold <= 0) {
+    console.warn(`[disclosure-intake] ${address}: ${Math.round(elapsed / 1000)}s already spent, no room to hold `
+      + 'for another source on this email - calling back now. If a second source posts separately, '
+      + 'this email can still produce two drafts.');
+    return true;
+  }
+
+  const token = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
+  const key = `cb:${thread}`;
+  try {
+    const store = getStore(blobsConfig(STATE_STORE));
+    await store.setJSON(key, { token, address, at: Date.now() });
+    console.log(`[disclosure-intake] ${address}: callback claim ${token} on thread ${thread}, `
+      + `holding ${Math.round(hold / 1000)}s for any other source on this email`);
+    await sleep(hold);
+    const now = await store.get(key, { type: 'json' });
+    if (now && now.token && now.token !== token) {
+      console.log(`[disclosure-intake] ${address}: standing down - a later source (${now.token}) claimed `
+        + 'this thread and will send the single draft, with everything this run accumulated');
+      return false;
+    }
+    return true;
+  } catch (err) {
+    // A claim we cannot read or write must never cost a draft.
+    console.warn(`[disclosure-intake] callback claim failed (non-fatal, proceeding): ${err.message}`);
+    return true;
+  }
+}
+
 console.log('[disclosure-intake] module fully loaded, handler ready');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -868,8 +1075,20 @@ const IDENTIFY_PROMPT =
   'Local/county forms (e.g. an Orange County ' +
   'Local Area Disclosure) print their own date. Return an empty string for "revision" if the mark is unreadable or ' +
   'no revision date is printed on the form; never guess and never echo the placeholder.\n\n' +
+  'For EACH form, also read WHEN THE SELLER SIGNED IT and WHO signed as seller, and return them as ' +
+  '"signed" and "seller". "signed" is the date written or applied beside the SELLER\'S signature on that ' +
+  'form, in M/D/YYYY form; if several seller signature dates appear on one form, return the LATEST. Read the ' +
+  'date BESIDE THE SIGNATURE - never the form\'s revision stamp, never a date printed inside an answer or an ' +
+  'explanation, and never an escrow, listing or closing date. If no seller signature date is legible on the ' +
+  'form, return an empty string: never estimate one, never carry a date over from another form, and never echo ' +
+  'a date shown in these instructions or in the JSON example below. "seller" is the seller/transferor name(s) ' +
+  'exactly as printed or signed on that form, including a trust or entity name and any "as Trustee" wording; ' +
+  'empty string if not legible.\n' +
+  'These two fields are how a package from a PREVIOUS SALE of this same property is told apart from the current ' +
+  'one, which decides whether the form counts at all, so accuracy matters far more than completeness here: an ' +
+  'empty string is always better than a guess.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
-  '{"property_address":"<street, city, state, zip>","forms":[{"code":"<CODE>","name":"<full form name>","revision":"<M/YY, read from the form>"}]}';
+  '{"property_address":"<street, city, state, zip>","forms":[{"code":"<CODE>","name":"<full form name>","revision":"<M/YY, read from the form>","signed":"<M/D/YYYY beside the seller signature, or empty>","seller":"<seller name(s) as printed, or empty>"}]}';
 
 // ----------------------------------------------------------------------------
 // Step 1b — DEDICATED answer-review pass. Split out of IDENTIFY_PROMPT on purpose
@@ -1148,7 +1367,11 @@ const EMPTY_KEY_ANSWERS = { spq_7e: 'na', hoa_any_no: 'na', fire_clearance: 'na'
 // prompt or the model invalidates the cache on its own — no manual bust needed. Every cache
 // operation is swallowed on failure: a broken cache must never fail a disclosure run, it
 // just means we pay for the call like before.
-const IDENTIFY_CACHE_VERSION = 'v1';
+// v2: identify now also returns each form's seller signature date and seller name
+// (see the historical-documents section). A v1 entry has neither, so it must not be
+// reused - every undated form would read as current. The prompt text is hashed into
+// the key as well, so this is belt and braces rather than the only guard.
+const IDENTIFY_CACHE_VERSION = 'v2';
 
 function identifyCacheKey(docs) {
   const h = crypto.createHash('sha256');
@@ -1228,7 +1451,7 @@ async function identifyFormsUncached(docs) {
       const raw = await callClaude(content, 24000, docsNote('identify', working));
       const parsed = parseJson(raw);
       const forms = Array.isArray(parsed.forms) ? parsed.forms
-        .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim() }))
+        .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim(), signed: String(f.signed || '').trim(), seller: String(f.seller || '').trim() }))
         .filter((f) => f.code || f.name) : [];
       // What identify actually RETURNED. Without this the ledger records that a costly
       // call happened and nothing about its output, so a bad identification is invisible
@@ -1277,7 +1500,7 @@ async function identifyFormsFromText(doc) {
   const raw = await callClaude(content, 24000, `identify-text | ${doc.name} (${texts.length}pp text)`);
   const parsed = parseJson(raw);
   const forms = Array.isArray(parsed.forms) ? parsed.forms
-    .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim() }))
+    .map((f) => ({ code: String(f.code || '').trim(), name: String(f.name || '').trim(), revision: String(f.revision || '').trim(), signed: String(f.signed || '').trim(), seller: String(f.seller || '').trim() }))
     .filter((f) => f.code || f.name) : [];
   return { propertyAddress: String(parsed.property_address || '').trim(), forms };
 }
@@ -2194,14 +2417,30 @@ function sortFlags(list) {
 }
 
 // Merge two form lists, de-duping on code (case-insensitive), then name.
+// THE NEWER COPY OF A FORM WINS THE SLOT.
+//
+// This deduped on form code and kept the FIRST copy seen. A prior sale's TDS and
+// this seller's TDS share a code, so whichever arrived first owned the slot - and
+// when a Dropbox folder of historical disclosures was read before the attachments,
+// that was the old one. The vintage partition would then quarantine the only copy
+// of the TDS on record and report it as never received, with the current seller's
+// copy already discarded here.
+//
+// A DATED copy also beats an undated one, even when the dated copy is older: an
+// undated form reads as current by default, so keeping it would throw away the
+// one piece of evidence that could place the form in an earlier transaction.
 function mergeForms(a, b) {
-  const seen = new Set();
+  const at = new Map();
   const out = [];
   for (const f of [...(a || []), ...(b || [])]) {
+    if (!f) continue;
     const key = (f.code || f.name || '').toLowerCase();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push(f);
+    if (!key) continue;
+    if (!at.has(key)) { at.set(key, out.length); out.push(f); continue; }
+    const i = at.get(key);
+    const kept = parseSignedDate(out[i].signed);
+    const incoming = parseSignedDate(f.signed);
+    if (incoming != null && (kept == null || incoming > kept)) out[i] = f;
   }
   return out;
 }
@@ -2585,29 +2824,45 @@ async function sendCallback(callbackUrl, payload) {
 // POST the result to the callback. Shared by single-delivery mode and finalize.
 // ----------------------------------------------------------------------------
 async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}, threadId = '', droppedDocs = [], reviewIncomplete = false) {
+  // One email, one draft. Before spending anything, hold briefly and see whether
+  // another source on this same email is going to call back with more than we
+  // have. See claimCallbackSlot.
+  if (!await claimCallbackSlot(threadId, address)) return;
+
+  // What belongs to THIS sale, and what came from an earlier one. currentForms is
+  // what reconcile and every deterministic rule below consume: a prior sale's ESD
+  // must not put this deal on the exempt path, and a prior sale's TDS must not
+  // count as this seller's. See the historical-documents section.
+  const { current: currentForms, historical, aging } = partitionByVintage(received, Date.now());
+  if (historical.length) {
+    console.warn(`[disclosure-intake] ${address}: ${historical.length} form(s) signed over ${HISTORICAL_AFTER_MONTHS} `
+      + 'months ago, read as a PRIOR SALE and quarantined (not counted, not shown to the rules): '
+      + historical.map((f) => vintageLabel(f)).join('; '));
+  }
+
   let listText = (auditList && String(auditList).trim()) || '';
   if (!listText) listText = await fetchAuditListByAddress(address);
   if (!listText) throw new Error(`No audit list for "${address}" — pass auditList in the body, or add a matching row to the AUDIT_LIST_CSV_URL sheet.`);
-  const result = await reconcile(listText, received);
+  const result = await reconcile(listText, currentForms);
 
   // Exempt-seller path: an ESD retires the TDS/SPQ (and the FHDS + Residential
   // Earthquake Hazards Report) and makes the WHSD required. Deterministic backstop
   // so it always fires when an ESD is in hand, regardless of the original list.
   // Any AVID that arrives satisfies LA AVID. Runs before the exempt-seller rules
   // so both see a consistent still_needed list.
-  const avidInfo = applyAvidRule(result, received);
+  const avidInfo = applyAvidRule(result, currentForms);
   if (avidInfo.applied) {
     console.log(`[disclosure-intake] LA AVID satisfied by a received AVID: ${avidInfo.satisfied.join(', ')}`
       + `${avidInfo.note ? ` (verify added: ${avidInfo.note})` : ''}`);
   }
 
-  const eqInfo = applyEarthquakeReportRule(result, received);
+  const eqInfo = applyEarthquakeReportRule(result, currentForms);
   if (eqInfo.applied) {
     console.log('[disclosure-intake] earthquake report satisfied by the received Residential '
       + `Earthquake Risk/Hazards Disclosure: ${eqInfo.satisfied.join(', ')}`);
   }
 
-  const exemptInfo = applyExemptSellerRules(result, received);
+  const exemptInfo = applyExemptSellerRules(result, currentForms);
   if (exemptInfo.exempt) {
     console.log(`[disclosure-intake] exempt seller (ESD present): retired ${(exemptInfo.removed || []).join(', ') || '(nothing on list)'}; WHSD ${exemptInfo.whsdReceived ? 'received' : 'requested'}`);
   }
@@ -2780,6 +3035,24 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   }
   verify = verifyKept;
 
+  // Counted, but old enough to ask about. A listing that sat, or a long escrow,
+  // legitimately produces disclosures signed months before the offer, so this is a
+  // question for a person and never a reason to drop the form. See the
+  // historical-documents section for the bands.
+  for (const f of aging) {
+    verify.push({
+      item: [f.code, f.name].filter(Boolean).join(' ') || 'received form',
+      note: `signed ${f.vintage.signed}, about ${Math.round(f.vintage.months)} months ago`
+        + `${f.seller ? ` by ${f.seller}` : ''}. Confirm it belongs to THIS sale and not an earlier `
+        + 'one before relying on it',
+    });
+  }
+  if (aging.length) {
+    console.log(`[disclosure-intake] ${address}: ${aging.length} form(s) signed ${QUERY_VINTAGE_AFTER_MONTHS}`
+      + `-${HISTORICAL_AFTER_MONTHS} months ago, counted with a VERIFY line: `
+      + aging.map((f) => vintageLabel(f)).join('; '));
+  }
+
   // An explanation the seller DID write, but on a separate addendum sheet and at the ITEM level
   // (one paragraph for SPQ 7) when the form asks per SUB-item (7A / 7B / 7C).
   //
@@ -2875,9 +3148,9 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // than the current version listed in the Current Form Versions sheet, so we can
   // request the up-to-date version from the listing side.
   const formVersions = await fetchFormVersions();
-  const outdated = findOutdatedForms(received, formVersions);
+  const outdated = findOutdatedForms(currentForms, formVersions);
   const outdatedLine = (o) => `${o.name}: received ${o.received}, current ${o.current}`;
-  const revisionsRead = (received || []).filter((f) => f.revision).map((f) => `${f.code || f.name}=${f.revision}`).join(', ') || '(none read)';
+  const revisionsRead = (currentForms || []).filter((f) => f.revision).map((f) => `${f.code || f.name}=${f.revision}`).join(', ') || '(none read)';
   const versionsDebug = `versionsSheetRows=${formVersions.length} outdated=${outdated.length} | revisionsRead: ${revisionsRead}`;
   console.log(`[disclosure-intake] version check ${address}: ${versionsDebug}`);
 
@@ -2973,11 +3246,26 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
       + ' Update the master compliance list to the exempt path.'
     : '';
 
+  // Historical heads-up. Sits with the exempt alert deliberately: this is the alert
+  // that explains why the exempt one is ABSENT on a delivery that contained an ESD.
+  const historicalAlert = historical.length
+    ? `NOTE: ${historical.length} document(s) in what has been received were signed more than `
+      + `${HISTORICAL_AFTER_MONTHS} months ago and read as a PRIOR SALE of this property. They are NOT `
+      + 'counted toward this file and did NOT affect the disclosure path (an exempt-seller disclosure among '
+      + 'them does not make this an exempt deal). Request the current seller\'s versions of anything still '
+      + 'outstanding.'
+    : '';
+  if (historical.length) console.warn(`[disclosure-intake] ${address}: ${historicalAlert}`);
+
   const psComment =
     `Disclosure intake — ${address}\n` +
     `Status: ${overall} | ${present.length} of the required disclosures received; ${stillNeeded.length} to request, ${flags.length} response(s) to clarify\n\n` +
     (biwAlert ? `** ${biwAlert} **\n\n` : '') +
     (exemptAlert ? `** ${exemptAlert} **\n\n` : '') +
+    (historicalAlert ? `** ${historicalAlert} **\n\n` : '') +
+    // High, next to the alert, not down with the reference lists: this changes what
+    // the package IS, so a TC has to see it before reading anything below.
+    (historical.length ? `PRIOR SALE / HISTORICAL (not counted, request current versions):\n${bullets(historical, vintageLabel)}\n\n` : '') +
     // Order is deliberate: everything that needs a DECISION comes first (what is wrong, what a
     // human must judge, what to confirm), then what to chase, then the reference lists. VERIFY in
     // particular must sit high: the addendum-explanation routing sends real work there (17 items
@@ -3007,6 +3295,10 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
         : '') +
       (outdated.length
         ? '\nThe following were sent in an outdated version. Please send the current version:\n' + outdated.map((o) => `- ${o.name} (received ${o.received}; current ${o.current})`).join('\n') + '\n'
+        : '') +
+      (historical.length
+        ? '\nSome of the documents sent appear to be from a previous sale of this property, so we have set '
+          + 'those aside. Please send the current seller\'s versions of anything listed above.\n'
         : '') +
       (reviseFlags.length
         ? '\nPlease revise or complete the following disclosures:\n' + reviseFlags.map((f) => `- ${reviseLine(f)}`).join('\n') + '\n'
@@ -3084,6 +3376,10 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     biw_alert: biwAlert,
     exempt_seller: exemptInfo.exempt ? 'yes' : 'no',
     exempt_alert: exemptAlert,
+    historical_count: historical.length,
+    historical_alert: historicalAlert,
+    historical_text: historical.map(vintageLabel).join('; '),
+    historical_lines: historical.map(vintageLabel).join('\n'),
     context_debug: debugContext,
     versions_debug: versionsDebug,
     summary: result.summary || '',
@@ -3101,14 +3397,24 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     // Empty (not an empty <p>) when there is nothing to chase, so the Zap's followup_count check
     // still behaves.
     chase_email_body_html: chaseEmailBody ? commentToHtml(chaseEmailBody) : '',
-    result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, confirmed: confirmedReadings, verify, not_applicable: na, response_flags: flags, outdated_versions: outdated },
+    result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, confirmed: confirmedReadings, verify, not_applicable: na, response_flags: flags, outdated_versions: outdated, historical: historical.map(vintageLabel) },
   };
 
-  console.log(`[disclosure-intake] ${address}: ${overall} — ${stillNeeded.length} to request, ${flags.length} response flag(s), ${preparedByUs.length} prepared by us`);
+  console.log(`[disclosure-intake] ${address}: ${overall} — ${stillNeeded.length} to request, ${flags.length} response flag(s), `
+    + `${preparedByUs.length} prepared by us, ${historical.length} quarantined as prior-sale`);
   await sendCallback(callback, payload);
 }
 
+// Exposed for checks/vintage-partition.js, following lib/skip-gate.js's _internal
+// convention. Netlify only reads exports.handler, so this is inert in production -
+// and the vintage bands decide whether a disclosure counts at all, which is not a
+// thing to leave provable only by deploying and emailing a package at it.
+module.exports._internal = { parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules };
+
 exports.handler = async function (event) {
+  // How much of this invocation is left is what decides whether the one-draft hold
+  // can afford to run. See claimCallbackSlot.
+  invocationStartedAt = Date.now();
   // Parsed through lib/parse-body rather than a bare JSON.parse so that (a) a
   // base64 or form-encoded body is RECOVERED instead of rejected, and (b) when
   // the body genuinely cannot be parsed the log NAMES THE CAUSE. The previous
@@ -3186,7 +3492,7 @@ exports.handler = async function (event) {
       await store.setJSON(key, { address, received, updatedAt: Date.now() });
       console.log(`[disclosure-intake] finalize ${address}: merged ${batchForms.length} from ${slotKeys.length} slot(s) -> ${received.length} total`);
       for (const k of slotKeys) { try { await store.delete(k); } catch (e) { /* cleanup best-effort */ } }
-      await reconcileAndCallback(address, received, auditList, callback, batchFlags, batchKeyAnswers);
+      await reconcileAndCallback(address, received, auditList, callback, batchFlags, batchKeyAnswers, gmailThreadId);
       return { statusCode: 200 };
     }
 
