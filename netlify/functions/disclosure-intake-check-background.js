@@ -570,6 +570,20 @@ const { PDF_MAGIC, looksZip, hasCentralDirectory, collectPdfs, summarizeCollect 
 
 // Filenames we never want to send to the model (big non-disclosure reports +
 // invoices). Mirrors the Zapier Code-step BLOCK list, plus invoice.
+// ACCOUNT RECORDS AND CORRESPONDENCE, added 2026-09-15 off the 1428 El Paso
+// ledger. A whole-folder share link put ten PDFs into one identify request at
+// $1.31 — the most expensive call of the run — and "Tesla Lease Purchase
+// Inquiry.pdf" and "Tesla Lease Statement.pdf" were in it. A lease billing
+// statement and a buy-out inquiry are account records, not disclosures. The
+// solar LEASE and its amendment are disclosable and are deliberately NOT
+// matched here.
+//
+// DELIBERATELY NARROW. "statement" on its own is unusable: it appears in
+// "Real Estate Transfer Disclosure STATEMENT" (the TDS), "Residential
+// Earthquake Risk Disclosure Statement" and "Water Heater and Smoke Detector
+// Statement of Compliance". So it is only matched as "lease statement".
+const RECORD_NAME = /(\binquir(?:y|ies)\b|lease\s*statement|\bbilling\s*statement\b|\bstatement\s*of\s*account\b)/i;
+
 const BLOCK_NAME = /(previous\s*home\s*inspection|home\s*inspection|inspection\s*report|\binspection\b|termite|wood\s*destroying|sewer|\broof\b|chimney|\bpool\b|\bspa\b|hvac|geolog|\bsoils?\b|\bsurvey\b|appraisal|invoice|\bphotos?\b)/i;
 
 // Informational booklets. These are pure boilerplate: IDENTIFY_PROMPT explicitly
@@ -591,7 +605,7 @@ const NEVER_BLOCK = /(\bavid\b|agent\s*visual\s*inspection|buyer'?s?\s*inspectio
 
 function isBlockedName(name) {
   const n = name || '';
-  return (BLOCK_NAME.test(n) || BOOKLET_NAME.test(n)) && !NEVER_BLOCK.test(n);
+  return (BLOCK_NAME.test(n) || BOOKLET_NAME.test(n) || RECORD_NAME.test(n)) && !NEVER_BLOCK.test(n);
 }
 
 // Diagnostic: short, log-safe description of what we actually fetched.
