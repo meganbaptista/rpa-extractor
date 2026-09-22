@@ -203,6 +203,12 @@ const ROSTER = [
       + 'start working with me on this?", "I have a new one for you"), even when the email is '
       + 'addressed to Megan by name. Belle opens and sets up the new file first, then hands it '
       + 'to Megan — so route it to BELLE, not Megan. '
+      + 'THE SELLER DISCLOSURE PACKAGE GOING OUT FOR THE FIRST TIME is Belle\'s too, not '
+      + 'Ethan\'s — an agent asking us to GENERATE or SEND disclosures to the sellers, whether '
+      + 'or not they supply the sellers\' names and email addresses, and whether the deal is at '
+      + '"expecting multiple offers for our listing" or "return them with counter offers" '
+      + 'stage. Being handed the seller contacts means the package still needs sending; it does '
+      + 'NOT make it Ethan\'s. Belle sets up the file and sends the initial package. '
       + 'Rejected offers. Inspection REPORTS/receipts when a PDF is '
       + 'attached or LINKED (general, termite, HVAC, roof, mold, plumbing, geo, etc.).',
   },
@@ -243,7 +249,11 @@ const ROSTER = [
       + 'SELLER-SIDE document-status questions: confirming what is still outstanding / needed '
       + 'on the SELLER\'s file, whether the seller has signed, or where the seller should '
       + 'find/sign documents (e.g. in DocuSign) — a seller-side file/document audit. (This is '
-      + 'NOT a Purchase Contract Audit, which is Allana.)',
+      + 'NOT a Purchase Contract Audit, which is Allana.) '
+      + 'NOT ETHAN\'S: the seller disclosure package GOING OUT for the first time. A request to '
+      + 'GENERATE or SEND disclosures to the sellers is new-listing / new-deal intake -> BELLE, '
+      + 'EVEN WHEN the agent supplies the sellers\' names and email addresses. Ethan picks it up '
+      + 'once it COMES BACK.',
   },
   {
     name: 'Edelyn',
@@ -373,7 +383,8 @@ const ROUTING_NOTES = [
   'STRONG PRIOR from sub-labels: if a "Buyer Disclosures" sub-label is present the handler is USUALLY Edelyn; if a "Seller Signed Disclosures" sub-label is present it is USUALLY Ethan. Follow this unless the content clearly indicates a different person.',
   'The abbreviation "RFR" is AMBIGUOUS — read the context: "Receipt for Reports" (acknowledging/signing receipt of the inspection/disclosure REPORTS — part of the disclosure flow, e.g. "signed the RFR for the reports") routes by disclosure SIDE: seller-side (e.g. a "Seller Signed Disclosures" thread) -> Ethan, buyer-side -> Edelyn. That is DIFFERENT from "Request for Repairs" (RR / RRRR — negotiating repairs) -> Jill. Do not send a Receipt-for-Reports email to Jill.',
   'VP / VOP / final walk-through: if ATTACHED requesting the SELLER signature -> Ethan; if someone is requesting us to SEND the VP/VOP -> Edelyn.',
-  'Disclosures: "for the SELLER to sign" or fully-executed-by-buyer packages we receive -> Ethan; "for the BUYER to sign" (package to send the buyer) -> Edelyn.',
+  'Disclosures: "for the SELLER to sign" or fully-executed-by-buyer packages we receive -> Ethan; "for the BUYER to sign" (package to send the buyer) -> Edelyn. BUT see the new-file exception in the next rule before sending a seller-disclosure request to Ethan.',
+  'EXCEPTION to the disclosure-side rule — THE SELLER DISCLOSURE PACKAGE GOING OUT FOR THE FIRST TIME IS BELLE, NOT ETHAN. DIRECTION decides it: the package being CREATED and SENT OUT to the sellers is new-listing / new-deal intake -> BELLE; anything COMING BACK is Ethan. Any ONE of these tells is enough: the agent asks us to \'generate disclosures\' / \'generate the disclosure package\' / \'send disclosures to the sellers\'; the agent SUPPLIES the sellers\' names and email addresses so we can send it; we do NOT have the sellers\' contacts yet (\'[name] will follow up with the sellers\' email addresses\'); or the deal is PRE-ACCEPTANCE (\'expecting multiple offers for our listing\', \'so we can return them with counter offers\'), so there is no escrow. IMPORTANT: being GIVEN the seller contact details does NOT make it Ethan\'s — it is the STRONGEST sign the package still needs sending. Ethan owns the seller-disclosure flow only ONCE IT COMES BACK: signed packages, DocuSign \'Completed:\' envelopes, chasing seller signatures, the seller\'s RFR, seller-side document-status questions. Two real examples that MUST route to BELLE, both from listing agents (the first misrouted to Ethan at 0.85 on 2026-09-21): subject \'Seller Disclosures | [address]\' — \'[name] will follow up with the sellers\' email addresses, but we would love to get disclosures sent to them today so that we can return them with counter offers\'; and subject \'Disclosures for [address]\' — \'We are expecting multiple offers for our listing at [address]. Please generate disclosures. Sellers are: [name] [email], [name] [email].\'',
   'LETTERHEAD / SOURCE is a strong signal. A document on the ESCROW COMPANY\'s letterhead (escrow instructions, escrow amendments, escrow statements — the escrow office\'s own paperwork) -> Belle. A CAR (California Association of Realtors) form is contract paperwork -> its owner: addenda / amendments -> Jill; disclosures -> Ethan or Edelyn by side.',
   'AMENDMENTS split by WHO issues them: amended ESCROW INSTRUCTIONS issued/returned by the ESCROW OFFICER (escrow-company paperwork — amended instructions, an escrow amendment for a price reduction, amended commission instructions) -> Belle. CONTRACT-side amendments on CAR forms requested or sent by an AGENT (CAR addendum, a CAR Purchase Price Amendment form, seller credit addendum, AOAA) -> Jill. So the SAME price reduction is Belle when it arrives as the escrow officer\'s amended instructions, but Jill when an agent sends a CAR Purchase Price Amendment form.',
   'Commission: the commission AMOUNT / amended-revised commission from an agent -> Belle; a commission QUESTION or concern -> Belle; amended commission INSTRUCTIONS from escrow -> Belle (Belle owns all escrow-officer amended instructions).',

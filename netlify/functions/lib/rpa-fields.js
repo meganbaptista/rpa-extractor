@@ -175,6 +175,33 @@ If no Property Profile is provided, fall back to MLS or RPA paragraph 33 signatu
       seller_agent_email_2: { type: "string", description: "Co-listing agent email (CoLA EMAIL from MLS). Empty if no co-listing agent." },
       seller_agent_phone: { type: "string", description: "Seller agent phone number." },
 
+      // ─── AGENCY CONFIRMATION (RPA PAGE 1, PARAGRAPH 2) ────────────────────
+      // WHAT THE SELLER/BUYER AGENT FIELDS ABOVE DELIBERATELY DO NOT READ.
+      // Those come from the page-17 brokers section, which is where the agents
+      // actually sign and is therefore right. Paragraph 2B is where the agents
+      // TYPE who represents whom, and it is wrong often enough that C.A.R.
+      // publishes a form (the AC) whose only job is to correct it. Keeva
+      // compares these against its own verified DRE records and asks for an AC
+      // when they disagree, so these fields must report paragraph 2B VERBATIM,
+      // mistakes included. Never reconcile them against the brokers section.
+      // 2B is four lines, each with a name, a license number and a two-way box:
+      //   Seller's Brokerage Firm / Seller's Agent / Buyer's Brokerage Firm /
+      //   Buyer's Agent. 2C is a separate two-box line below them.
+      agency_2b_seller_firm_name: { type: "string", description: "RPA PAGE 1 paragraph 2B only: the firm typed on the 'Seller's Brokerage Firm' line of the AGENCY CONFIRMATION. Copy it VERBATIM even if it disagrees with the page-17 brokers section or the MLS - a mismatch is the finding, not an error to fix. Empty string if the line is blank or unreadable. Do NOT source from page 17." },
+      agency_2b_seller_firm_dre: { type: "string", description: "RPA PAGE 1 paragraph 2B only: the license number on the 'Seller's Brokerage Firm' line, verbatim, digits as typed. Wrong numbers here are expected and must be reported as-is. Empty string if blank. Do NOT source from page 17." },
+      agency_2b_seller_firm_role: { type: "string", description: "RPA PAGE 1 paragraph 2B, 'Seller's Brokerage Firm' line: which of the two boxes is ticked. Return exactly 'Dual' for the 'both the Buyer/Tenant and Seller/Housing Provider (dual agent)' box, 'Single' for the 'the Seller/Housing Provider' box, or an empty string if neither is ticked or you cannot tell. Never guess from whether the firms look the same." },
+      agency_2b_seller_agent_name: { type: "string", description: "RPA PAGE 1 paragraph 2B only: the name typed on the \"Seller's Agent\" line, verbatim. Two agents may share the line, slash-joined - keep both. Empty string if blank. Do NOT source from page 17 or the MLS." },
+      agency_2b_seller_agent_dre: { type: "string", description: "RPA PAGE 1 paragraph 2B only: the license number on the \"Seller's Agent\" line, verbatim. Two numbers may be slash-joined - keep both, in the order typed. Empty string if blank." },
+      agency_2b_seller_agent_role: { type: "string", description: "RPA PAGE 1 paragraph 2B, \"Seller's Agent\" line: 'Dual' for the 'both the Buyer's/Tenant's and Seller's/Housing Provider's Agent (dual agent)' box, 'Single' for the \"the Seller's/Housing Provider's Agent\" box, empty string if neither." },
+      agency_2b_buyer_firm_name: { type: "string", description: "RPA PAGE 1 paragraph 2B only: the firm typed on the 'Buyer's Brokerage Firm' line, verbatim. Empty string if blank. Do NOT source from page 17." },
+      agency_2b_buyer_firm_dre: { type: "string", description: "RPA PAGE 1 paragraph 2B only: the license number on the 'Buyer's Brokerage Firm' line, verbatim. Empty string if blank." },
+      agency_2b_buyer_firm_role: { type: "string", description: "RPA PAGE 1 paragraph 2B, 'Buyer's Brokerage Firm' line: 'Dual' for the 'both the Buyer/Tenant and Seller/Housing Provider (dual agent)' box, 'Single' for the 'the Buyer/Tenant' box, empty string if neither." },
+      agency_2b_buyer_agent_name: { type: "string", description: "RPA PAGE 1 paragraph 2B only: the name typed on the \"Buyer's Agent\" line, verbatim. Two agents may share the line, slash-joined - keep both. Empty string if blank. Do NOT source from page 17." },
+      agency_2b_buyer_agent_dre: { type: "string", description: "RPA PAGE 1 paragraph 2B only: the license number on the \"Buyer's Agent\" line, verbatim. Two numbers may be slash-joined - keep both. Empty string if blank." },
+      agency_2b_buyer_agent_role: { type: "string", description: "RPA PAGE 1 paragraph 2B, \"Buyer's Agent\" line: 'Dual' for the 'both the Buyer's/Tenant's and Seller's/Housing Provider's Agent (dual agent)' box, 'Single' for the \"the Buyer's/Tenant's Agent\" box, empty string if neither." },
+      agency_2c_seller_multiple: { type: "string", description: "RPA PAGE 1 paragraph 2C, 'More than one Brokerage represents': whether the Seller box is ticked. Return 'Yes', 'No' for present-and-unticked, or an empty string if paragraph 2C does not appear on this form (it is new in the 12/25 revision) or you cannot tell. An unticked box is a real finding - report 'No', not empty." },
+      agency_2c_buyer_multiple: { type: "string", description: "RPA PAGE 1 paragraph 2C, 'More than one Brokerage represents': whether the Buyer box is ticked. Return 'Yes', 'No' for present-and-unticked, or an empty string if 2C is absent from this form or you cannot tell." },
+
       // ─── ESCROW / TITLE / HOA ─────────────────────────────────────────────
       escrow_company: { type: "string", description: "Escrow holder/company from RPA paragraph 3Q(7) 'Escrow Holder:' field. May be 'Seller's Choice' or 'Buyer's Choice' if not yet selected." },
       escrow_officer_name: { type: "string", description: "Named escrow officer if specified. Empty if not yet assigned." },
