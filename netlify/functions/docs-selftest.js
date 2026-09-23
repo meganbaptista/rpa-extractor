@@ -83,7 +83,24 @@ exports.handler = async function (event) {
     note('create a scratch Doc', created.ok ? 'ok' : 'FAILED',
       created.ok ? created.body.documentId : JSON.stringify(created.body).slice(0, 400));
     if (!created.ok) {
-      return json({ verdict: 'The Docs API is NOT authorised for this credential.', steps });
+      /**
+       * TELL THE TWO 403s APART. "The API is switched off for this project" and
+       * "this credential may not do that" are both PERMISSION_DENIED, and they
+       * need completely different fixes - one is a toggle in the Cloud console,
+       * the other is a delegation scope. The first run hit the toggle and the
+       * verdict called it an authorisation problem, which pointed at the wrong
+       * console entirely.
+       */
+      const msg = JSON.stringify(created.body);
+      const disabled = /has not been used in project|is disabled/i.test(msg);
+      const project = (msg.match(/project (\d+)/) || [])[1] || '';
+      return json({
+        verdict: disabled
+          ? 'The Docs API is switched OFF for this Google Cloud project. Nothing is wrong with the credential - the token minted fine. Enable it and re-run: ' +
+            `https://console.developers.google.com/apis/api/docs.googleapis.com/overview?project=${project}`
+          : 'The credential is not authorised for the Docs API. This is a delegation scope, not the API toggle.',
+        steps,
+      });
     }
     scratchId = created.body.documentId;
 

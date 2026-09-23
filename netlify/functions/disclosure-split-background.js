@@ -44,6 +44,7 @@ const drive = require('./lib/drive');
 const { EVENTS, makeEvent, publish } = require('./lib/events');
 const usageLog = require('./lib/usage-log');
 const { parseRequestBody } = require('./lib/parse-body');
+const { alert } = require('./lib/alert');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-opus-4-8';
@@ -534,17 +535,45 @@ exports.handler = async function (event) {
     // 4) Split + name + upload each form.
     const results = [];
     const coveredPages = new Set();
+    const failedForms = [];
     for (const form of forms) {
-      form.pages.forEach((p) => coveredPages.add(p));
       const status = statusSuffix(form);
       const label = formLabel(form);
       const base = `${label} - ${status}`;
       const filename = uniqueName(base, taken);
       const bytes = await extract(form.pages);
-      if (!bytes) { console.warn(`[disclosure-split] ${label}: no valid pages, skipped`); continue; }
+      if (!bytes) {
+        console.warn(`[disclosure-split] ${label}: no valid pages, skipped`);
+        failedForms.push({ label, pages: form.pages });
+        continue;
+      }
       const uploaded = await drive.uploadMultipart({ name: filename, parents: [propertyFolderId], mimeType: 'application/pdf', bytes });
+      /**
+       * PAGES COUNT AS COVERED ONLY ONCE A FILE EXISTS.
+       *
+       * THE SILENT LOSS THIS FIXES. These four lines used to run FIRST, before
+       * the build — so a form whose PDF failed to build had already been
+       * marked covered, produced no file, and its pages never reached the
+       * Unsorted guard below. The page left no file and no warning anybody
+       * would see: a console line in a background function.
+       *
+       * Megan hit it on 700 S Abel St, 2026-09-23: "the AI run missed the
+       * Earthquake Booklet Receipt FX which was in this PDF, but didn't get
+       * placed in the Google Drive so I had to go back and manually grab it."
+       * There was no Unsorted file either, which is how we know the page was
+       * claimed and then dropped rather than never recognised.
+       *
+       * Coverage is now a statement about FILES ON DISK, which is the only
+       * version of it worth anything: the compliance writer downstream reads
+       * the folder, so a page with no file must show up as still needed.
+       */
+      form.pages.forEach((p) => coveredPages.add(p));
       results.push({ code: form.code, name: form.name, status, filename, fileId: uploaded.id, pages: form.pages });
       console.log(`[disclosure-split] wrote "${filename}" (pages ${form.pages.join(',')})`);
+    }
+    if (failedForms.length) {
+      console.warn(`[disclosure-split] ${failedForms.length} form(s) failed to build and fall through to Unsorted: ` +
+        failedForms.map((f) => `${f.label} (pages ${f.pages.join(',')})`).join('; '));
     }
 
     // Any pages no form claimed -> one Unsorted file for manual review, flagged.
@@ -573,17 +602,81 @@ exports.handler = async function (event) {
     }
 
     // 6) Mark done + emit disclosure.split for downstream consumers.
-    await done.setJSON(eventId, { at: new Date().toISOString(), files: results.map((r) => r.filename) });
+    /**
+     * THE SPLIT SAYS WHETHER IT WAS COMPLETE, and every consumer needs that.
+     *
+     * `complete` is false when any page of the source produced no file -
+     * because a form failed to build, or because nothing claimed those pages.
+     * The compliance writer downstream DELETES lines off a Google Doc when it
+     * sees a file, so it has to know when the folder it is reading is not the
+     * whole package: an incomplete split can only ever leave a line saying
+     * "still needed" that should have gone, which is the safe direction, but a
+     * TC deserves to be told rather than left to notice.
+     */
+    const coverage = {
+      pageCount,
+      filed: results.length,
+      unsortedPages,
+      failedForms,
+      complete: unsortedPages.length === 0 && failedForms.length === 0,
+    };
+    await done.setJSON(eventId, {
+      at: new Date().toISOString(),
+      files: results.map((r) => r.filename),
+      coverage,
+    });
+    /**
+     * AN INCOMPLETE SPLIT HAS TO REACH A PERSON.
+     *
+     * Megan, 2026-09-23: "we need to notify somehow that there was an error."
+     * The Earthquake Booklet Receipt was lost silently on 700 S Abel St and
+     * the only trace was a console line in a background function - which is
+     * the same as no trace. A page that produced no file is a form nobody has,
+     * and downstream the compliance Doc will simply go on saying it is still
+     * needed, which is correct but says nothing about WHY.
+     *
+     * THROTTLED PER DEAL, not globally: the key carries the property folder so
+     * one troubled package cannot mask a different deal's problem, and a
+     * re-drop of the same package does not ping twice within the window.
+     */
+    if (!coverage.complete) {
+      const where = location.propertyFolderName || propertyFolderId;
+      const parts = [];
+      if (failedForms.length) {
+        parts.push(
+          `${failedForms.length} form(s) could not be built: ` +
+          failedForms.map((f) => `${f.label} (page ${f.pages.join(', ')})`).join('; '),
+        );
+      }
+      if (unsortedPages.length) {
+        parts.push(`page(s) ${unsortedPages.join(', ')} matched no form`);
+      }
+      await alert(
+        `split-incomplete:${where}`,
+        `${source.fileName} in ${where}: ${parts.join(' — ')}. ` +
+        (unsorted
+          ? `Those pages are in "${unsorted.filename}" — name and file them by hand.`
+          : 'Those pages produced NO file at all — re-drop the package.') +
+        ` The compliance list will keep asking for anything that did not land.`,
+      );
+    }
+
     const splitEvent = makeEvent(EVENTS.DISCLOSURE_SPLIT, {
       id: eventId,
       source,
       location,
       split: results,
       unsorted,
+      coverage,
     });
     await publish(splitEvent);
 
-    console.log(`[disclosure-split] complete — ${results.length} form(s) filed to ${location.propertyFolderName || propertyFolderId}` + (unsorted ? `, ${unsortedPages.length} page(s) unsorted` : ''));
+    console.log(
+      `[disclosure-split] ${coverage.complete ? 'complete' : 'INCOMPLETE'} — ${results.length} form(s) filed to ` +
+      `${location.propertyFolderName || propertyFolderId}` +
+      (unsortedPages.length ? `, ${unsortedPages.length} page(s) unsorted` : '') +
+      (failedForms.length ? `, ${failedForms.length} form(s) failed to build` : ''),
+    );
     return { statusCode: 200 };
   } catch (err) {
     console.error('[disclosure-split] ERROR:', err.message);

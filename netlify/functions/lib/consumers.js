@@ -27,7 +27,9 @@ const CONSUMERS = [
   // per-form file ids) — that cascade is how the ORDERED steps run without a
   // central orchestrator.
   { name: 'signature-verify', fn: 'disclosure-sigverify-background',  events: ['disclosure.split'],    enabled: false },
-  { name: 'compliance',       fn: 'disclosure-compliance-background', events: ['disclosure.split'],    enabled: false },
+  // Enabled 2026-09-23. PREVIEW ONLY until COMPLIANCE_DOC_WRITE=true — it
+  // reports what it would change to the alert hook and touches no Doc.
+  { name: 'compliance',       fn: 'disclosure-compliance-background', events: ['disclosure.split'],    enabled: true  },
   { name: 'email-draft',      fn: 'disclosure-email-background',      events: ['disclosure.split'],    enabled: false },
   { name: 'timeline',         fn: 'disclosure-timeline-background',   events: ['disclosure.uploaded'], enabled: false },
 ];
