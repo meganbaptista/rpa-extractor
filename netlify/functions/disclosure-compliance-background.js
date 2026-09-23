@@ -127,7 +127,7 @@ exports.handler = async function (event) {
       console.warn(`[disclosure-compliance] no compliance Doc URL for "${address}"`);
       await alert(`compliance-doc-missing:${address}`,
         `No compliance Doc URL in the master sheet for "${address}", so its list cannot be updated. ` +
-        'Add the Doc link to that row (column F).');
+        'Add the Doc link to that row (column F).', { source: 'disclosure-pipeline', label: 'Disclosure Pipeline' });
       return { statusCode: 200 };
     }
 
@@ -151,7 +151,7 @@ exports.handler = async function (event) {
        * not a recurring fault condition being throttled - it is one deal's
        * result, and suppressing it would look like the pipeline did nothing.
        */
-      await alert(`compliance-preview:${address}`, report, { force: true });
+      await alert(`compliance-preview:${address}`, report, { force: true, ...{ source: 'disclosure-pipeline', label: 'Disclosure Pipeline' } });
       if (eventId) await done.setJSON(doneKey, { at: new Date().toISOString(), previewed: changes.length });
       return { statusCode: 200 };
     }
@@ -159,12 +159,13 @@ exports.handler = async function (event) {
     // Writing is enabled — but the write itself is the next brick. Until it
     // exists, say so plainly rather than silently behaving like preview.
     await alert(`compliance-write-unbuilt:${address}`,
-      'COMPLIANCE_DOC_WRITE is true but the Doc writer is not built yet, so nothing was changed.\n\n' + report);
+      'COMPLIANCE_DOC_WRITE is true but the Doc writer is not built yet, so nothing was changed.\n\n' + report,
+      { source: 'disclosure-pipeline', label: 'Disclosure Pipeline' });
     return { statusCode: 200 };
   } catch (err) {
     console.error('[disclosure-compliance] ERROR:', err.message);
     await alert(`compliance-failed:${address}`,
-      `Could not update the compliance list for ${address}: ${err.message}`);
+      `Could not update the compliance list for ${address}: ${err.message}`, { source: 'disclosure-pipeline', label: 'Disclosure Pipeline' });
     return { statusCode: 500 };
   }
 };

@@ -28,8 +28,8 @@ function store() {
 // Fire an alert for `key`, at most once per throttle window. `key` groups a
 // recurring condition (e.g. "deal-list") so it doesn't spam. Returns whether it
 // actually sent this time.
-async function alert(key, message, { throttleMs = DEFAULT_THROTTLE_MS, force = false } = {}) {
-  const line = `[ROUTER ALERT] ${key}: ${message}`;
+async function alert(key, message, { throttleMs = DEFAULT_THROTTLE_MS, force = false, source = 'email-router', label = 'Email Router' } = {}) {
+  const line = `[${label.toUpperCase()} ALERT] ${key}: ${message}`;
   try { console.error(line); } catch (_) { /* noop */ }
 
   const now = Date.now();
@@ -54,8 +54,23 @@ async function alert(key, message, { throttleMs = DEFAULT_THROTTLE_MS, force = f
         // `text` renders directly in a Slack incoming webhook; the structured
         // fields are there for a Zapier catch-hook to map into an email/Slack.
         body: JSON.stringify({
-          text: `🚨 Email Router alert — ${key}: ${message}`,
-          source: 'email-router',
+          /**
+           * SAY WHAT THIS ACTUALLY IS.
+           *
+           * Both fields were hardcoded to the Email Router, which was true
+           * when this module had one caller. It now serves the disclosure
+           * pipeline too, and Megan's Zapier catch-hook branches on nothing —
+           * so a compliance preview arrived titled "Email Router Alert" and
+           * with the router's own canned explanation appended: "This means
+           * that it could not find a escrow in our MTC Information google
+           * sheet." True of a router alert, nonsense about a Google Doc.
+           *
+           * `source` is the field to branch a Zap on; `label` is what a human
+           * reads. Both default to the router so the existing caller and its
+           * Zap are unchanged.
+           */
+          text: `🚨 ${label} alert — ${key}: ${message}`,
+          source,
           key,
           message,
           at: new Date().toISOString(),

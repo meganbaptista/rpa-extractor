@@ -53,7 +53,26 @@ const PDF_MAGIC = Buffer.from('%PDF');
 const DONE_STORE = 'disclosure-split-done';
 
 // Fixed party order for the filename status suffix.
-const SIGNER_ORDER = ['B', 'S', 'BA', 'LA'];
+const SIGNER_ORDER = ['B', 'S', 'BA', 'LA', 'BR'];
+
+/**
+ * How a missing party reads in a filename.
+ *
+ * ONE DIALECT, HERS. The splitter used to write `NB`, `NS+LA`, `NBA` while
+ * Megan hand-typed `NeedSS`, `NeedLA`, `NeedBA`, `NeedSS+LA` — two spellings
+ * of the same fact in one folder, and her `NeedSS+LA` maps exactly onto the
+ * machine's `NS+LA`, so there was never a reason for both. Switched
+ * 2026-09-23 at her word, with `NEEDB` for the buyer: "we can do that switch.
+ * use NEEDB."
+ *
+ * The broker is words rather than an initial because their absence is a
+ * different chase — not the agent forgetting, but a second person to ask.
+ *
+ * OLD FILENAMES KEEP THEIR OLD SUFFIXES and are still understood: the
+ * compliance reconcile reads both dialects, and renaming what is already
+ * filed would break nothing but would rewrite history for no gain.
+ */
+const NEED_WORD = { B: 'NEEDB', S: 'NeedSS', BA: 'NeedBA', LA: 'NeedLA', BR: 'NeedBroker(s)' };
 
 // Rasterization settings for the per-page image fallback (see renderAllPages).
 const RENDER_SCALE = 2.0;      // 2x = ~144dpi, legible for a signed form
@@ -173,12 +192,13 @@ const ANALYZE_PROMPT =
   'ADDENDUM (an amendment or continuation that is NOT text overflow): identify the PARENT form it amends or continues, the same way. Two kinds. (a) A C.A.R. Form ADM: its header reads "ADDENDUM No. ___" and "(C.A.R. Form ADM...)". Read the checkbox row near the top to see what it amends — "Purchase Agreement", "Transfer Disclosure Statement", a lease, or "Other ___" — and confirm against the section codes referenced in its body. Set "code" to "ADM", "name" to "Addendum", "parent_code" to the parent\'s CAR code (use "TDS" for the Transfer Disclosure Statement, "SPQ" for the Seller Property Questionnaire, "RPA" for the Purchase Agreement), and "doc_no" to the number printed after "ADDENDUM No." (e.g. "1"; use "" if blank). (b) A custom continuation sheet with NO CAR code whose title is "Addendum to <form>" (e.g. "Addendum to Seller Property Questionnaire") and whose body is keyed to that form\'s sections — set "code" to "", keep its printed "name", set "parent_code" to that parent form\'s CAR code (e.g. "SPQ"), and leave "doc_no" as "" (these are not numbered). Return each addendum as its OWN form with its own pages and its own signature audit — do NOT fold it into another form (only TOA overflow sheets are merged downstream). For every form that is neither a TOA nor an addendum, set both "parent_code" and "doc_no" to "".\n' +
   'COUNTER OFFER (purchase-agreement packages): C.A.R. Forms BCO (Buyer Counter Offer), SCO (Seller Counter Offer) and SMCO (Seller Multiple Counter Offer) are NUMBERED and a package often holds several. Set "code" to the printed code (BCO/SCO/SMCO), "name" to the full form name, and "doc_no" to the number printed after "No." in its title (e.g. "1"; use "" if blank). Leave "parent_code" blank — a counter is its own document, not an amendment of another form. Return each counter as its own form; do NOT merge two counters even when they are the same code.\n' +
   'Booklet receipt: a page that acknowledges RECEIPT of the environmental-hazards / earthquake-safety booklet(s) (the "Homeowner\'s Guide to Environmental Hazards and Earthquake Safety", and/or the HERS / lead-paint booklets) IS a distinct form — the standard C.A.R. receipt OR a custom brokerage equivalent (e.g. a "Receipt for Links to Booklets" page, or any page acknowledging receipt of those booklets). Carve it out as its own form and DO NOT leave it unassigned: set "code" to "" (it has no standard short CAR code) and "name" to exactly "EQ Booklet Receipt". CRITICAL: the informational BOOKLET itself (the multi-page guide) is NOT this receipt — only a signed/signable acknowledgment-of-receipt page is.\n' +
+  '  TWO COPIES ON ONE PAGE: this receipt is very often printed TWICE on the same sheet, one acknowledgement above the other, separated by a dashed cut line. They are NOT duplicates - the upper block is signed by the BUYER side (its lines read "(Buyer\'s signature)" and "(Buyer\'s Agent\'s signature)") and the lower block by the SELLER side ("(Seller\'s signature)", "(Seller\'s Agent\'s signature)"). AUDIT BOTH BLOCKS. A sheet where the seller half is fully signed and the buyer half is entirely blank is NOT complete: required_signers includes the parties named on BOTH blocks, and present_signers only those who actually signed. Read the party label printed UNDER each signature line to decide whose block it is, never the position on the page. A "(Broker\'s name)" line on this form is a printed firm name, not a signature - ignore it.\n' +
   'MLS printout and Property Profile: two NON-CAR documents that commonly ride along inside a signed disclosure package. Each is a distinct form — carve it out and DO NOT leave it unassigned.\n' +
   '  - MLS printout: an MLS listing detail sheet for the subject property. Tells: an MLS report header/footer such as "Customer Full", "Agent Full" or "Client Full", a "Listing ID" or "MLS #", a "Printed:" timestamp, the MLS/association name, listing photos, and "Facts & Features" / Interior / Exterior bullet sections. Set "code" to "" (it has no CAR code) and "name" to exactly "MLS".\n' +
   '  - Property Profile: a title- or data-vendor property report for the subject property (e.g. a CoreLogic "Property Details" report, or a title company profile). Tells: an APN and/or CLIP, and sections like OWNER INFORMATION, COMMUNITY INSIGHTS, LOCATION INFORMATION, TAX INFORMATION, ASSESSMENT & TAX, LAST MARKET SALE & SALES HISTORY, MORTGAGE HISTORY, PROPERTY MAP. Set "code" to "" and "name" to exactly "Property Profile".\n' +
   '  Both usually span SEVERAL pages. Follow the document\'s own page counter (e.g. a "Page 1/4" ... "Page 4/4" footer) and its repeated header/footer through to its LAST page — never return just its first page. Neither carries CAR signature lines: their only marks are initials, typically a DocuSign initial/signature tag in a top corner of the first page, and WHO initials varies (the seller, the buyers, or both). So for these two ONLY, do not reason about who was required to sign. Just report who actually marked it: set "present_signers" to every party that left ANY initial or signature mark anywhere on the document, and set "required_signers" to that exact same set. If there is no initial or signature mark anywhere on the document, set BOTH to [].\n\n' +
-  '2) SIGNATURE AUDIT. For EACH form determine who has signed/initialed everywhere that form requires. The four possible parties are: B = Buyer, S = Seller, BA = Buyer\'s Agent, LA = Listing/Seller\'s Agent. A line labelled "Broker", "Brokerage", "Broker/Agent" or "By (Agent)" is an AGENT line: map it to BA on a buyer-side document (BRBC, buyer advisories, a buyer counter offer) and to LA on a listing-side document (RLA, seller advisories, a seller counter offer). Two-party agreements are normal — a BRBC requires only B and BA, an RLA only S and LA — so do NOT pad required_signers to all four. Return per form:\n' +
-  '   - "required_signers": the subset of ["B","S","BA","LA"] this form actually requires to sign or initial (judge from the form\'s own signature and initial lines; NOT every form needs all four).\n' +
+  '2) SIGNATURE AUDIT. For EACH form determine who has signed/initialed everywhere that form requires. The parties are: B = Buyer, S = Seller, BA = Buyer\'s Agent, LA = Listing/Seller\'s Agent, BR = the Broker or Office Manager THEMSELVES. A line labelled "Broker", "Brokerage", "Broker/Agent" or "By (Agent)" is normally an AGENT line: map it to BA on a buyer-side document (BRBC, buyer advisories, a buyer counter offer) and to LA on a listing-side document (RLA, seller advisories, a seller counter offer). USE BR ONLY where the form asks the broker or office manager to sign IN THAT CAPACITY, distinct from the agent who already signed - the clearest case is the ABA, whose acknowledgement lines read "By (Broker/Office Manager)". A printed "(Broker\'s name)" or brokerage-name field is NOT a signature line and is never BR. Two-party agreements are normal — a BRBC requires only B and BA, an RLA only S and LA — so do NOT pad required_signers to all four. Return per form:\n' +
+  '   - "required_signers": the subset of ["B","S","BA","LA","BR"] this form actually requires to sign or initial (judge from the form\'s own signature and initial lines; NOT every form needs all four).\n' +
   '   - "present_signers": the subset of required_signers who have ACTUALLY completed their signature AND every initial they are required to on that form. A party counts as present ONLY if all of their required marks are done; if any required initial or signature for that party is missing, do NOT include them.\n' +
   'Judge by how a party actually signed: a wet signature, a DocuSign/e-sign block, or initials all count. A pre-printed or typed party name (e.g. a typed "Seller" name that is a trust or LLC) is NOT a signature.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences):\n' +
@@ -221,7 +241,11 @@ function statusSuffix(form) {
   const present = new Set(normSigners(form.present_signers));
   const missing = required.filter((t) => !present.has(t));
   if (!missing.length) return 'FX';
-  return 'N' + SIGNER_ORDER.filter((t) => missing.includes(t)).join('+');
+  const ordered = SIGNER_ORDER.filter((t) => missing.includes(t));
+  // "NEEDB", "NeedSS+LA", "NeedBroker(s)" — the first party carries the word
+  // and the rest follow after a +, which is how she already writes them.
+  const [first, ...rest] = ordered.map((t) => NEED_WORD[t] || t);
+  return [first, ...rest.map((w) => w.replace(/^Need/i, ''))].join('+');
 }
 
 // Sanitize a form code/name for a filename (Drive tolerates most chars, but keep
@@ -658,6 +682,7 @@ exports.handler = async function (event) {
           ? `Those pages are in "${unsorted.filename}" — name and file them by hand.`
           : 'Those pages produced NO file at all — re-drop the package.') +
         ` The compliance list will keep asking for anything that did not land.`,
+        { source: 'disclosure-pipeline', label: 'Disclosure Pipeline' },
       );
     }
 

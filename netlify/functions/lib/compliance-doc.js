@@ -32,11 +32,15 @@ const DONE = 'FX';
  * Suffixes that mean "arrived but short a signature".
  *
  * TWO DIALECTS IN ONE FOLDER, and both are real. The splitter generates `N` +
- * the missing parties from ['B','S','BA','LA'] — `NB`, `NS+LA`. Megan types
- * `NeedSS`, `NeedLA`, `NeedSS+LA`, and `MISSING` when a form has not come at
+ * the missing parties from ['B','S','BA','LA','BR'] — `NB`, `NS+LA` — except
+ * for a lone missing broker, which reads `NeedBroker(s)` because that is a
+ * different chase and Megan asked for it in words. She hand-types `NeedSS`,
+ * `NeedLA`, `NeedBA`, `NeedSS+LA`, and `MISSING` when a form has not come at
  * all. The reconcile reads any of them; only `FX` clears a line.
+ *
+ * The parenthesis in `NeedBroker(s)` is why this pattern allows them.
  */
-const OUTSTANDING = /^(N[BS]?|N[A-Z+]*|Need[A-Za-z+]*|MISSING)$/i;
+const OUTSTANDING = /^(NEEDB[A-Za-z()+]*|Need[A-Za-z()+]*|N[A-Z+]*|MISSING)$/i;
 
 /**
  * Doc wording -> the code the splitter names a file with.
@@ -93,7 +97,8 @@ function fileKey(filename) {
    * all four, and leaves "AVID-LA" alone because the hyphen there is inside a
    * word rather than before the status.
    */
-  const m = base.match(/[\s-]+(N[A-Za-z+]*|Need[A-Za-z+]*|MISSING|FX)\s*$/i);
+  // The parentheses are for "NeedBroker(s)"; the + for "NeedSS+LA".
+  const m = base.match(/[\s-]+(Need[A-Za-z()+]*|N[A-Za-z+]*|MISSING|FX)\s*$/i);
   const status = m ? m[1] : '';
   const label = status ? base.slice(0, m.index).replace(/[\s-]+$/, '') : base;
   return { key: aliasFor(label) || norm(label), status };
@@ -114,6 +119,55 @@ function answers(itemK, fileK) {
   const b = fileK + ' ';
   return a.startsWith(b) || b.startsWith(a);
 }
+
+/**
+ * Is this a continuation sheet, rather than a form whose NAME contains the
+ * word?
+ *
+ * TESTED PER DASH-SEGMENT, not anywhere in the string, which was the bug: the
+ * LPD's full name is "Lead-Based Paint and Lead-Based Paint Hazards
+ * Disclosure, Acknowledgment and Addendum", so "LPD 1978 -" matched nothing
+ * while its file sat in the folder excluded as an addendum. A real one
+ * announces itself as its own segment — "SPQ - Addendum", "TDS - Addendum
+ * No. 1".
+ */
+function isAddendum(text) {
+  return String(text || '')
+    .replace(/\.pdf$/i, '')
+    .split(/\s-\s*|\s*-\s/)
+    .some((part) => /^(addendum|amendment|supplement)\b/i.test(part.trim()));
+}
+
+/** The form code a line or a label opens with: LPD, TDS, SPQ, TA, AC. */
+function leadingCode(text) {
+  const m = String(text || '').trim().match(/^([A-Z]{2,6})(?=[\s\-–:,]|$)/);
+  return m ? m[1].toLowerCase() : '';
+}
+
+/**
+ * A LAST RESORT FOR LINES THAT NAME A FORM WITHOUT ITS CODE.
+ *
+ * Her Docs say "Trust Advisory-" for TA and "Los Angeles County Local Area
+ * Disclosures" for a file called "Local Area Disclosures – Greater Area Los
+ * Angeles". Neither leads with a code and neither is a prefix of the other, so
+ * both were being left untouched with the file sitting right there.
+ *
+ * SCORED ON SHARED WORDS, and deliberately timid: short words are ignored, the
+ * overlap must cover most of the shorter side, and the match must be UNIQUE.
+ * A wrong match here DELETES a line off a compliance list, so an ambiguous
+ * one has to lose to "leave it alone".
+ */
+function overlapScore(itemK, fileK) {
+  const words = (k) => new Set(String(k).split(' ').filter((w) => w.length > 3));
+  const a = words(itemK);
+  const b = words(fileK);
+  if (a.size < 2 || b.size < 2) return 0;
+  let shared = 0;
+  for (const w of a) if (b.has(w)) shared++;
+  return shared / Math.min(a.size, b.size);
+}
+
+const OVERLAP_MIN = 0.75;
 
 /**
  * What to do to each line of the Doc.
@@ -144,12 +198,29 @@ function planLine(line, files) {
    * as a file nothing had asked for. A continuation sheet only answers a line
    * that names one.
    */
-  const wantsAddendum = /addend|amend|supplement/i.test(text);
-  const eligible = wantsAddendum
-    ? files
-    : files.filter((f) => !/addend|amend|supplement/i.test(f.filename));
-  const hit =
-    eligible.find((f) => f.key === key) || eligible.find((f) => answers(key, f.key));
+  const wantsAddendum = isAddendum(text);
+  const eligible = wantsAddendum ? files : files.filter((f) => !isAddendum(f.filename));
+  /**
+   * IN ORDER OF CONFIDENCE, and it stops at the first that lands: an exact
+   * key, then a prefix, then a shared form code, then a unique strong word
+   * overlap. Anything less certain than that is no match at all.
+   */
+  const code = leadingCode(text);
+  let hit =
+    eligible.find((f) => f.key === key) ||
+    eligible.find((f) => answers(key, f.key)) ||
+    (code ? eligible.find((f) => leadingCode(f.filename) === code) : undefined);
+
+  if (!hit) {
+    const scored = eligible
+      .map((f) => ({ f, score: overlapScore(key, f.key) }))
+      .filter((x) => x.score >= OVERLAP_MIN)
+      .sort((x, y) => y.score - x.score);
+    // Unique or clearly ahead — a tie means Keeva cannot tell, so it does not.
+    if (scored.length === 1 || (scored.length > 1 && scored[0].score > scored[1].score)) {
+      hit = scored[0].f;
+    }
+  }
   if (!hit) return { text, action: 'keep' };
   if (hit.status === DONE) return { text, action: 'delete', file: hit.filename };
   if (hit.status && OUTSTANDING.test(hit.status)) {
@@ -190,18 +261,40 @@ function planLine(line, files) {
  * A line naming a real brokerage does NOT clear — those forms carry the
  * brokerage in a header and have to actually turn up.
  */
+/** A line asking something of a numbered paragraph, rather than naming a form. */
+function isContentCheck(text) {
+  return /^([A-Z]{2,6})\b[^=:]*[=:]/.test(String(text || '').trim());
+}
+
 function derivedClear(text, arrived) {
-  const t = String(text || '');
+  const t = String(text || '').trim();
+
   /**
-   * ARRIVED, NOT FULLY EXECUTED — and this deviates from Megan's literal
-   * words, deliberately. She said "If the TDS is FX we can remove the TDS
-   * C,12,13,14 line", but on 700 S Abel the TDS came back `NB` and she
-   * removed that line anyway. Her action is the better rule: these check what
-   * the seller ANSWERED, and the answers are readable the moment the form is
-   * in hand. A missing buyer signature says nothing about paragraph 12.
+   * A CHECK ON A FORM'S CONTENTS, not a document of its own.
+   *
+   * Her lists carry several: "TDS C,12,13,14 = YES, there is an HOA", "SPQ 6G
+   * + Section 14 = YES", "SPQ 7E: Yes, property built prior to 1978". The
+   * first two were hardcoded and the third then arrived, so the rule is
+   * generalised: a line that OPENS with a form code and then asks something
+   * of a numbered paragraph — marked by an "=" or a ":" — is a check on that
+   * form, and it clears when the form itself turns up.
+   *
+   * THE "=" OR ":" IS WHAT KEEPS "LPD 1978 -" OUT. That line is the form,
+   * qualified by the year that makes it apply, not a question about paragraph
+   * 1978.
+   *
+   * ARRIVED, NOT FULLY EXECUTED: these read what the seller ANSWERED, and the
+   * answers are legible the moment the form is in hand. On 700 S Abel the TDS
+   * came back NB and Megan cleared its content line anyway.
    */
-  if (/^TDS\s+C\s*,/i.test(t)) return arrived('tds');
-  if (/^SPQ\s+6G\b/i.test(t)) return arrived('spq');
+  const check = t.match(/^([A-Z]{2,6})\b[^=:]*[=:]/);
+  if (check) return arrived(norm(check[1]));
+
+  /**
+   * "Brokerage Affiliate Disclosures (If any) - Other" clears itself. Megan:
+   * "When it says Other, there aren't any." A line naming a real brokerage
+   * does NOT — those forms carry the brokerage in a header and must turn up.
+   */
   if (/^Brokerage\s+Affiliate\s+Disclosures?\b/i.test(t)) return /-\s*other\s*$/i.test(t);
   return false;
 }
@@ -224,6 +317,26 @@ function planDoc(docText, filenames) {
       out.push({ text: raw, action: 'heading' });
       continue;
     }
+    const text = raw.replace(/^\s*[-*•]\s*/, '').trim();
+    if (!text) continue;
+
+    /**
+     * A CONTENT CHECK IS DECIDED FIRST, and never matched as a document.
+     *
+     * "TDS C,12,13,14 = YES" opens with a form code, so the code tier below
+     * happily matched it to the TDS file and ANNOTATED it with the TDS's
+     * signature status — which is nonsense: the line asks what the seller
+     * answered in paragraph 12, and a missing buyer signature has no bearing
+     * on it. It clears when the form arrives and otherwise stays exactly as
+     * written.
+     */
+    if (isContentCheck(text)) {
+      out.push(derivedClear(text, arrived)
+        ? { text, action: 'delete', reason: 'cleared by the form it checks' }
+        : { text, action: 'keep' });
+      continue;
+    }
+
     const plan = planLine(raw, files);
     if (!plan) continue;
     if (plan.file) matched.add(plan.file);
