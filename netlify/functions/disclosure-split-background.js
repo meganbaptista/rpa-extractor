@@ -193,6 +193,17 @@ function statusSuffix(form) {
   if (!required.length) return 'NeedReview';
   const missing = required.filter((t) => !present.has(t));
   if (!missing.length) return 'FX';
+  /**
+   * A MISSING SIGNATURE NOBODY CAN ATTRIBUTE IS A REVIEW, NOT A CHASE.
+   *
+   * Set when an unsigned line's own printed label does not say whose it is -
+   * Sotheby's ABA prints four lines all reading "Buyer's or Seller's
+   * Signature". The document is definitely incomplete, so FX is already ruled
+   * out above; what cannot be honestly stated is WHICH party owes it, and
+   * naming the wrong one sends a coordinator chasing the other side for a
+   * signature their own client owes.
+   */
+  if (form.signerAmbiguity) return 'NeedReview';
   const ordered = SIGNER_ORDER.filter((t) => missing.includes(t));
   // "NEEDB", "NeedSS+LA", "NeedBroker(s)" — the first party carries the word
   // and the rest follow after a +, which is how she already writes them.
@@ -203,7 +214,17 @@ function statusSuffix(form) {
 // Sanitize a form code/name for a filename (Drive tolerates most chars, but keep
 // it clean and slash-free).
 function clean(s) {
-  return String(s || '').replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim();
+  return String(s || '')
+    // A DOUBLE quote is illegal in a filename and decorative in a form name,
+    // so it is REMOVED rather than replaced with a space - swapping it left
+    // 'Buyer Preliminary Title Report ( PTR ) Advisory' on a real file.
+    // Apostrophes are legal and are LEFT ALONE: stripping them would quietly
+    // rename "Buyer's Affidavit" for no reason.
+    .replace(/["\u201c\u201d]/g, '')
+    .replace(/[\\/:*?<>|]/g, ' ')
+    .replace(/\(\s+/g, '(').replace(/\s+\)/g, ')')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // A Text Overflow Addendum (C.A.R. Form TOA) is a continuation sheet for another
@@ -513,6 +534,12 @@ exports.handler = async function (event) {
         doc_no: String(f.doc_no || '').trim(),
         required_signers: f.required_signers,
         present_signers: f.present_signers,
+        // The printed signature lines the audit transcribed. Carried through
+        // to be LOGGED on a form stamped FX - see below.
+        signature_lines: f.signature_lines,
+        // How many unsigned lines carry a label that does not say whose they
+        // are. Turns a named chase into a review; see statusSuffix.
+        signerAmbiguity: f.signerAmbiguity,
         // Why this document needs a human: a disputed boundary, an audit call
         // that failed, or a span the strips could not corroborate. Carried
         // through to the Unsorted reason so the alert names the cause.
@@ -597,6 +624,26 @@ exports.handler = async function (event) {
       // rides along on the event and into the alert below rather than being
       // dropped on the floor.
       if (form.review) console.warn(`[disclosure-split] "${filename}": ${form.review}`);
+      /**
+       * SHOW THE WORKING BEHIND AN FX.
+       *
+       * FX is the only status a coordinator acts on without opening the file,
+       * so it is the one that has to be checkable after the fact. Two
+       * affiliated business disclosures on 1333 S Beverly Glen filed as FX
+       * with the sellers' lines blank, and nothing in the log said which lines
+       * had been seen - so the diagnosis needed the original PDF and a page
+       * render. One line per FX form fixes that, and only for FX: printing it
+       * for every document would bury it.
+       */
+      if (form.signerAmbiguity) {
+        console.warn(`[disclosure-split] "${filename}": ${form.signerAmbiguity} unsigned line(s) do not say which party owes them, so it is a review rather than a named chase`);
+      }
+      if (status === 'FX' && Array.isArray(form.signature_lines) && form.signature_lines.length) {
+        const seen = form.signature_lines
+          .map((l) => `${String((l && l.label) || '?')}${l && l.signed ? '' : ' [BLANK]'}`)
+          .join(' | ');
+        console.log(`[disclosure-split] "${filename}" FX from lines: ${seen}`);
+      }
     }
     if (failedForms.length) {
       console.warn(`[disclosure-split] ${failedForms.length} form(s) failed to build and fall through to Unsorted: ` +

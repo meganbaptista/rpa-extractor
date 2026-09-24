@@ -159,7 +159,43 @@ const STRIP_PROMPT =
   '  Report one object for EVERY page number shown, even a completely blank one. A page you skip is a ' +
   'page that gets lost, which is the failure this exists to prevent.';
 
-/** Render header+footer strips for the given 1-indexed pages. */
+/**
+ * Render each page, crop its strips, and DISCARD the page image at once.
+ *
+ * THE MEMORY THIS SAVES IS THE DIFFERENCE BETWEEN RUNNING AND NOT. The first
+ * version rendered every page, kept all 65 full-page PNGs in one array, and
+ * only then cropped them into a second array - so an image-only packet held
+ * roughly 32MB of page images plus the strips, on top of the source PDF and
+ * pdf-lib's parse of it. The real 65-page Beverly Glen run peaked at 784MB
+ * against a 1024MB ceiling, which leaves a 110-page delivery no headroom at
+ * all, and the way this pipeline dies of memory is with no stack and no error
+ * - just `Duration:` - so it would look like a silent failure.
+ *
+ * Cropping inside the chunk means at most RENDER_CHUNK_PAGES full pages exist
+ * at any moment and only the strips survive, which are a fraction of the size.
+ */
+async function renderStripsCropped(buffer, pageNumbers) {
+  const out = [];
+  for (let i = 0; i < pageNumbers.length; i += RENDER_CHUNK_PAGES) {
+    const chunk = pageNumbers.slice(i, i + RENDER_CHUNK_PAGES);
+    const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
+    try {
+      const res = await parser.getScreenshot({ scale: STRIP_SCALE, partial: chunk });
+      for (const p of res.pages || []) {
+        if (!p.data) continue;
+        const png = Buffer.from(p.data);
+        const [head, foot] = await cropStrips(png);
+        out.push({ pageNumber: p.pageNumber, head, foot });
+        // `png` goes out of scope here; nothing holds the full page.
+      }
+    } finally {
+      await parser.destroy();   // free the canvases before the next chunk
+    }
+  }
+  return out;
+}
+
+/** Render whole pages for the given 1-indexed pages. Kept for one-off inspection. */
 async function renderStrips(buffer, pageNumbers) {
   const out = [];
   for (let i = 0; i < pageNumbers.length; i += RENDER_CHUNK_PAGES) {
@@ -234,12 +270,7 @@ async function readStripBatch(rows, label) {
  */
 async function readStripsFor(buffer, pageNumbers, name = '') {
   const pages = [...pageNumbers].sort((a, b) => a - b);
-  const rendered = await renderStrips(buffer, pages);
-  const cropped = [];
-  for (const r of rendered) {
-    const [head, foot] = await cropStrips(r.png);
-    cropped.push({ pageNumber: r.pageNumber, head, foot });
-  }
+  const cropped = await renderStripsCropped(buffer, pages);
   cropped.sort((a, b) => a.pageNumber - b.pageNumber);
 
   const batches = [];
@@ -669,7 +700,7 @@ function unclaimedPages(docs, pageCount) {
 
 module.exports = {
   readAllStrips, readStripsFor, documentsFromStrips, unclaimedPages, parseCounter,
-  renderStrips, cropStrips,
+  renderStrips, renderStripsCropped, cropStrips,
   HEAD_FRACTION, FOOT_FRACTION, STRIP_SCALE, STRIP_PAGES_PER_CALL, STRIP_CONCURRENCY,
 };
 

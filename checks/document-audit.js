@@ -10,7 +10,7 @@
 // disputes a boundary, and the brokerage evidence an AVID's side is read from.
 
 const A = require('../netlify/functions/lib/document-audit.js');
-const { applySplit, tallyBrands, packetContext, rejoinSplitForms } = A._internal;
+const { applySplit, tallyBrands, packetContext, rejoinSplitForms, resolveSigners, tokensForLabel } = A._internal;
 const split = require('../netlify/functions/disclosure-split-background.js');
 const { statusSuffix, formLabel } = split._internal;
 
@@ -169,10 +169,131 @@ ok('nor halves that do not touch',
             form('DIA', 'DIA', [4], 3, ['S'], ['S'])]),
   'DIA:1-2 TDS:3-3 DIA:4-4');
 
+// --- WHO WAS REQUIRED TO SIGN, read off the printed lines -------------------
+// THE WORST BUG THIS PIPELINE HAS PRODUCED. On 1333 S Beverly Glen two
+// affiliated business disclosures filed as FX with the sellers' signature
+// lines blank: the audit reported required_signers ["B"] because the buyers
+// were the only parties who HAD signed. Asking "who signed?" and "who had to
+// sign?" as one question lets the second collapse into the first, and it
+// collapses the dangerous way every time - FX is the one status a coordinator
+// acts on without opening the file. Megan: "it broke them up and then marked
+// one as FX when it wasn't."
+//
+// So the requirement is now computed from the transcribed lines, and a BLANK
+// line counts. The model's own answer can only ADD a requirement, never
+// subtract one.
+const L = (label, signed) => ({ label, signed });
+const signers = (audit, code = '') => {
+  const r = resolveSigners(audit, code);
+  return `${r.required_signers.sort().join('+') || '-'} / ${r.present_signers.sort().join('+') || '-'}`;
+};
+
+// Page 10 of that delivery, verbatim: two blank Seller lines, two signed Buyer
+// lines, and a model that reported only B as required.
+ok('a blank signature line still makes its party required',
+  signers({ signature_lines: [L('Seller', false), L('Seller', false), L('Buyer', true), L('Buyer', true)],
+            required_signers: ['B'], present_signers: ['B'] }),
+  'B+S / B');
+// Page 43: four lines all reading "Buyer's or Seller's Signature", two signed.
+// Ambiguous labels require BOTH parties, which is the conservative reading.
+ok('an ambiguous label requires both parties',
+  signers({ signature_lines: [L("Buyer's or Seller's Signature", true), L("Buyer's or Seller's Signature", true),
+                              L("Buyer's or Seller's Signature", false), L("Buyer's or Seller's Signature", false)],
+            required_signers: ['B'], present_signers: ['B'] }),
+  'B+S / B');
+// The "do not pad to all four" property has to survive: it now falls out of
+// only counting lines that are actually printed.
+ok('a two-party agreement is still two parties',
+  signers({ signature_lines: [L('Buyer', true), L("Buyer's Agent", true)],
+            required_signers: ['B', 'BA'], present_signers: ['B', 'BA'] }, 'BRBC'),
+  'B+BA / B+BA');
+// BR is the broker signing in that capacity. A bare "Broker" line is an agent
+// line and must not become BR.
+ok('an office-manager line is BR',
+  signers({ signature_lines: [L('By (Broker/Office Manager)', false), L('Seller', true)],
+            required_signers: [], present_signers: ['S'] }),
+  'BR+S / S');
+ok('a bare Broker line is an agent line, not BR', tokensForLabel('Broker'), ['AGENT']);
+// Agent wordings must be checked before the bare party, or "(Buyer's Agent's
+// signature)" matches Buyer and routes an agent's signature to the buyer.
+ok("a buyer's agent line is BA, not B", tokensForLabel("(Buyer's Agent's signature)"), ['BA']);
+// An AVID's inspecting-agent line belongs to whichever side the form is.
+ok('a BA AVID inspecting line is the buyer agent',
+  signers({ signature_lines: [L('Inspection Performed By', true), L('Seller', false), L('Buyer', true)],
+            required_signers: [], present_signers: ['BA', 'B'] }, 'AVID-BA'),
+  'B+BA+S / B+BA');
+ok('an LA AVID inspecting line is the listing agent',
+  signers({ signature_lines: [L('Inspection Performed By', true), L('Seller', true), L('Buyer', false)],
+            required_signers: [], present_signers: ['LA', 'S'] }, 'AVID-LA'),
+  'B+LA+S / LA+S');
+// The model's answer is a second pair of eyes on the requirement, one way only.
+ok('the model can add a requirement the lines missed',
+  signers({ signature_lines: [L('Buyer', true)], required_signers: ['B', 'BA'], present_signers: ['B'] }),
+  'B+BA / B');
+ok('but cannot claim a signer that was never required',
+  signers({ signature_lines: [L('Buyer', true)], required_signers: ['B'], present_signers: ['B', 'LA'] }),
+  'B / B');
+// The mark-only documents have no signature lines at all; their rule lives in
+// the splitter's isMarkOnlyDoc.
+ok('no printed lines requires nobody',
+  signers({ signature_lines: [], required_signers: [], present_signers: [] }), '- / -');
+ok('junk in the lines is ignored rather than trusted',
+  signers({ signature_lines: [L('', true), L('Date', true), null], required_signers: [], present_signers: [] }),
+  '- / -');
+
+// AN UNATTRIBUTABLE MISSING SIGNATURE IS A REVIEW, NOT A CHASE.
+// Sotheby's ABA prints four identical "Buyer's or Seller's Signature" lines
+// with no names beside them. Two were signed on the Beverly Glen packet and
+// the audit called the signers the SELLERS - but their date, 09/18/2026, is
+// the buyers' date everywhere else in that delivery. From the page alone it is
+// undecidable, and naming the wrong party sends a coordinator to chase the
+// other side for a signature their own client owes.
+const amb = (audit) => resolveSigners(audit, '').signerAmbiguity;
+ok('an unsigned ambiguous line is flagged',
+  amb({ signature_lines: [L("Buyer's or Seller's Signature", true), L("Buyer's or Seller's Signature", false)],
+        required_signers: [], present_signers: [] }),
+  1);
+// Ambiguity only matters when something is UNSIGNED. The Christie's version of
+// the same page had all four signed, and that is simply complete.
+ok('all ambiguous lines signed is not ambiguous at all',
+  amb({ signature_lines: [L("Buyer's or Seller's Signature", true), L("Buyer's or Seller's Signature", true)],
+        required_signers: ['S', 'B'], present_signers: ['S', 'B'] }),
+  0);
+ok('an explicit blank line is not ambiguous',
+  amb({ signature_lines: [L('Seller', false), L('Buyer', true)],
+        required_signers: ['S', 'B'], present_signers: ['B'] }),
+  0);
+
 // --- the filename a document actually lands under ---------------------------
 // What Megan sees in the folder. The BA AVID is the case that started this:
 // she hand-names it "BA AVID - need SS", and the old splitter called it FX.
 const nameOf = (f) => `${formLabel(f)} - ${statusSuffix(f)}.pdf`;
+// End to end on the file that started this: the requirement read off the
+// printed lines, through the status suffix, to the name in the folder.
+ok('an unattributable gap files as NeedReview rather than naming a party',
+  nameOf({ code: '', name: 'Affiliated Business Disclosure',
+           ...resolveSigners({ signature_lines: [L("Buyer's or Seller's Signature", true),
+                                                 L("Buyer's or Seller's Signature", true),
+                                                 L("Buyer's or Seller's Signature", false),
+                                                 L("Buyer's or Seller's Signature", false)],
+                               required_signers: ['S'], present_signers: ['S'] }, '') }),
+  'Affiliated Business Disclosure - NeedReview.pdf');
+ok('but all four signed is fully executed',
+  nameOf({ code: '', name: 'Affiliated Business Arrangement Disclosure Statement',
+           ...resolveSigners({ signature_lines: [L("Buyer's or Seller's Signature", true),
+                                                 L("Buyer's or Seller's Signature", true),
+                                                 L("Buyer's or Seller's Signature", true),
+                                                 L("Buyer's or Seller's Signature", true)],
+                               required_signers: ['S', 'B'], present_signers: ['S', 'B'] }, '') }),
+  'Affiliated Business Arrangement Disclosure Statement - FX.pdf');
+
+ok('the Coldwell Banker ABA is NeedSS, not FX',
+  nameOf({ code: '', name: 'Affiliated Business Arrangement Disclosure Statement',
+           ...resolveSigners({ signature_lines: [L('Seller', false), L('Seller', false),
+                                                 L('Buyer', true), L('Buyer', true)],
+                               required_signers: ['B'], present_signers: ['B'] }, '') }),
+  'Affiliated Business Arrangement Disclosure Statement - NeedSS.pdf');
+
 ok('the BA AVID arrives needing the seller',
   nameOf({ code: 'AVID-BA', name: 'Agent Visual Inspection Disclosure',
            required_signers: ['BA', 'S', 'B'], present_signers: ['BA', 'B'] }),

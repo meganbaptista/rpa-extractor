@@ -151,8 +151,20 @@ const RULES =
   'lines read "By (Broker/Office Manager)". A printed "(Broker\'s name)" or brokerage-name field is ' +
   'NOT a signature line and is never BR. Two-party agreements are normal - a BRBC requires only B and ' +
   'BA, an RLA only S and LA - so do NOT pad required_signers to all four.\n' +
-  '  - "required_signers": the subset of ["B","S","BA","LA","BR"] this document actually requires to ' +
-  'sign or initial, judged from its own signature and initial lines.\n' +
+  '  - "signature_lines": EVERY signature or initial line PRINTED on this document, in the order they ' +
+  'appear, as {"label":"","signed":true|false}. "label" is the party wording printed beside or beneath ' +
+  'the line, verbatim - "Seller", "Buyer", "Buyer\'s or Seller\'s Signature", "(Buyer\'s Agent\'s ' +
+  'signature)", "By (Broker/Office Manager)", "Inspection Performed By". "signed" is whether THAT line ' +
+  'carries a mark.\n' +
+  '    LIST THE BLANK LINES. This is the whole point of the field. A printed line nobody signed is the ' +
+  'strongest evidence in the document that the party WAS required, and it is exactly the line that ' +
+  'gets overlooked because there is nothing written on it. On page 3 of a Coldwell Banker affiliated ' +
+  'business disclosure the two Buyer lines were signed and dated and the two Seller lines were empty; ' +
+  'reporting only the signed ones made an unsigned form read as fully executed, which is the one ' +
+  'status a coordinator acts on without opening the file.\n' +
+  '    Count them individually: two Seller lines on a two-seller deal are TWO entries, not one.\n' +
+  '  - "required_signers": the subset of ["B","S","BA","LA","BR"] this document requires, judged from ' +
+  'those printed lines and nothing else.\n' +
   '  - "present_signers": the subset of required_signers who have ACTUALLY completed their signature ' +
   'AND every initial they are required to. A party counts as present ONLY if all of their required ' +
   'marks are done; if any required initial or signature for that party is missing, do NOT include ' +
@@ -192,8 +204,120 @@ const SHAPE =
   'above, in the same order:\n' +
   '{"documents":[{"n":1,"code":"TDS","name":"Real Estate Transfer Disclosure Statement",' +
   '"revision":"12/25","parent_code":"","doc_no":"","required_signers":["S","B","BA","LA"],' +
-  '"present_signers":["S","B","BA","LA"],"boundary_dispute":false,"split_after":[],' +
-  '"dispute_note":""}]}';
+  '"present_signers":["S","B","BA","LA"],' +
+  '"signature_lines":[{"label":"Seller","signed":true},{"label":"Buyer","signed":true}],' +
+  '"boundary_dispute":false,"split_after":[],"dispute_note":""}]}';
+
+/**
+ * A printed line's party label -> the tokens it can belong to.
+ *
+ * Returns a LIST because some labels are genuinely ambiguous: an affiliated
+ * business disclosure prints four lines all reading "Buyer's or Seller's
+ * Signature", and on a two-buyer two-seller deal that is two of each. Both
+ * tokens are then required, which is the conservative and correct reading.
+ *
+ * Order matters: AGENT wordings are checked before the bare party, or
+ * "(Buyer's Agent's signature)" matches Buyer and routes an agent's signature
+ * to the buyer.
+ */
+function tokensForLabel(label) {
+  const t = String(label || '').toLowerCase();
+  if (!t.trim()) return [];
+  // The broker or office manager signing IN THAT CAPACITY, distinct from the
+  // agent who already signed. Needs the capacity wording; a bare "Broker" does
+  // not qualify.
+  if (/broker\s*\/\s*office\s*manager|office\s*manager/.test(t)) return ['BR'];
+  // An AVID's "Inspection Performed By (Real Estate Broker Firm Name)" line is
+  // the inspecting AGENT's; which side that is comes from the form's own code.
+  if (/inspection\s+performed\s+by/.test(t)) return ['AGENT'];
+  const out = new Set();
+  if (/buyer'?s?\s*agent|agent.*buyer/.test(t)) out.add('BA');
+  if (/(seller|listing)'?s?\s*agent|agent.*seller/.test(t)) out.add('LA');
+  if (!out.size) {
+    if (/\bbuyer|\btenant/.test(t)) out.add('B');
+    if (/\bseller|\blandlord/.test(t)) out.add('S');
+    if (!out.size && /\bbroker|\bby\s*\(agent\)/.test(t)) out.add('AGENT');
+  }
+  return [...out];
+}
+
+const TOKENS = ['B', 'S', 'BA', 'LA', 'BR'];
+function normTokens(arr) {
+  const out = new Set();
+  for (const v of (Array.isArray(arr) ? arr : [])) {
+    const t = String(v || '').trim().toUpperCase();
+    if (TOKENS.includes(t)) out.add(t);
+  }
+  return [...out];
+}
+
+/**
+ * THE REQUIREMENT COMES FROM THE PRINTED LINES. THIS IS THE FIX FOR AN
+ * UNSIGNED FORM BEING STAMPED FX.
+ *
+ * On the 1333 S Beverly Glen delivery two affiliated business disclosures
+ * filed as fully executed with the sellers' signature lines blank. The audit
+ * had reported `required_signers: ["B"]`, because the buyers were the only
+ * parties who HAD signed. Asking "who signed?" and "who had to sign?" as one
+ * question lets the second answer collapse into the first, and it collapses in
+ * the dangerous direction every time - FX is the one status a coordinator acts
+ * on without opening the file. Megan: "it broke them up and then marked one as
+ * FX when it wasn't."
+ *
+ * So the model now transcribes every printed line and whether it carries a
+ * mark, and the requirement is computed from that list. Two properties worth
+ * keeping:
+ *   The model's own `required_signers` is UNIONED in, never used to subtract.
+ *     If it noticed an initial box the line list missed, that is a real
+ *     requirement; if it forgot a blank line, the list still carries it.
+ *   `present_signers` stays the model's answer, intersected with what is
+ *     required. WHO signed needs reading - a printed name, a date, a DocuSign
+ *     block - and the ambiguous labels make it undecidable from counts alone:
+ *     four "Buyer's or Seller's" lines with two signed cannot tell you which
+ *     two from the list, but the document itself plainly can.
+ */
+function resolveSigners(audit, code) {
+  const lines = Array.isArray(audit.signature_lines) ? audit.signature_lines : [];
+  const side = /AVID-BA/i.test(code || '') ? 'BA' : (/AVID-LA/i.test(code || '') ? 'LA' : null);
+  const required = new Set();
+  for (const l of lines) {
+    for (const tok of tokensForLabel(l && l.label)) {
+      if (tok !== 'AGENT') required.add(tok);
+      else if (side) required.add(side);
+    }
+  }
+  for (const tok of normTokens(audit.required_signers)) required.add(tok);
+
+  const present = new Set();
+  for (const tok of normTokens(audit.present_signers)) if (required.has(tok)) present.add(tok);
+
+  /**
+   * WHEN THE PAGE DOES NOT SAY WHICH PARTY, DO NOT NAME ONE.
+   *
+   * Sotheby's affiliated business disclosure prints four identical lines
+   * reading "Buyer's or Seller's Signature" with no printed names beside them.
+   * On the Beverly Glen packet two were signed and two were blank, and the
+   * audit called the signers the SELLERS - but their date, 09/18/2026, is the
+   * buyers' signing date everywhere else in that delivery (the sellers signed
+   * 09/10). From that page alone the attribution is genuinely undecidable, and
+   * getting it backwards is worse than not answering: it sends a coordinator
+   * to chase the buyer's side for a signature their own seller owes.
+   *
+   * So an unsigned line whose own label refuses to say whose it is makes the
+   * document a review rather than a named chase. The cross-document evidence
+   * that would settle it - each party's signing date, taken from a form whose
+   * labels ARE explicit - is not available to a per-document audit.
+   */
+  const unresolved = lines.filter((l) => l && !l.signed && tokensForLabel(l.label).length > 1).length;
+
+  return {
+    required_signers: [...required],
+    present_signers: [...present],
+    lines,
+    signerAmbiguity: unresolved > 0 ? unresolved : 0,
+  };
+}
+
 
 /**
  * Split the documents into calls.
@@ -485,15 +609,18 @@ async function auditDocuments(documents, carve, label = '', pass = 1) {
     // unnamed so it files to Unsorted with the reason attached, which is the
     // right answer for a genuine unknown.
     const disputed = audit.boundary_dispute === true;
+    const code = disputed ? '' : String(audit.code || '').trim();
+    const signers = resolveSigners(audit, code);
     forms.push({
-      code: disputed ? '' : String(audit.code || '').trim(),
+      code,
       name: disputed ? '' : String(audit.name || '').trim(),
       revision: String(audit.revision || '').trim(),
       pages: doc.pages,                     // from the strips, never the model
       parent_code: String(audit.parent_code || '').trim(),
       doc_no: String(audit.doc_no || '').trim(),
-      required_signers: audit.required_signers,
-      present_signers: audit.present_signers,
+      required_signers: signers.required_signers,
+      present_signers: signers.present_signers,
+      signature_lines: signers.lines,
       review: disputed
         ? `more than one document may be here but the audit could not say where they divide: ${String(audit.dispute_note || '').trim() || 'unspecified'}`
         : (doc.notes && doc.notes.length ? doc.notes.join('; ') : null),
@@ -576,4 +703,4 @@ module.exports = {
   auditDocuments, groupForAudit,
   AUDIT_DOCS_PER_CALL, AUDIT_PAGES_PER_CALL, AUDIT_CONCURRENCY,
 };
-module.exports._internal = { hintFor, packetContext, applySplit, tallyBrands, brandKey, auditGroup, rejoinSplitForms, sameForm, RULES, SHAPE };
+module.exports._internal = { hintFor, packetContext, applySplit, tallyBrands, brandKey, auditGroup, rejoinSplitForms, sameForm, resolveSigners, tokensForLabel, RULES, SHAPE };
