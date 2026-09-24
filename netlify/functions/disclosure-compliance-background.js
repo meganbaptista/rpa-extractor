@@ -31,8 +31,9 @@ const { getStore } = require('@netlify/blobs');
 const drive = require('./lib/drive');
 const { parseRequestBody } = require('./lib/parse-body');
 const { alert } = require('./lib/alert');
+const docs = require('./lib/docs');
 const { EVENTS } = require('./lib/events');
-const { planDoc, findComplianceDocUrl, fetchDocText } = require('./lib/compliance-doc');
+const { planDoc, findComplianceDocUrl } = require('./lib/compliance-doc');
 
 const DONE_STORE = 'disclosure-compliance-done';
 
@@ -131,8 +132,29 @@ exports.handler = async function (event) {
       return { statusCode: 200 };
     }
 
-    const { text } = await fetchDocText(docUrl);
-    if (!text.trim()) throw new Error(`compliance Doc exported empty (${docUrl})`);
+    /**
+     * ONE READ, STRUCTURAL, FOR BOTH PREVIEW AND WRITE.
+     *
+     * It used to read the Doc through `export?format=txt`, which is convenient
+     * and needs no auth. But the Docs API edits by CHARACTER POSITION, and the
+     * text export's line breaks are not guaranteed to correspond to the
+     * document's real offsets - matching a line in the export and then
+     * deleting that many characters is how you delete part of the wrong
+     * paragraph. So the plan is now built from the SAME structural read the
+     * writer indexes into, and a preview predicts the write exactly rather
+     * than approximately.
+     */
+    const docId = docs.docIdFrom(docUrl);
+    if (!docId) throw new Error(`could not read a document id out of "${docUrl}"`);
+    const doc = await docs.getDocument(docId);
+    const { rows, skipped } = docs.paragraphsOf(doc);
+    const text = docs.textForPlan(rows);
+    if (!text.trim()) throw new Error(`compliance Doc read empty (${docUrl})`);
+    if (skipped) {
+      // A list that moved into a table would otherwise look like a short
+      // document and quietly plan nothing.
+      console.warn(`[disclosure-compliance] ${skipped} non-paragraph element(s) in the Doc were not read`);
+    }
 
     const files = (await drive.listChildren(propertyFolderId, { excludeFolders: true }))
       .map((f) => String(f.name || ''))
@@ -156,11 +178,51 @@ exports.handler = async function (event) {
       return { statusCode: 200 };
     }
 
-    // Writing is enabled — but the write itself is the next brick. Until it
-    // exists, say so plainly rather than silently behaving like preview.
-    await alert(`compliance-write-unbuilt:${address}`,
-      'COMPLIANCE_DOC_WRITE is true but the Doc writer is not built yet, so nothing was changed.\n\n' + report,
-      { source: 'disclosure-pipeline', label: 'Disclosure Pipeline' });
+    /**
+     * THE WRITE. Strikethrough by default, not deletion.
+     *
+     * Megan chose delete for a received line, and `COMPLIANCE_DOC_MODE=delete`
+     * does exactly that. But the first live runs default to strikethrough,
+     * because the two look the same at a glance and a WRONG call reads
+     * completely differently: a struck line is visible and self-documenting,
+     * where a wrong deletion is a line that quietly is not there any more. Same
+     * reason the reconcile ran in preview first.
+     */
+    const mode = String(process.env.COMPLIANCE_DOC_MODE || 'strike').toLowerCase() === 'delete'
+      ? 'delete' : 'strike';
+    const { requests, applied, error } = docs.requestsFor(plan.lines, rows, mode);
+    if (error) {
+      /**
+       * REFUSE RATHER THAN APPROXIMATE. The plan was derived from these very
+       * paragraphs, so a disagreement means the document changed between the
+       * read and the write - somebody editing it right now. Its indices are
+       * stale, and writing stale indices into a client's document mangles it.
+       */
+      await alert(`compliance-write-stale:${address}`,
+        `Did not touch the compliance list for ${address}: ${error}. The Doc looks like it was being ` +
+        'edited while this ran. Nothing was changed; it will try again on the next delivery.\n\n' + report,
+        { source: 'disclosure-pipeline', label: 'Disclosure Pipeline' });
+      return { statusCode: 200 };
+    }
+    if (!requests.length) {
+      console.log('[disclosure-compliance] nothing to change');
+      if (eventId) await done.setJSON(doneKey, { at: new Date().toISOString(), applied: 0 });
+      return { statusCode: 200 };
+    }
+
+    await docs.batchUpdate(docId, requests);
+    console.log(`[disclosure-compliance] ${applied.length} line(s) updated in ${docUrl}`);
+
+    /**
+     * MARK DONE ONLY AFTER THE WRITE SUCCEEDED. Ahead of it, a failed
+     * batchUpdate would be recorded as handled and the deal's list would never
+     * be updated by anything.
+     */
+    if (eventId) await done.setJSON(doneKey, { at: new Date().toISOString(), applied: applied.length, mode });
+
+    await alert(`compliance-updated:${address}`,
+      `${report}\n\nApplied (${mode}):\n` + applied.map((a) => `  - ${a.text} — ${a.action}`).join('\n'),
+      { force: true, source: 'disclosure-pipeline', label: 'Disclosure Pipeline' });
     return { statusCode: 200 };
   } catch (err) {
     console.error('[disclosure-compliance] ERROR:', err.message);

@@ -414,7 +414,17 @@ function parseCsv(text) {
   return rows;
 }
 
-/** The Doc's live text. Link-viewable, so the export endpoint needs no auth. */
+/**
+ * The Doc's live text via the plain-text export. Needs no auth.
+ *
+ * NO LONGER USED BY THE PIPELINE, and deliberately not deleted: it is the
+ * cheapest way to read a compliance Doc and is worth having for a one-off or a
+ * check. But it MUST NOT feed the writer. The Docs API edits by character
+ * position and this export's line breaks are not guaranteed to correspond to
+ * the document's real offsets, so matching a line here and then deleting that
+ * many characters from the document can take out part of the wrong paragraph.
+ * lib/docs.js reads structurally for exactly that reason.
+ */
 async function fetchDocText(docUrl) {
   const id = (String(docUrl || '').match(/\/document\/d\/([a-zA-Z0-9_-]+)/) || [])[1];
   if (!id) return { id: '', text: '' };
