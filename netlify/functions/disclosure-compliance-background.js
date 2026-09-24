@@ -220,6 +220,25 @@ exports.handler = async function (event) {
      */
     if (eventId) await done.setJSON(doneKey, { at: new Date().toISOString(), applied: applied.length, mode });
 
+    /**
+     * THE SUCCESS EMAIL IS FOR BUILDING TRUST, AND THEN IT IS NOISE.
+     *
+     * The Doc IS the report - the strikethroughs are the notification, and an
+     * email listing them is a second copy of something she will see when she
+     * opens the list. Megan's own test, on a different alert earlier the same
+     * day: "it doesn't save any time... Having to go through an email and then
+     * drop into the google drive to see what was missed, misses the point."
+     * The rule that falls out of it: alert when a HUMAN MUST ACT. A completed
+     * write needs nothing from anyone.
+     *
+     * It stays on by default only because this is new and she is still
+     * checking the email against the Doc. Set COMPLIANCE_ALERT_ON_SUCCESS to
+     * false once those agree a few times; the failure alerts are unaffected,
+     * and the write itself still logs what it changed.
+     */
+    if (String(process.env.COMPLIANCE_ALERT_ON_SUCCESS || 'true').toLowerCase() === 'false') {
+      return { statusCode: 200 };
+    }
     await alert(`compliance-updated:${address}`,
       `${report}\n\nApplied (${mode}):\n` + applied.map((a) => `  - ${a.text} — ${a.action}`).join('\n'),
       { force: true, source: 'disclosure-pipeline', label: 'Disclosure Pipeline' });

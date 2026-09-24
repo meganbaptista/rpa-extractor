@@ -12,7 +12,7 @@
 // the document comes out mangled and the assertion fails.
 
 const docs = require('../netlify/functions/lib/docs.js');
-const { planDoc } = require('../netlify/functions/lib/compliance-doc.js');
+const { planDoc, fileKey, OUTSTANDING } = require('../netlify/functions/lib/compliance-doc.js');
 
 let failed = 0;
 function ok(label, got, want) {
@@ -181,6 +181,36 @@ ok('an unchanged line appends nothing', docs.suffixFor('AVID - NeedSS', 'AVID - 
 // AND the new status on one line. Better to say nothing and let a person look.
 ok('a rewrite that is not a tail is refused',
   docs.suffixFor('AVID - NeedLA', 'AVID - NeedSS'), '');
+
+// --- HER SPACING IS A STATUS TOO -------------------------------------------
+// Megan hand-names files with a space: `BA AVID - need SS.pdf`. The trailing
+// token read as just "SS", which matches no status, so the line fell through
+// to "a file exists but Keeva cannot tell if it is complete" and was left
+// untouched on her list - when it should have annotated the BA AVID line to
+// NeedSS. Her spelling is the correct one; the parser has to accept both.
+const status = (f) => fileKey(f).status;
+ok('a space after "need" is still a status', status('BA AVID - need SS.pdf'), 'NeedSS');
+ok('and is normalised to the closed-up form the splitter writes',
+  ['LA AVID - need B.pdf', 'TDS - need SS+LA.pdf', 'AVID - Need Broker(s).pdf'].map(status),
+  ['NeedB', 'NeedSS+LA', 'NeedBroker(s)']);
+ok('the closed-up form is unchanged',
+  ['AVID-BA - Agent Visual Inspection Disclosure - NeedSS.pdf',
+   'TDS - Real Estate Transfer Disclosure Statement - FX.pdf'].map(status),
+  ['NeedSS', 'FX']);
+// The four punctuations that a real folder actually contains.
+ok('and so are the hand-named shapes',
+  ['Eq Booklet Receipt- FX.pdf', 'CR 2 FX.pdf', 'Prelim - BSIGNED-FX.pdf'].map(status),
+  ['FX', 'FX', 'FX']);
+// The label must survive intact, or the file stops matching its line.
+ok('the label is unaffected by the spacing', fileKey('BA AVID - need SS.pdf').key, 'avid-ba');
+ok('a normalised status still reads as outstanding', OUTSTANDING.test(status('BA AVID - need SS.pdf')), true);
+
+// End to end: that one file, against her real BA AVID line.
+{
+  const plan = planDoc('- BA AVID', ['BA AVID - need SS.pdf']);
+  ok('the BA AVID line is annotated rather than left for review',
+    [plan.lines[0].action, plan.lines[0].to], ['annotate', 'BA AVID - NeedSS']);
+}
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

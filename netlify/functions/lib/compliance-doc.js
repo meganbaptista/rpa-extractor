@@ -130,9 +130,24 @@ function fileKey(filename) {
    * all four, and leaves "AVID-LA" alone because the hyphen there is inside a
    * word rather than before the status.
    */
+  /**
+   * "need SS" IS THE SAME STATUS AS "NeedSS".
+   *
+   * Megan hand-names files with a space - `BA AVID - need SS.pdf` - and the
+   * trailing token was read as just "SS", which matches no status, so the line
+   * fell through to "a file exists but Keeva cannot tell if it is complete"
+   * and was left untouched on her list. It should have annotated the BA AVID
+   * line to NeedSS. Her spacing is the correct spelling of the thing; it is
+   * the parser that has to accept both.
+   *
+   * The captured status is normalised to the closed-up form so everything
+   * downstream - the OUTSTANDING test, and the text written into the Doc -
+   * sees one spelling, and the Doc gets the same vocabulary the splitter uses
+   * in filenames.
+   */
   // The parentheses are for "NeedBroker(s)"; the + for "NeedSS+LA".
-  const m = base.match(/[\s-]+(Need[A-Za-z()+]*|N[A-Za-z+]*|MISSING|FX)\s*$/i);
-  const status = m ? m[1] : '';
+  const m = base.match(/[\s-]+(Need\s*[A-Za-z()+]*|N[A-Za-z+]*|MISSING|FX)\s*$/i);
+  const status = m ? m[1].replace(/^need\s+/i, 'Need') : '';
   const label = status ? base.slice(0, m.index).replace(/[\s-]+$/, '') : base;
   return { key: aliasFor(label) || norm(label), status };
 }
