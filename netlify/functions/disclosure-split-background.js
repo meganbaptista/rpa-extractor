@@ -42,12 +42,11 @@ const { CanvasFactory } = require('pdf-parse/worker');
 const { PDFParse } = require('pdf-parse');
 const drive = require('./lib/drive');
 const { EVENTS, makeEvent, publish } = require('./lib/events');
-const usageLog = require('./lib/usage-log');
 const { parseRequestBody } = require('./lib/parse-body');
 const { alert } = require('./lib/alert');
+const { readAllStrips, documentsFromStrips } = require('./lib/page-strips');
+const { auditDocuments } = require('./lib/document-audit');
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-opus-4-8';
 const MAX_DOC_BYTES = 28 * 1024 * 1024;
 const PDF_MAGIC = Buffer.from('%PDF');
 const DONE_STORE = 'disclosure-split-done';
@@ -88,121 +87,39 @@ const MIN_CONTENT_BYTES = 8;
 
 console.log('[disclosure-split] module fully loaded, handler ready');
 
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function blobsConfig(name) {
   return { name, siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN };
 }
 
 // ----------------------------------------------------------------------------
-// Opus 4.8 call (adaptive thinking, medium effort). STREAMED: a long analysis
-// can exceed Node fetch's (undici) 300s headers timeout on a non-streamed
-// request, which surfaces as "fetch failed". Streaming delivers SSE events
-// immediately, so the headers arrive right away and a multi-minute generation
-// never trips the timeout. Retries on 429/529.
+// THE SINGLE CALL THAT USED TO LIVE HERE IS GONE, prompt and transport both.
+//
+// It sent the whole packet to one model call and asked for the complete split
+// map AND a per-form signature audit in one response. That held until a packet
+// got long: on the 65-page 1333 S Beverly Glen delivery it returned 28 forms
+// covering 73 of 110 pages and quietly stopped accounting for the rest, losing
+// the cooperating broker's disclosures and the buyer agent's AVID. The answer
+// was plausible and incomplete, and coverage was an implicit property of it, so
+// 37 unfiled pages looked exactly like none. Megan: "it didn't pull any of the
+// coldwell banker disclosures and then the BA AVID it marked it as FX but in
+// reality it didn't have any seller signatures on it."
+//
+// It is now two narrower questions:
+//   lib/page-strips.js    where does each document start and end - read off the
+//                         header and footer of every page in small batches,
+//                         with the spans decided in CODE, so coverage is
+//                         subtraction over a set rather than a model's claim.
+//   lib/document-audit.js what is this document and who still has to sign it -
+//                         asked one document at a time, each as its own small
+//                         PDF, which is the part that genuinely needs reading.
+//
+// The audit prompt there carries this prompt's rules verbatim, minus the
+// split-map half. Both are DELETED rather than left in place: a live prompt and
+// a dead one that disagree is how the rules drift. Streaming, the 429/529
+// retry and the usage logging all live in lib/claude.js, which now records the
+// two stages separately - so the AI USAGE ledger shows where the cost went.
 // ----------------------------------------------------------------------------
-async function callClaude(content, maxTokens, attempt = 0) {
-  const MAX_RETRIES = 4;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var not set');
-
-  const response = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens || 20000,
-      thinking: { type: 'adaptive', display: 'omitted' },
-      // medium effort: cuts thinking tokens + runtime vs high; watch that the
-      // signature audit (FX vs Need) stays accurate on the next real packet.
-      output_config: { effort: 'medium' },
-      stream: true,
-      messages: [{ role: 'user', content }],
-    }),
-  });
-
-  if ((response.status === 429 || response.status === 529) && attempt < MAX_RETRIES) {
-    const retryAfter = response.headers.get('retry-after');
-    const delay = retryAfter ? Math.min(parseFloat(retryAfter) * 1000, 30000) : Math.min(1000 * Math.pow(2, attempt), 30000);
-    console.log(`[disclosure-split] ${response.status}, retrying in ${delay}ms (${attempt + 1}/${MAX_RETRIES})`);
-    await sleep(delay);
-    return callClaude(content, maxTokens, attempt + 1);
-  }
-  if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
-
-  // Accumulate the text output from the SSE stream. thinking_delta (display
-  // omitted) is ignored; we only want the text blocks (the JSON result).
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  let text = '';
-  let stopReason = null;
-  // Usage arrives across SSE events: input/cache tokens on message_start, the
-  // (cumulative) output_tokens on message_delta. Accumulate for the ledger.
-  const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === '[DONE]') continue;
-      let evt;
-      try { evt = JSON.parse(payload); } catch { continue; }
-      if (evt.type === 'content_block_delta' && evt.delta && evt.delta.type === 'text_delta') {
-        text += evt.delta.text;
-      } else if (evt.type === 'message_start' && evt.message && evt.message.usage) {
-        const u = evt.message.usage;
-        usage.input_tokens = u.input_tokens || 0;
-        usage.output_tokens = u.output_tokens || 0;
-        usage.cache_read_input_tokens = u.cache_read_input_tokens || 0;
-        usage.cache_creation_input_tokens = u.cache_creation_input_tokens || 0;
-      } else if (evt.type === 'message_delta') {
-        if (evt.usage && typeof evt.usage.output_tokens === 'number') usage.output_tokens = evt.usage.output_tokens;
-        if (evt.delta && evt.delta.stop_reason) stopReason = evt.delta.stop_reason;
-      } else if (evt.type === 'error') {
-        throw new Error(`Claude stream error: ${JSON.stringify(evt.error || {}).slice(0, 200)}`);
-      }
-    }
-  }
-  await usageLog.logUsage({ fn: 'disclosure-split', model: MODEL, effort: 'medium', usage });
-  if (stopReason === 'max_tokens') throw new Error('Output hit max_tokens — raise the ceiling and re-run.');
-  return text;
-}
-
-function parseJson(raw) {
-  let t = (raw || '').trim().replace(/```json|```/g, '').trim();
-  const m = t.match(/\{[\s\S]*\}/);
-  return JSON.parse(m ? m[0] : t);
-}
-
-// ----------------------------------------------------------------------------
-// THE PROMPT — split map + signature audit in one pass over the package.
-// ----------------------------------------------------------------------------
-const ANALYZE_PROMPT =
-  'This PDF is a combined package of California real estate forms (C.A.R. and related) that have been returned SIGNED or partially signed. Do TWO things and return ONE JSON object.\n\n' +
-  'PACKAGE FAMILIES. A package is usually one of these; do not assume it is a seller-disclosure package. (a) SELLER DISCLOSURE package: TDS, SPQ, AVID, NHD, LPD, FHDS, WBSA, ESD, SBSA and similar. (b) BUYER REPRESENTATION package: AD, BRBC, PRBS-B, BCA, BIA, CCPA and similar. (c) LISTING package: RLA (or RLAA), AD, PRBS-S, BCA, SLD, TA, CCPA and similar. (d) PURCHASE AGREEMENT package: RPA, counter offers (BCO, SCO, SMCO), ADM addenda, AD, PRBS, BIA, SBSA, FHDS, CCPA, RCSD, AAA/ABA and similar. Mixed packages happen. Treat EVERY distinct form the same way regardless of family — agreements, advisories, disclosures, receipts and reports all get carved out.\n' +
-  '1) SPLIT MAP. Identify every distinct CAR form whose OWN pages are physically in this package (a form counts only if its own pages are here, NOT if it is merely referenced inside another form — long agreements like the RPA, BRBC and RLA name many other forms in their bodies and those references are NOT separate forms). For each form return: "code" (the standard CAR code, e.g. TDS, SPQ, SBSA, AVID, FHDS, LPD, WBSA, ESD, RPA, BRBC, RLA, AD, BCA, BIA, CCPA, PRBS-B, PRBS-S), "name" (the full form name), "revision" (the printed revision date in M/YY, or "" if none), and "pages" (the array of 1-indexed page numbers in THIS PDF that belong to that form, in order). Use each form\'s header/footer, its form code, and its "Page X of Y" line to find its exact page span; a form is usually a contiguous run of pages. Every page of the PDF should belong to exactly one form when possible.\n' +
-  'AVID side: an Agent Visual Inspection Disclosure (AVID) can be the listing agent\'s or the buyer\'s agent\'s. Set "code" to "AVID-LA" when completed by the LISTING (seller\'s) agent and "AVID-BA" when completed by the BUYER\'S agent. Read the agent name and brokerage printed on the AVID, then match that brokerage to a side using whatever evidence the package provides, in this order: (a) an agency-relationship / agency-confirmation form if one is present (clearest); (b) OTHERWISE, the listing brokerage recurs throughout a seller-disclosure package — on the other disclosure forms\' agent lines, the seller\'s RCSD, and brokerage-branded local-area / affiliated-business disclosures — so if the AVID\'s brokerage matches that recurring listing brokerage it is AVID-LA, and if it matches a different, clearly buyer-side brokerage it is AVID-BA. You do NOT need the agency form when the brokerage can be matched this way. If both AVIDs are present, return each as its own form with its own code. Only when the AVID\'s agent/brokerage cannot be matched to either side from ANY evidence in the package, use plain "AVID" rather than guessing.\n' +
-  'TOA (Text Overflow Addendum): a C.A.R. Form TOA is a continuation sheet for whatever form ran out of space in a field. Its body starts by naming the PARENT form\'s code in square brackets, e.g. "[SPQ]" or "[TDS]", followed by the paragraph number it continues. For each TOA set "code" to "TOA" and ALSO return "parent_code" = that bracketed CAR code (e.g. "SPQ"); use "" if no bracketed code is printed. Return the TOA as its own form here with its own pages — it is reattached to its parent downstream.\n' +
-  'ADDENDUM (an amendment or continuation that is NOT text overflow): identify the PARENT form it amends or continues, the same way. Two kinds. (a) A C.A.R. Form ADM: its header reads "ADDENDUM No. ___" and "(C.A.R. Form ADM...)". Read the checkbox row near the top to see what it amends — "Purchase Agreement", "Transfer Disclosure Statement", a lease, or "Other ___" — and confirm against the section codes referenced in its body. Set "code" to "ADM", "name" to "Addendum", "parent_code" to the parent\'s CAR code (use "TDS" for the Transfer Disclosure Statement, "SPQ" for the Seller Property Questionnaire, "RPA" for the Purchase Agreement), and "doc_no" to the number printed after "ADDENDUM No." (e.g. "1"; use "" if blank). (b) A custom continuation sheet with NO CAR code whose title is "Addendum to <form>" (e.g. "Addendum to Seller Property Questionnaire") and whose body is keyed to that form\'s sections — set "code" to "", keep its printed "name", set "parent_code" to that parent form\'s CAR code (e.g. "SPQ"), and leave "doc_no" as "" (these are not numbered). Return each addendum as its OWN form with its own pages and its own signature audit — do NOT fold it into another form (only TOA overflow sheets are merged downstream). For every form that is neither a TOA nor an addendum, set both "parent_code" and "doc_no" to "".\n' +
-  'COUNTER OFFER (purchase-agreement packages): C.A.R. Forms BCO (Buyer Counter Offer), SCO (Seller Counter Offer) and SMCO (Seller Multiple Counter Offer) are NUMBERED and a package often holds several. Set "code" to the printed code (BCO/SCO/SMCO), "name" to the full form name, and "doc_no" to the number printed after "No." in its title (e.g. "1"; use "" if blank). Leave "parent_code" blank — a counter is its own document, not an amendment of another form. Return each counter as its own form; do NOT merge two counters even when they are the same code.\n' +
-  'Booklet receipt: a page that acknowledges RECEIPT of the environmental-hazards / earthquake-safety booklet(s) (the "Homeowner\'s Guide to Environmental Hazards and Earthquake Safety", and/or the HERS / lead-paint booklets) IS a distinct form — the standard C.A.R. receipt OR a custom brokerage equivalent (e.g. a "Receipt for Links to Booklets" page, or any page acknowledging receipt of those booklets). Carve it out as its own form and DO NOT leave it unassigned: set "code" to "" (it has no standard short CAR code) and "name" to exactly "EQ Booklet Receipt". CRITICAL: the informational BOOKLET itself (the multi-page guide) is NOT this receipt — only a signed/signable acknowledgment-of-receipt page is.\n' +
-  '  TWO COPIES ON ONE PAGE: this receipt is very often printed TWICE on the same sheet, one acknowledgement above the other, separated by a dashed cut line. They are NOT duplicates - the upper block is signed by the BUYER side (its lines read "(Buyer\'s signature)" and "(Buyer\'s Agent\'s signature)") and the lower block by the SELLER side ("(Seller\'s signature)", "(Seller\'s Agent\'s signature)"). AUDIT BOTH BLOCKS. A sheet where the seller half is fully signed and the buyer half is entirely blank is NOT complete: required_signers includes the parties named on BOTH blocks, and present_signers only those who actually signed. Read the party label printed UNDER each signature line to decide whose block it is, never the position on the page. A "(Broker\'s name)" line on this form is a printed firm name, not a signature - ignore it.\n' +
-  'MLS printout and Property Profile: two NON-CAR documents that commonly ride along inside a signed disclosure package. Each is a distinct form — carve it out and DO NOT leave it unassigned.\n' +
-  '  - MLS printout: an MLS listing detail sheet for the subject property. Tells: an MLS report header/footer such as "Customer Full", "Agent Full" or "Client Full", a "Listing ID" or "MLS #", a "Printed:" timestamp, the MLS/association name, listing photos, and "Facts & Features" / Interior / Exterior bullet sections. Set "code" to "" (it has no CAR code) and "name" to exactly "MLS".\n' +
-  '  - Property Profile: a title- or data-vendor property report for the subject property (e.g. a CoreLogic "Property Details" report, or a title company profile). Tells: an APN and/or CLIP, and sections like OWNER INFORMATION, COMMUNITY INSIGHTS, LOCATION INFORMATION, TAX INFORMATION, ASSESSMENT & TAX, LAST MARKET SALE & SALES HISTORY, MORTGAGE HISTORY, PROPERTY MAP. Set "code" to "" and "name" to exactly "Property Profile".\n' +
-  '  Both usually span SEVERAL pages. Follow the document\'s own page counter (e.g. a "Page 1/4" ... "Page 4/4" footer) and its repeated header/footer through to its LAST page — never return just its first page. Neither carries CAR signature lines: their only marks are initials, typically a DocuSign initial/signature tag in a top corner of the first page, and WHO initials varies (the seller, the buyers, or both). So for these two ONLY, do not reason about who was required to sign. Just report who actually marked it: set "present_signers" to every party that left ANY initial or signature mark anywhere on the document, and set "required_signers" to that exact same set. If there is no initial or signature mark anywhere on the document, set BOTH to [].\n\n' +
-  '2) SIGNATURE AUDIT. For EACH form determine who has signed/initialed everywhere that form requires. The parties are: B = Buyer, S = Seller, BA = Buyer\'s Agent, LA = Listing/Seller\'s Agent, BR = the Broker or Office Manager THEMSELVES. A line labelled "Broker", "Brokerage", "Broker/Agent" or "By (Agent)" is normally an AGENT line: map it to BA on a buyer-side document (BRBC, buyer advisories, a buyer counter offer) and to LA on a listing-side document (RLA, seller advisories, a seller counter offer). USE BR ONLY where the form asks the broker or office manager to sign IN THAT CAPACITY, distinct from the agent who already signed - the clearest case is the ABA, whose acknowledgement lines read "By (Broker/Office Manager)". A printed "(Broker\'s name)" or brokerage-name field is NOT a signature line and is never BR. Two-party agreements are normal — a BRBC requires only B and BA, an RLA only S and LA — so do NOT pad required_signers to all four. Return per form:\n' +
-  '   - "required_signers": the subset of ["B","S","BA","LA","BR"] this form actually requires to sign or initial (judge from the form\'s own signature and initial lines; NOT every form needs all four).\n' +
-  '   - "present_signers": the subset of required_signers who have ACTUALLY completed their signature AND every initial they are required to on that form. A party counts as present ONLY if all of their required marks are done; if any required initial or signature for that party is missing, do NOT include them.\n' +
-  'Judge by how a party actually signed: a wet signature, a DocuSign/e-sign block, or initials all count. A pre-printed or typed party name (e.g. a typed "Seller" name that is a trust or LLC) is NOT a signature.\n\n' +
-  'Respond with ONLY this JSON (no prose, no fences):\n' +
-  '{"forms":[{"code":"TDS","name":"Real Estate Transfer Disclosure Statement","revision":"12/25","pages":[3,4,5],"parent_code":"","doc_no":"","required_signers":["S","B","BA","LA"],"present_signers":["S","B","BA","LA"]},{"code":"TOA","name":"Text Overflow Addendum","revision":"6/23","pages":[6],"parent_code":"SPQ","doc_no":"","required_signers":["S","B"],"present_signers":["S","B"]},{"code":"ADM","name":"Addendum","revision":"12/21","pages":[7],"parent_code":"TDS","doc_no":"1","required_signers":["S","B"],"present_signers":["S","B"]},{"code":"BRBC","name":"Buyer Representation and Broker Compensation Agreement","revision":"12/24","pages":[8,9,10],"parent_code":"","doc_no":"","required_signers":["B","BA"],"present_signers":["B","BA"]},{"code":"SCO","name":"Seller Counter Offer","revision":"6/26","pages":[11],"parent_code":"","doc_no":"1","required_signers":["B","S"],"present_signers":["B","S"]}]}';
 
 // Map a signer value (token or word) to one of B/S/BA/LA, else null.
 function toToken(v) {
@@ -230,6 +147,28 @@ function isMarkOnlyDoc(form) {
   return !clean(form.code) && MARK_ONLY_DOCS.has(clean(form.name).toLowerCase());
 }
 
+/**
+ * A LABEL THAT NAMES NOTHING.
+ *
+ * The model is asked for a code and a name, and when it cannot tell what a
+ * document is it sometimes answers with a placeholder — "Misc", "Other",
+ * "Disclosures", "Document". Filing 9 pages as `Misc - FX.pdf` is worse than
+ * not filing them: the name asserts an identity nobody established and the FX
+ * asserts a signature audit nobody performed. Those pages belong in
+ * `Unsorted - review.pdf`, where they are visibly unhandled.
+ */
+const EMPTY_LABELS = new Set([
+  'misc', 'miscellaneous', 'other', 'others', 'unknown', 'document', 'documents',
+  'disclosure', 'disclosures', 'form', 'forms', 'attachment', 'attachments',
+  'page', 'pages', 'various', 'n/a', 'na', 'none', 'untitled',
+]);
+
+function isUnidentified(form) {
+  if (clean(form.code)) return false;              // a CAR code IS an identity
+  const name = clean(form.name).toLowerCase().replace(/[^a-z/ ]/g, '').trim();
+  return !name || EMPTY_LABELS.has(name);
+}
+
 // FX when every required signer is present; else N<missing, in fixed order>.
 // Suffix style is Megan's own filing shorthand (NB, NS, NBA, NLA, NB+S), set
 // 2026-09-04 to match how she hand-names these in the escrow folders.
@@ -239,6 +178,19 @@ function statusSuffix(form) {
   }
   const required = normSigners(form.required_signers);
   const present = new Set(normSigners(form.present_signers));
+  /**
+   * NO REQUIRED SIGNERS IS NOT "EVERYONE SIGNED".
+   *
+   * An empty `required_signers` used to fall straight through to FX, because
+   * nothing was missing from nothing. So a form the model could not reason
+   * about came out stamped as fully executed - the one status a TC acts on
+   * without re-reading the document. `NeedReview` says what actually happened.
+   *
+   * The mark-only documents (MLS printout, Property Profile) are handled
+   * above: they genuinely have no CAR signature lines, and their rule is
+   * "whoever marked it is who was required".
+   */
+  if (!required.length) return 'NeedReview';
   const missing = required.filter((t) => !present.has(t));
   if (!missing.length) return 'FX';
   const ordered = SIGNER_ORDER.filter((t) => missing.includes(t));
@@ -454,47 +406,7 @@ exports.handler = async function (event) {
     }
     if (buffer.length > MAX_DOC_BYTES) throw new Error(`file too large (${buffer.length}B)`);
 
-    // 2) Analyze: split map + signature audit.
-    console.log('[disclosure-split] analyzing with Opus (split map + signature audit)...');
-    const content = [
-      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') }, title: source.fileName || 'disclosures.pdf' },
-      { type: 'text', text: ANALYZE_PROMPT },
-    ];
-    // High-effort adaptive thinking spends tokens reasoning about form boundaries
-    // + the signature audit BEFORE the JSON, so give it a comfortable ceiling
-    // (a 20k ceiling truncated mid-output and hit max_tokens).
-    const parsed = parseJson(await callClaude(content, 48000));
-    const mappedForms = (Array.isArray(parsed.forms) ? parsed.forms : [])
-      .map((f) => ({
-        code: clean(f.code),
-        name: clean(f.name),
-        revision: String(f.revision || '').trim(),
-        pages: (Array.isArray(f.pages) ? f.pages : []).map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 1),
-        parent_code: clean(f.parent_code),
-        // doc_no is the number on any NUMBERED document (Addendum No. N,
-        // Counter Offer No. N). addendum_no is the pre-2026-09 name, still read
-        // so an in-flight model response using the old key keeps working.
-        doc_no: String(f.doc_no || f.addendum_no || '').trim(),
-        required_signers: f.required_signers,
-        present_signers: f.present_signers,
-      }))
-      .filter((f) => (f.code || f.name) && f.pages.length);
-
-    // Reattach Text Overflow Addenda to their parent form. A TOA is a
-    // continuation sheet whose body names its parent's CAR code in brackets
-    // (e.g. "[SPQ]"); the model returns that as parent_code. Append the TOA's
-    // pages to that parent so they file as ONE document (the merged file keeps
-    // the parent's name + signature status). A TOA whose parent isn't in the
-    // packet stays standalone. Fallback when parent_code is blank: the form
-    // whose pages end immediately before the TOA (a TOA physically follows the
-    // form it continues).
-    const forms = mergeAddenda(mappedForms);
-
-    if (!forms.length) {
-      throw new Error('no forms with page ranges identified — leaving original in place for manual handling');
-    }
-
-    // 3) Get page count (pdf-lib parses fine even with the corrupt refs) and
+    // 2) Get page count (pdf-lib parses fine even with the corrupt refs) and
     //    flag any page whose content is unresolvable/empty — those can't be
     //    vector-copied (they'd blank), so they take the raster fallback. Page
     //    images are rendered LAZILY: a clean packet skips rasterization entirely
@@ -552,6 +464,76 @@ exports.handler = async function (event) {
     };
     const extract = (pages) => buildFormPdf(pages);
 
+    // 3) IDENTIFY, in two stages: where each document is, then what it is.
+    //
+    // THIS USED TO BE ONE CALL. The whole packet went to the model with a
+    // prompt asking for the complete split map AND a per-form signature audit
+    // in one response. On the 65-page 1333 S Beverly Glen delivery that
+    // returned 28 forms covering 73 of 110 pages, with the cooperating
+    // broker's disclosures and the buyer agent's AVID simply missing - a
+    // plausible, incomplete answer, and nothing in it said so. Coverage was an
+    // implicit property of that answer, so 37 unfiled pages looked exactly
+    // like none. Megan, on the email that followed: "it didn't pull any of the
+    // coldwell banker disclosures and then the BA AVID it marked it as FX but
+    // in reality it didn't have any seller signatures on it."
+    //
+    // Stage one reads the header and footer STRIPS of every page in small
+    // batches and works out the page spans IN CODE (lib/page-strips.js), so
+    // coverage becomes subtraction over a set rather than something a model
+    // asserts. Stage two hands each document to the model as its own small PDF
+    // and asks only what it is and who still has to sign it
+    // (lib/document-audit.js) - the part that genuinely needs reading, and the
+    // part that does not degrade when the question is one to five pages long.
+    //
+    // The `forms` shape that comes out is unchanged, so everything below here
+    // - mergeAddenda, statusSuffix, formLabel, the Unsorted guard, coverage -
+    // is untouched.
+    console.log(`[disclosure-split] reading page strips across ${pageCount} page(s)...`);
+    const strips = await readAllStrips(buffer, pageCount, source.fileName || '');
+    const documents = documentsFromStrips(strips);
+    const unlabelled = strips.filter((r) => r.unread).length;
+    console.log(`[disclosure-split] ${documents.length} document(s) identified from strips` +
+      (unlabelled ? `, ${unlabelled} page(s) had no label read` : ''));
+    for (const d of documents) {
+      if (d.notes.length) {
+        console.warn(`[disclosure-split] pages ${d.pages.join(',')} (${d.title || d.carCode || 'unnamed'}): ${d.notes.join('; ')}`);
+      }
+    }
+
+    console.log(`[disclosure-split] auditing ${documents.length} document(s) with Opus...`);
+    const mappedForms = (await auditDocuments(documents, extract, source.fileName || ''))
+      .map((f) => ({
+        code: clean(f.code),
+        name: clean(f.name),
+        revision: String(f.revision || '').trim(),
+        pages: f.pages,
+        parent_code: clean(f.parent_code),
+        // doc_no is the number on any NUMBERED document (Addendum No. N,
+        // Counter Offer No. N).
+        doc_no: String(f.doc_no || '').trim(),
+        required_signers: f.required_signers,
+        present_signers: f.present_signers,
+        // Why this document needs a human: a disputed boundary, an audit call
+        // that failed, or a span the strips could not corroborate. Carried
+        // through to the Unsorted reason so the alert names the cause.
+        review: f.review || null,
+      }))
+      .filter((f) => f.pages.length);
+
+    // Reattach Text Overflow Addenda to their parent form. A TOA is a
+    // continuation sheet whose body names its parent's CAR code in brackets
+    // (e.g. "[SPQ]"); the model returns that as parent_code. Append the TOA's
+    // pages to that parent so they file as ONE document (the merged file keeps
+    // the parent's name + signature status). A TOA whose parent isn't in the
+    // packet stays standalone. Fallback when parent_code is blank: the form
+    // whose pages end immediately before the TOA (a TOA physically follows the
+    // form it continues).
+    const forms = mergeAddenda(mappedForms);
+
+    if (!forms.length) {
+      throw new Error('no documents identified — leaving original in place for manual handling');
+    }
+
     // Name-collision set = existing files already in the property folder.
     const existing = await drive.listChildren(propertyFolderId, { excludeFolders: true }).catch(() => []);
     const taken = new Set(existing.map((f) => String(f.name || '').toLowerCase()));
@@ -565,10 +547,26 @@ exports.handler = async function (event) {
       const label = formLabel(form);
       const base = `${label} - ${status}`;
       const filename = uniqueName(base, taken);
+      /**
+       * UNIDENTIFIED GOES TO UNSORTED, not to a file named after a guess. Its
+       * pages stay uncovered, so the guard below sweeps them into
+       * `Unsorted - review.pdf` and the alert names them.
+       */
+      if (isUnidentified(form)) {
+        // WHY it could not be named is the useful half. `review` carries it:
+        // a disputed boundary ("more than one document may be here: ..."), an
+        // audit call that failed, or a span the strips could not corroborate.
+        // Without it the alert says "not identified" about every one of them,
+        // which tells a TC to go and look at all of them.
+        const reason = form.review || 'not identified';
+        console.warn(`[disclosure-split] unidentified document (pages ${form.pages.join(',')}) -> Unsorted: ${reason}`);
+        failedForms.push({ label: label || 'unidentified', pages: form.pages, reason });
+        continue;
+      }
       const bytes = await extract(form.pages);
       if (!bytes) {
         console.warn(`[disclosure-split] ${label}: no valid pages, skipped`);
-        failedForms.push({ label, pages: form.pages });
+        failedForms.push({ label, pages: form.pages, reason: 'could not be built' });
         continue;
       }
       const uploaded = await drive.uploadMultipart({ name: filename, parents: [propertyFolderId], mimeType: 'application/pdf', bytes });
@@ -592,8 +590,13 @@ exports.handler = async function (event) {
        * the folder, so a page with no file must show up as still needed.
        */
       form.pages.forEach((p) => coveredPages.add(p));
-      results.push({ code: form.code, name: form.name, status, filename, fileId: uploaded.id, pages: form.pages });
+      results.push({ code: form.code, name: form.name, status, filename, fileId: uploaded.id, pages: form.pages, review: form.review || undefined });
       console.log(`[disclosure-split] wrote "${filename}" (pages ${form.pages.join(',')})`);
+      // A form that WAS named can still have a caveat on its page span. It
+      // files under its own name, because it has an identity, but the caveat
+      // rides along on the event and into the alert below rather than being
+      // dropped on the floor.
+      if (form.review) console.warn(`[disclosure-split] "${filename}": ${form.review}`);
     }
     if (failedForms.length) {
       console.warn(`[disclosure-split] ${failedForms.length} form(s) failed to build and fall through to Unsorted: ` +
@@ -637,11 +640,24 @@ exports.handler = async function (event) {
      * "still needed" that should have gone, which is the safe direction, but a
      * TC deserves to be told rather than left to notice.
      */
+    /**
+     * `flagged` is a THIRD state, and it is deliberately not part of
+     * `complete`. These forms are named and filed, so nothing is missing and a
+     * TC does not need to do anything - but the span carries a caveat worth
+     * reading (a document that printed a longer length than the pages
+     * delivered, a page whose labels could not be read). Folding them into
+     * `complete: false` would cry wolf on a delivery where every form landed;
+     * dropping them would hide the one case where a form filed under a
+     * slightly wrong page range.
+     */
+    const flagged = results.filter((r) => r.review)
+      .map((r) => ({ filename: r.filename, pages: r.pages, note: r.review }));
     const coverage = {
       pageCount,
       filed: results.length,
       unsortedPages,
       failedForms,
+      flagged,
       complete: unsortedPages.length === 0 && failedForms.length === 0,
     };
     await done.setJSON(eventId, {
@@ -668,8 +684,8 @@ exports.handler = async function (event) {
       const parts = [];
       if (failedForms.length) {
         parts.push(
-          `${failedForms.length} form(s) could not be built: ` +
-          failedForms.map((f) => `${f.label} (page ${f.pages.join(', ')})`).join('; '),
+          `${failedForms.length} document(s) could not be filed: ` +
+          failedForms.map((f) => `${f.label} (page ${f.pages.join(', ')}) - ${f.reason}`).join('; '),
         );
       }
       if (unsortedPages.length) {
@@ -700,7 +716,8 @@ exports.handler = async function (event) {
       `[disclosure-split] ${coverage.complete ? 'complete' : 'INCOMPLETE'} — ${results.length} form(s) filed to ` +
       `${location.propertyFolderName || propertyFolderId}` +
       (unsortedPages.length ? `, ${unsortedPages.length} page(s) unsorted` : '') +
-      (failedForms.length ? `, ${failedForms.length} form(s) failed to build` : ''),
+      (failedForms.length ? `, ${failedForms.length} document(s) not filed` : '') +
+      (flagged.length ? `, ${flagged.length} filed with a note on its page span` : ''),
     );
     return { statusCode: 200 };
   } catch (err) {
@@ -709,3 +726,8 @@ exports.handler = async function (event) {
     return { statusCode: 500 };
   }
 };
+
+// Exposed for checks/disclosure-split-naming.js, following lib/skip-gate.js's
+// _internal convention. The filename a document lands under is what Megan
+// actually sees, so it is worth asserting without a Drive upload.
+module.exports._internal = { statusSuffix, formLabel, isUnidentified, mergeAddenda, clean, normSigners };
