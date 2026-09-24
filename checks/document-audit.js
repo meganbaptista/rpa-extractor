@@ -10,7 +10,8 @@
 // disputes a boundary, and the brokerage evidence an AVID's side is read from.
 
 const A = require('../netlify/functions/lib/document-audit.js');
-const { applySplit, tallyBrands, packetContext, rejoinSplitForms, resolveSigners, tokensForLabel } = A._internal;
+const { applySplit, tallyBrands, packetContext, rejoinSplitForms, resolveSigners, tokensForLabel,
+        rejoinOutOfSequence } = A._internal;
 const split = require('../netlify/functions/disclosure-split-background.js');
 const { statusSuffix, formLabel } = split._internal;
 
@@ -382,6 +383,109 @@ ok('but an unrelated form does not become an ABA',
   ['TDS - Real Estate Transfer Disclosure Statement - FX',
    'Coldwell Banker Contract Addendum and Other Greater Los Angeles Area Disclosures - NeedSS'].map(aliasFor),
   ['', '']);
+
+// --- ONE DOCUMENT DELIVERED ACROSS NON-ADJACENT PAGES ----------------------
+// Megan expects this never to happen - "nobody would send documents out of
+// sequence" - and she is right about what SHOULD arrive. The 1333 S Beverly
+// Glen package did it twice, and she confirmed the pairing after looking:
+// "Page 17 is alone and goes with page 27, 18 is also alone and goes with 42
+// and 43." Filed as fragments those cost twice: three files for two forms, and
+// the reconcile then matches one piece and reports the other as a document
+// nothing asks for - one form reading as two problems.
+//
+// Both rules below are gated hard, because joining the WRONG pages is worse
+// than leaving fragments a person can see.
+const piece = (pages, o = {}) => ({
+  code: '', name: '', brokerage: '', parent_code: '', doc_no: '',
+  required_signers: [], present_signers: [], signature_lines: [], pages,
+  ...o,
+  strip: { title: '', brand: '', footerName: '', ...(o.strip || {}) },
+});
+const joined = (fs) => rejoinOutOfSequence(fs)
+  .map((f) => `[${f.pages.join(',')}]`).join(' ');
+const TEMPLATE = 'Brokerage Matters/Affiliated Business Disclosure/So Cal 010926.docx';
+
+// THE SOTHEBY'S CASE. Pages 18, 42 and 43 print the identical footer, and were
+// the only pages in that packet carrying both it and no DocuSign banner.
+ok('a shared footer template joins 18 + 42 + 43',
+  joined([
+    piece([18], { name: 'Affiliated Business Arrangement Disclosure Statement',
+                  strip: { title: 'AFFILIATED BUSINESS ARRANGEMENT DISCLOSURE STATEMENT', footerName: TEMPLATE } }),
+    piece([21], { code: 'RCSD-S', name: 'RCSD' }),
+    piece([42, 43], { name: 'Affiliated Business Disclosure', strip: { footerName: TEMPLATE } }),
+  ]),
+  '[18,42,43] [21]');
+// The joined form takes the name from the titled piece and the signature
+// verdict from the piece that actually has the signature lines.
+{
+  const [f] = rejoinOutOfSequence([
+    piece([18], { name: 'Affiliated Business Arrangement Disclosure Statement',
+                  strip: { title: 'ABA', footerName: TEMPLATE } }),
+    piece([42, 43], { name: 'Affiliated Business Disclosure', required_signers: ['B', 'S'],
+                      present_signers: ['B'], strip: { footerName: TEMPLATE } }),
+  ]);
+  ok('the joined form is named from the titled piece',
+    f.name, 'Affiliated Business Arrangement Disclosure Statement');
+  ok('and audited from the piece that carries the signatures',
+    `${f.required_signers.join('+')} / ${f.present_signers.join('+')}`, 'B+S / B');
+  ok('and says it was delivered out of sequence', /out of sequence/.test(f.review), true);
+}
+// THE GUARD THAT MATTERS: the footer string is the source WORD TEMPLATE path,
+// which every affiliated business disclosure Anywhere generates carries -
+// Sotheby's, Coldwell Banker, Corcoran, Century 21. Alone it would fuse two
+// separate disclosures. Exactly one piece may carry a title.
+ok('two titled pieces on one template are two documents',
+  joined([piece([18], { name: 'A', strip: { title: 'ABA', footerName: TEMPLATE } }),
+          piece([42], { name: 'B', strip: { title: 'ABA', footerName: TEMPLATE } })]),
+  '[18] [42]');
+ok('pieces already running together are left alone',
+  joined([piece([8, 9], { name: 'ABA', strip: { title: 'ABA', footerName: TEMPLATE } }),
+          piece([10], { strip: { footerName: TEMPLATE } })]),
+  '[8,9] [10]');
+// A C.A.R. form prints its own PAGE m OF n and is contiguous by construction.
+ok('a C.A.R. form is never fused',
+  joined([piece([1], { code: 'TDS', strip: { title: 'TDS', footerName: TEMPLATE } }),
+          piece([9], { code: 'TDS', strip: { footerName: TEMPLATE } })]),
+  '[1] [9]');
+
+// THE CHRISTIE'S CASE. Pages 17 and 27 share no footer key at all. What pairs
+// them is that each is defective in a way the other explains: 17 is a titled
+// disclosure with NO signature lines, 27 is nothing BUT signature lines, and
+// both are Christie's. signature_lines is what makes that checkable.
+const SIG = [{ label: "Buyer's or Seller's Signature", signed: true }];
+ok('an orphan page of signatures joins the document that has none',
+  joined([
+    piece([17], { name: 'ABA', brokerage: "Christie's", strip: { title: 'ABA', brand: "Christie's" } }),
+    piece([26], { name: 'PTR Advisory', brokerage: "Christie's", signature_lines: SIG,
+                  strip: { title: 'PTR ADVISORY', brand: "AKG | Christie's" } }),
+    piece([27], { brokerage: "Christie's", signature_lines: SIG, strip: { brand: "Christie's" } }),
+  ]),
+  '[17,27] [26]');
+// Gated hard, because this one is inference rather than a printed key.
+ok('two orphans is ambiguous, so nothing moves',
+  joined([piece([17], { name: 'ABA', brokerage: 'X', strip: { title: 'ABA', brand: 'X' } }),
+          piece([27], { brokerage: 'X', signature_lines: SIG, strip: { brand: 'X' } }),
+          piece([37], { brokerage: 'X', signature_lines: SIG, strip: { brand: 'X' } })]),
+  '[17] [27] [37]');
+ok('two candidate parents is ambiguous too',
+  joined([piece([17], { name: 'one', brokerage: 'X', strip: { title: 'ABA', brand: 'X' } }),
+          piece([18], { name: 'two', brokerage: 'X', strip: { title: 'ABA', brand: 'X' } }),
+          piece([27], { brokerage: 'X', signature_lines: SIG, strip: { brand: 'X' } })]),
+  '[17] [18] [27]');
+ok('a different brokerage is not a parent',
+  joined([piece([17], { name: 'ABA', brokerage: 'Christies', strip: { title: 'ABA', brand: 'Christies' } }),
+          piece([27], { brokerage: 'Sothebys', signature_lines: SIG, strip: { brand: 'Sothebys' } })]),
+  '[17] [27]');
+ok('an orphan before any parent is not joined',
+  joined([piece([5], { brokerage: 'X', signature_lines: SIG, strip: { brand: 'X' } }),
+          piece([17], { name: 'ABA', brokerage: 'X', strip: { title: 'ABA', brand: 'X' } })]),
+  '[5] [17]');
+// A document that HAS its own signature lines is complete and needs no orphan.
+ok('a document with its own signature lines is not a parent',
+  joined([piece([17], { name: 'ABA', brokerage: 'X', signature_lines: SIG, strip: { title: 'ABA', brand: 'X' } }),
+          piece([27], { brokerage: 'X', signature_lines: SIG, strip: { brand: 'X' } })]),
+  '[17] [27]');
+ok('an empty packet is fine', joined([]), '');
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

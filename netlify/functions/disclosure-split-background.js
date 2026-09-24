@@ -595,6 +595,9 @@ exports.handler = async function (event) {
         // Counter Offer No. N).
         doc_no: String(f.doc_no || '').trim(),
         brokerage: String(f.brokerage || '').trim(),
+        // Set when this document's pages were gathered from non-adjacent parts
+        // of the delivery. Reported, never smoothed over - see below.
+        outOfSequence: f.outOfSequence || null,
         required_signers: f.required_signers,
         present_signers: f.present_signers,
         // The printed signature lines the audit transcribed. Carried through
@@ -680,7 +683,7 @@ exports.handler = async function (event) {
        * the folder, so a page with no file must show up as still needed.
        */
       form.pages.forEach((p) => coveredPages.add(p));
-      results.push({ code: form.code, name: form.name, status, filename, fileId: uploaded.id, pages: form.pages, review: form.review || undefined });
+      results.push({ code: form.code, name: form.name, status, filename, fileId: uploaded.id, pages: form.pages, review: form.review || undefined, outOfSequence: form.outOfSequence || undefined });
       console.log(`[disclosure-split] wrote "${filename}" (pages ${form.pages.join(',')})`);
       // A form that WAS named can still have a caveat on its page span. It
       // files under its own name, because it has an identity, but the caveat
@@ -762,12 +765,26 @@ exports.handler = async function (event) {
      */
     const flagged = results.filter((r) => r.review)
       .map((r) => ({ filename: r.filename, pages: r.pages, note: r.review }));
+    /**
+     * A DELIVERY THAT ARRIVED OUT OF SEQUENCE IS A CONVERSATION WITH WHOEVER
+     * SENT IT, not a tidy folder.
+     *
+     * Megan expects this never to happen - "nobody would send documents out of
+     * sequence" - and the 1333 S Beverly Glen package did it twice anyway. The
+     * pages are joined so the file is right, but the condition is surfaced on
+     * its own rather than folded in with the span caveats, because the action
+     * it calls for is different: the other notes are for her, this one is for
+     * the sender.
+     */
+    const outOfSequence = results.filter((r) => r.outOfSequence)
+      .map((r) => ({ filename: r.filename, detail: r.outOfSequence }));
     const coverage = {
       pageCount,
       filed: results.length,
       unsortedPages,
       failedForms,
       flagged,
+      outOfSequence,
       complete: unsortedPages.length === 0 && failedForms.length === 0,
     };
     await done.setJSON(eventId, {
@@ -789,6 +806,25 @@ exports.handler = async function (event) {
      * one troubled package cannot mask a different deal's problem, and a
      * re-drop of the same package does not ping twice within the window.
      */
+    /**
+     * REPORTED EVEN WHEN THE SPLIT IS COMPLETE, and deliberately not part of
+     * `complete`: nothing is missing, every page landed, and she does not have
+     * to do anything in the folder. What she may want to do is tell the sender.
+     */
+    if (outOfSequence.length) {
+      const where = location.propertyFolderName || propertyFolderId;
+      await alert(
+        `split-out-of-sequence:${where}`,
+        `${source.fileName} in ${where} had ${outOfSequence.length} document(s) delivered OUT OF ` +
+        'SEQUENCE - their pages were spread across the package rather than running together. The ' +
+        'pages have been gathered into one file each, so the folder is right:\n' +
+        outOfSequence.map((o) => `  - ${o.filename}: ${o.detail}`).join('\n') +
+        '\n\nThe original package is archived in Incoming/_processed/ exactly as it arrived. Worth ' +
+        'mentioning to whoever sent it, since a form split across a package is easy to miss by hand.',
+        { force: true, source: 'disclosure-pipeline', label: 'Disclosure Pipeline' },
+      );
+    }
+
     if (!coverage.complete) {
       const where = location.propertyFolderName || propertyFolderId;
       const parts = [];
@@ -827,7 +863,8 @@ exports.handler = async function (event) {
       `${location.propertyFolderName || propertyFolderId}` +
       (unsortedPages.length ? `, ${unsortedPages.length} page(s) unsorted` : '') +
       (failedForms.length ? `, ${failedForms.length} document(s) not filed` : '') +
-      (flagged.length ? `, ${flagged.length} filed with a note on its page span` : ''),
+      (flagged.length ? `, ${flagged.length} filed with a note on its page span` : '') +
+      (outOfSequence.length ? `, ${outOfSequence.length} delivered OUT OF SEQUENCE and gathered` : ''),
     );
     return { statusCode: 200 };
   } catch (err) {

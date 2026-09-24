@@ -30,6 +30,7 @@
 // ============================================================================
 
 const { callClaude } = require('./claude');
+const { footerDocName } = require('./page-strips')._internal;
 const { mapLimit } = require('./map-limit');
 
 /**
@@ -643,7 +644,157 @@ async function auditDocuments(documents, carve, label = '', pass = 1) {
   // Page order, so the filed names follow the packet rather than the order the
   // resplit happened to finish in.
   const ordered = [...forms, ...extraForms].sort((a, b) => (a.pages[0] || 0) - (b.pages[0] || 0));
-  return pass === 1 ? rejoinSplitForms(ordered) : ordered;
+  return pass === 1 ? rejoinOutOfSequence(rejoinSplitForms(ordered)) : ordered;
+}
+
+/**
+ * ONE DOCUMENT DELIVERED ACROSS NON-ADJACENT PAGES.
+ *
+ * Megan expects this never to happen - "nobody would send documents out of
+ * sequence" - and she is right about what SHOULD arrive. The 1333 S Beverly
+ * Glen package from the buyer's agent did it anyway, twice, and she confirmed
+ * it after looking: "Page 17 is alone and goes with page 27, 18 is also alone
+ * and goes with 42 and 43... i'm just shocked it was mismatched like that."
+ *
+ * Filed as fragments those cost twice over: three files for two forms, and the
+ * compliance reconcile then matches one piece and reports the other as a
+ * document nothing on the list asks for - one form reading as two separate
+ * problems, which is exactly the confusion the DIA and SBSA caused earlier the
+ * same day.
+ *
+ * SO THE PAGES ARE JOINED AND THE CONDITION IS REPORTED. Both halves matter.
+ * Reassembling silently would hide a defect in what was SENT, which belongs
+ * back with the sender, not buried in a tidy folder. Provenance survives
+ * because the original delivery is archived to Incoming/_processed/.
+ *
+ * Only documents with NO C.A.R. code are considered: a C.A.R. form prints its
+ * own "PAGE m OF n" and is contiguous by construction.
+ */
+function rejoinOutOfSequence(forms) {
+  let out = joinByFooterTemplate(forms);
+  out = joinOrphanAcknowledgement(out);
+  return out.sort((a, b) => (a.pages[0] || 0) - (b.pages[0] || 0));
+}
+
+/** Pieces of one document, in page order, as a single form. */
+function fuse(pieces, why) {
+  const ordered = [...pieces].sort((a, b) => (a.pages[0] || 0) - (b.pages[0] || 0));
+  const head = ordered[0];
+  const all = ordered.flatMap((f) => f.pages).sort((a, b) => a - b);
+  // The piece that carries the TITLE names the document, which is not always
+  // the first piece by page number; and the piece that carries the SIGNATURE
+  // lines is the one that knows whether it is executed.
+  const named = ordered.find((f) => f.name) || head;
+  const signed = ordered.reduce((best, f) =>
+    ((f.required_signers || []).length > (best.required_signers || []).length ? f : best), head);
+  return {
+    ...head,
+    name: named.name,
+    code: named.code,
+    parent_code: named.parent_code || '',
+    doc_no: named.doc_no || '',
+    brokerage: named.brokerage || head.brokerage || '',
+    required_signers: signed.required_signers,
+    present_signers: signed.present_signers,
+    signature_lines: signed.signature_lines,
+    signerAmbiguity: signed.signerAmbiguity,
+    pages: all,
+    outOfSequence: `pages ${all.join(', ')} - ${why}`,
+    review: `delivered out of sequence: ${why}`,
+  };
+}
+
+/** True when a form's pages do not run consecutively. */
+function isSplitAcrossPacket(pages) {
+  for (let i = 1; i < pages.length; i++) if (pages[i] !== pages[i - 1] + 1) return true;
+  return false;
+}
+
+/**
+ * Join pieces that print the identical document name in their footer.
+ *
+ * Pages 18, 42 and 43 all carry "Brokerage Matters/Affiliated Business
+ * Disclosure/So Cal 010926.docx", and they were the only pages in that packet
+ * carrying both that footer AND no DocuSign envelope banner - attached outside
+ * the signing.
+ *
+ * THE GUARD IS ESSENTIAL: that string is the source WORD TEMPLATE path, not a
+ * fingerprint of one filled-in document. Every affiliated business disclosure
+ * Anywhere generates prints it, across Sotheby's, Coldwell Banker, Corcoran and
+ * Century 21, so on its own it would fuse two genuinely separate disclosures.
+ * Exactly ONE piece may carry a title: two titled pages means two documents,
+ * and the group is left alone.
+ */
+function joinByFooterTemplate(forms) {
+  const groups = new Map();
+  for (const f of forms) {
+    if (f.code) continue;                        // a C.A.R. form is contiguous
+    const key = footerDocName((f.strip || {}).footerName);
+    if (!key) continue;
+    (groups.get(key) || groups.set(key, []).get(key)).push(f);
+  }
+  const fused = new Map();
+  for (const [key, pieces] of groups) {
+    if (pieces.length < 2) continue;
+    const titled = pieces.filter((f) => (f.strip || {}).title);
+    if (titled.length !== 1) continue;           // two titles = two documents
+    const pages = pieces.flatMap((f) => f.pages).sort((a, b) => a - b);
+    if (!isSplitAcrossPacket(pages)) continue;   // already contiguous, nothing to do
+    fused.set(key, fuse(pieces, `they print the same document name in the footer, "${((pieces[0].strip || {}).footerName || '').trim()}"`));
+  }
+  if (!fused.size) return forms;
+  const consumed = new Set();
+  for (const [key, joined] of fused) for (const p of joined.pages) consumed.add(`${key}:${p}`);
+  const out = [];
+  const emitted = new Set();
+  for (const f of forms) {
+    const key = f.code ? '' : footerDocName((f.strip || {}).footerName);
+    if (key && fused.has(key)) {
+      if (!emitted.has(key)) { out.push(fused.get(key)); emitted.add(key); }
+      continue;
+    }
+    out.push(f);
+  }
+  return out;
+}
+
+/**
+ * Join a bare acknowledgement page to the titled document that needs one.
+ *
+ * Pages 17 and 27 share no footer key at all - what pairs them is that each is
+ * defective in a way the other explains. Page 17 is a titled affiliated
+ * business disclosure with NO signature lines anywhere on it; page 27 is an
+ * untitled page that is NOTHING BUT an acknowledgement and four signature
+ * lines; both are Christie's-branded. A disclosure nobody can sign and a
+ * signature page belonging to nothing are the same defect seen from two ends.
+ *
+ * `signature_lines` is what makes this checkable rather than a hunch: "has no
+ * signature lines of its own" is now a fact the audit reports.
+ *
+ * GATED HARD, because it is inference rather than a printed key: exactly one
+ * orphan and exactly one candidate parent, of the same brokerage, with the
+ * orphan AFTER the parent. Anything ambiguous is left as it was, which files
+ * the orphan to Unsorted with its reason - the honest outcome for a page
+ * nobody can place.
+ */
+function joinOrphanAcknowledgement(forms) {
+  const firm = (f) => String(f.brokerage || (f.strip || {}).brand || '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const lines = (f) => (Array.isArray(f.signature_lines) ? f.signature_lines : []);
+
+  const orphans = forms.filter((f) => !f.code && !f.name && !(f.strip || {}).title && lines(f).length > 0);
+  if (orphans.length !== 1) return forms;
+  const orphan = orphans[0];
+  if (!firm(orphan)) return forms;
+
+  const parents = forms.filter((f) => f !== orphan && !f.code && (f.strip || {}).title
+    && lines(f).length === 0 && firm(f) === firm(orphan)
+    && f.pages[f.pages.length - 1] < orphan.pages[0]);
+  if (parents.length !== 1) return forms;
+
+  const joined = fuse([parents[0], orphan],
+    'a page of signatures with no document of its own follows a document of the same brokerage with no signature lines of its own');
+  return forms.map((f) => (f === parents[0] ? joined : f)).filter((f) => f !== orphan);
 }
 
 /**
@@ -715,4 +866,4 @@ module.exports = {
   auditDocuments, groupForAudit,
   AUDIT_DOCS_PER_CALL, AUDIT_PAGES_PER_CALL, AUDIT_CONCURRENCY,
 };
-module.exports._internal = { hintFor, packetContext, applySplit, tallyBrands, brandKey, auditGroup, rejoinSplitForms, sameForm, resolveSigners, tokensForLabel, RULES, SHAPE };
+module.exports._internal = { hintFor, packetContext, applySplit, tallyBrands, brandKey, auditGroup, rejoinSplitForms, sameForm, resolveSigners, tokensForLabel, rejoinOutOfSequence, joinByFooterTemplate, joinOrphanAcknowledgement, RULES, SHAPE };
