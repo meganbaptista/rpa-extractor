@@ -290,6 +290,47 @@ function isAddendum(f) {
 // parent (e.g. "TDS - Addendum No. 1", "SPQ - Addendum"). Otherwise the normal
 // "<CODE> - <Name>" label. A parent-less addendum keeps its own label rather
 // than guessing (no regression on the ambiguous case).
+/**
+ * The firm name for a filename: the brand, without its office or region tail.
+ *
+ * "Coldwell Banker Realty - Hancock Park" and "Christie's International Real
+ * Estate Southern California" are the same firms as "Coldwell Banker Realty"
+ * and "Christie's International Real Estate", and the tail only makes a
+ * filename longer. Trimmed conservatively - the FIRM stays intact, because a
+ * name Megan does not recognise at a glance is worse than a long one.
+ */
+const NOT_A_BROKERAGE = /^(california association of realtors|c\.?a\.?r\.?|snapnhd)$/i;
+function brokerageName(form) {
+  let b = String(form.brokerage || '').trim();
+  if (!b) return '';
+  // A co-branded header ("AKG | Christie's International Real Estate") names
+  // the TEAM and the firm; the firm is the half worth filing under. Split
+  // first, because clean() turns the pipe into a space and the two halves
+  // become one unreadable name.
+  const parts = b.split('|').map((x) => x.trim()).filter(Boolean);
+  if (parts.length > 1) b = parts[parts.length - 1];
+  b = b.split(' - ')[0].split(',')[0].trim();                 // office / address tail
+  b = b.replace(/\s+(southern|northern)\s+california$/i, '')  // region tail
+       .replace(/\s+so\.?\s*cal\.?$/i, '')
+       .replace(/\s+(inc|llc|lp|ltd)\.?$/i, '')
+       .trim();
+  if (NOT_A_BROKERAGE.test(b)) return '';
+  return clean(b);
+}
+
+/** Does the document's own name already say whose it is? */
+function nameCarriesBrokerage(name, brokerage) {
+  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const n = norm(name);
+  const b = norm(brokerage);
+  if (!n || !b) return false;
+  if (n.includes(b)) return true;
+  // "Coldwell Banker Contract Addendum..." carries "Coldwell Banker" without
+  // the "Realty", so the first two significant words are enough to tell.
+  const lead = b.split(' ').filter((w) => w.length > 2).slice(0, 2).join(' ');
+  return !!lead && n.includes(lead);
+}
+
 function formLabel(form) {
   if (isAddendum(form)) {
     const parent = clean(form.parent_code).toUpperCase();
@@ -298,7 +339,28 @@ function formLabel(form) {
       return no ? `${parent} - Addendum No. ${no}` : `${parent} - Addendum`;
     }
   }
-  const base = [form.code, form.name].filter(Boolean).join(' - ');
+  let base = [form.code, form.name].filter(Boolean).join(' - ');
+  /**
+   * WHOSE DOCUMENT IS IT, FIRST IN THE NAME. Megan's request, 2026-09-24:
+   * "I would urge for the brokerage name to be before 'Affiliate'".
+   *
+   * A delivery routinely carries three brokerages' affiliated business
+   * disclosures, all printed from the same C.A.R.-less template and all
+   * therefore filing under the same name - on 1333 S Beverly Glen that gave
+   * her "Affiliated Business Arrangement Disclosure Statement - NeedReview"
+   * and the same again as "(2)", with no way to tell which firm's was which
+   * without opening both.
+   *
+   * Only for documents with NO C.A.R. code: a C.A.R. form belongs to no
+   * brokerage, and prefixing a TDS with a firm would be wrong. And skipped
+   * where the document's own title already names the firm, or the Coldwell
+   * Banker privacy notice would file as "Coldwell Banker Realty - Privacy
+   * Notice for Coldwell Banker Realty Clients".
+   */
+  if (!clean(form.code)) {
+    const firm = brokerageName(form);
+    if (firm && !nameCarriesBrokerage(form.name, firm)) base = `${firm} - ${base}`;
+  }
   if (isCounter(form)) {
     const no = clean(form.doc_no);
     if (no && !/\bno\.?\s*\d/i.test(base)) return `${base} No. ${no}`;
@@ -532,6 +594,7 @@ exports.handler = async function (event) {
         // doc_no is the number on any NUMBERED document (Addendum No. N,
         // Counter Offer No. N).
         doc_no: String(f.doc_no || '').trim(),
+        brokerage: String(f.brokerage || '').trim(),
         required_signers: f.required_signers,
         present_signers: f.present_signers,
         // The printed signature lines the audit transcribed. Carried through
@@ -777,4 +840,4 @@ exports.handler = async function (event) {
 // Exposed for checks/disclosure-split-naming.js, following lib/skip-gate.js's
 // _internal convention. The filename a document lands under is what Megan
 // actually sees, so it is worth asserting without a Drive upload.
-module.exports._internal = { statusSuffix, formLabel, isUnidentified, mergeAddenda, clean, normSigners };
+module.exports._internal = { statusSuffix, formLabel, isUnidentified, mergeAddenda, clean, normSigners, brokerageName, nameCarriesBrokerage };

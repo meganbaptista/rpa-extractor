@@ -59,11 +59,44 @@ const ALIASES = [
   { key: 'prelim', match: [/^prelim\b/i] },
   { key: 'home-insp', match: [/^property\s+inspections?\b/i, /^home\s+insp/i] },
   { key: 'termite', match: [/^termite\b/i] },
+  /**
+   * The affiliated business disclosure, which her list and the forms name
+   * four different ways: "ABA", "Brokerage Affiliate Disclosures (If any)",
+   * "Affiliated Business Arrangement Disclosure Statement" (C.A.R. and most
+   * brokerages) and plain "Affiliated Business Disclosure" (Sotheby's). With
+   * no alias, a list line reading "ABA -" never matched a file named
+   * "...Affiliated Business Arrangement Disclosure Statement..." and the Doc
+   * went on asking for a form sitting in the folder.
+   */
+  { key: 'aba', match: [/^aba\b/i, /^affiliated\s+business\b/i, /^brokerage\s+affiliate/i] },
 ];
+
+/**
+ * A filename may lead with the BROKERAGE, so aliasing has to look past it.
+ *
+ * Every pattern above is anchored at the start, which was fine while a file was
+ * named for its form. Since 2026-09-24 a document with no C.A.R. code files as
+ * "<Firm> - <Name> - <STATUS>" - Megan: "I would urge for the brokerage name to
+ * be before 'Affiliate'" - so "Christie's International Real Estate - EQ
+ * Booklet Receipt" would have stopped matching the eq-booklet alias, and the
+ * prefix that made the folder legible would have broken the reconcile.
+ *
+ * The full text is tried FIRST, so a line that genuinely starts with an alias
+ * ("LA AVID - NeedB") is unaffected.
+ */
+function withoutLeadingFirm(text) {
+  const t = String(text || '').trim();
+  const cut = t.indexOf(' - ');
+  return cut > 0 ? t.slice(cut + 3).trim() : '';
+}
 
 /** The canonical key for either a Doc line or a filename, or '' if neither. */
 function aliasFor(text) {
   for (const a of ALIASES) if (a.match.some((re) => re.test(text))) return a.key;
+  const tail = withoutLeadingFirm(text);
+  if (tail) {
+    for (const a of ALIASES) if (a.match.some((re) => re.test(tail))) return a.key;
+  }
   return '';
 }
 
@@ -437,3 +470,5 @@ module.exports = {
   planDoc, planLine, itemKey, fileKey, answers, DONE, OUTSTANDING,
   findComplianceDocUrl, fetchDocText, parseCsv,
 };
+
+module.exports._internal = { aliasFor, withoutLeadingFirm, norm };

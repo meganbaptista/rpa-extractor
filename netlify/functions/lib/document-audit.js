@@ -72,6 +72,13 @@ const RULES =
   'BRBC, RLA, AD, BCA, BIA, CCPA, PRBS-B, PRBS-S), the full form name in "name", and the printed ' +
   'revision date in "revision" as M/YY ("" if none). A document with no C.A.R. code gets "code":"" and ' +
   'keeps its own printed title as "name".\n' +
+  'Also return "brokerage": the real estate BROKERAGE whose document this is, as printed on it - ' +
+  '"Coldwell Banker Realty", "Sotheby\'s International Realty", "Christie\'s International Real ' +
+  'Estate", "Compass". Read it from the logo or name in the header, or from the firm name and ' +
+  'address printed in the footer when the header carries none. Give the FIRM only, without an office ' +
+  'or region suffix: "Coldwell Banker Realty", not "Coldwell Banker Realty - Hancock Park". Use "" ' +
+  'for a C.A.R. form, which belongs to no brokerage - the California Association of Realtors is the ' +
+  'PUBLISHER and is never the answer here.\n' +
   'NEVER INVENT A NAME. If you cannot tell what a document is, return an EMPTY name rather than a ' +
   'placeholder like "Misc", "Other" or "Disclosures". An honestly unnamed document is filed for human ' +
   'review; a placeholder name is filed as though it were understood.\n' +
@@ -205,6 +212,7 @@ const SHAPE =
   '{"documents":[{"n":1,"code":"TDS","name":"Real Estate Transfer Disclosure Statement",' +
   '"revision":"12/25","parent_code":"","doc_no":"","required_signers":["S","B","BA","LA"],' +
   '"present_signers":["S","B","BA","LA"],' +
+  '"brokerage":"",' +
   '"signature_lines":[{"label":"Seller","signed":true},{"label":"Buyer","signed":true}],' +
   '"boundary_dispute":false,"split_after":[],"dispute_note":""}]}';
 
@@ -618,6 +626,10 @@ async function auditDocuments(documents, carve, label = '', pass = 1) {
       pages: doc.pages,                     // from the strips, never the model
       parent_code: String(audit.parent_code || '').trim(),
       doc_no: String(audit.doc_no || '').trim(),
+      // Whose document this is. The audit reads the whole page, so it sees a
+      // firm name printed only in the footer, which the header strip cannot.
+      // Falls back to what the strips read off the header.
+      brokerage: String(audit.brokerage || '').trim() || String(doc.brand || '').trim(),
       required_signers: signers.required_signers,
       present_signers: signers.present_signers,
       signature_lines: signers.lines,

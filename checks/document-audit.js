@@ -313,5 +313,75 @@ ok('a document the audit could not reason about goes to review, not FX',
                  required_signers: [], present_signers: [] }),
   'NeedReview');
 
+// --- WHOSE DOCUMENT IS IT, FIRST IN THE NAME --------------------------------
+// Megan, 2026-09-24: "I would urge for the brokerage name to be before
+// 'Affiliate'". A delivery routinely carries three brokerages' affiliated
+// business disclosures, all printed from the same C.A.R.-less template and so
+// all filing under one name - Beverly Glen gave her that name twice with a
+// "(2)" and no way to tell which firm's was which without opening both.
+const { brokerageName } = split._internal;
+
+ok('a co-branded header files under the FIRM, not the team',
+  brokerageName({ brokerage: "AKG | Christie's International Real Estate" }),
+  "Christie's International Real Estate");
+ok('an office suffix is dropped',
+  brokerageName({ brokerage: 'Coldwell Banker Realty - Hancock Park' }), 'Coldwell Banker Realty');
+ok('a region suffix is dropped',
+  brokerageName({ brokerage: "Christie's International Real Estate Southern California" }),
+  "Christie's International Real Estate");
+ok('an address tail is dropped',
+  brokerageName({ brokerage: "Sotheby's International Realty, 650 Madison Avenue" }),
+  "Sotheby's International Realty");
+// The PUBLISHER is not a brokerage; a C.A.R. form belongs to no firm.
+ok('the publisher is never a brokerage',
+  brokerageName({ brokerage: 'CALIFORNIA ASSOCIATION OF REALTORS' }), '');
+
+ok("three brokerages' ABAs no longer collide",
+  [{ brokerage: 'Coldwell Banker Realty' }, { brokerage: "Christie's International Real Estate" },
+   { brokerage: "Sotheby's International Realty" }]
+    .map((b) => formLabel({ code: '', name: 'Affiliated Business Arrangement Disclosure Statement', ...b })),
+  ['Coldwell Banker Realty - Affiliated Business Arrangement Disclosure Statement',
+   "Christie's International Real Estate - Affiliated Business Arrangement Disclosure Statement",
+   "Sotheby's International Realty - Affiliated Business Arrangement Disclosure Statement"]);
+
+// A C.A.R. form belongs to no brokerage, so prefixing a TDS with a firm would
+// be wrong even when that firm assembled the packet.
+ok('a C.A.R. form takes no firm',
+  formLabel({ code: 'TDS', name: 'Real Estate Transfer Disclosure Statement', brokerage: 'Coldwell Banker Realty' }),
+  'TDS - Real Estate Transfer Disclosure Statement');
+// And a title that already names the firm must not say it twice.
+ok('a title that already names the firm is left alone',
+  formLabel({ code: '', name: 'Privacy Notice for Coldwell Banker Realty Clients', brokerage: 'Coldwell Banker Realty' }),
+  'Privacy Notice for Coldwell Banker Realty Clients');
+ok('even when the title omits part of the firm name',
+  formLabel({ code: '', name: 'Coldwell Banker Contract Addendum and Other Greater Los Angeles Area Disclosures',
+              brokerage: 'Coldwell Banker Realty' }),
+  'Coldwell Banker Contract Addendum and Other Greater Los Angeles Area Disclosures');
+
+// THE PREFIX MUST NOT BREAK THE RECONCILE. Its alias patterns are anchored at
+// the start of the text, so a leading firm name would have stopped
+// "Christie's International Real Estate - EQ Booklet Receipt" matching the
+// booklet-receipt line: the change that made the FOLDER legible would have
+// broken the DOC update.
+const { aliasFor } = require('../netlify/functions/lib/compliance-doc.js')._internal;
+ok('an alias still resolves past a leading firm name',
+  aliasFor("Christie's International Real Estate - EQ Booklet Receipt - FX"), 'eq-booklet');
+ok('and without one', aliasFor('EQ Booklet Receipt - FX'), 'eq-booklet');
+// The full text is tried first, so a line that genuinely starts with an alias
+// is unaffected by the lookahead.
+ok('a line starting with an alias is unaffected', aliasFor('LA AVID - NeedB'), 'avid-la');
+// The affiliated business disclosure is named four ways across her list and the
+// forms; with no alias, "ABA -" never matched the file and the Doc went on
+// asking for a form sitting in the folder.
+ok('ABA on the list matches the spelled-out form',
+  ['ABA -', 'Brokerage Affiliate Disclosures (If any) - Other',
+   'Coldwell Banker Realty - Affiliated Business Arrangement Disclosure Statement - NeedSS',
+   "Sotheby's International Realty - Affiliated Business Disclosure - NeedSS"].map(aliasFor),
+  ['aba', 'aba', 'aba', 'aba']);
+ok('but an unrelated form does not become an ABA',
+  ['TDS - Real Estate Transfer Disclosure Statement - FX',
+   'Coldwell Banker Contract Addendum and Other Greater Los Angeles Area Disclosures - NeedSS'].map(aliasFor),
+  ['', '']);
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);
