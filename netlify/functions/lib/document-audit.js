@@ -366,7 +366,11 @@ function applySplit(doc, splitAfter) {
     title: i === 0 ? doc.title : '',
     carCode: i === 0 ? doc.carCode : '',
     declaredLength: 0,
-    notes: [...(doc.notes || []), `split out of pages ${doc.pages[0]}-${doc.pages[doc.pages.length - 1]} after the audit found more than one document there`],
+    // The block's OWN span notes are dropped: "span is 2 page(s) but the
+    // document says 1" described the merged block and stopped being true the
+    // moment it was split, but it rode onto both halves on 834 Victoria Ln and
+    // sat in the log beside two correctly filed documents.
+    notes: [`split out of pages ${doc.pages[0]}-${doc.pages[doc.pages.length - 1]} after the audit found more than one document there`],
   }));
 }
 
@@ -499,11 +503,77 @@ async function auditDocuments(documents, carve, label = '', pass = 1) {
 
   // Page order, so the filed names follow the packet rather than the order the
   // resplit happened to finish in.
-  return [...forms, ...extraForms].sort((a, b) => (a.pages[0] || 0) - (b.pages[0] || 0));
+  const ordered = [...forms, ...extraForms].sort((a, b) => (a.pages[0] || 0) - (b.pages[0] || 0));
+  return pass === 1 ? rejoinSplitForms(ordered) : ordered;
+}
+
+/**
+ * ONE FORM FILED AS TWO FILES IS THE WORST OUTPUT THIS PIPELINE HAS.
+ *
+ * The audit sees one block at a time, so it can say "there are two documents
+ * in this block" and can never say "this block and the next one are halves of
+ * the same form". That blind spot is structural, and 834 Victoria Ln walked
+ * straight into it: the DIA filed as `DIA - ... - FX.pdf` (pages 1,2) and
+ * `DIA - ... - FX (2).pdf` (page 3), and the SBSA as a 1-page NeedReview plus
+ * a 14-page FX. Downstream the compliance reconcile then matched the WRONG
+ * half and reported the other as a document nothing on the list asked for -
+ * so a split form is worse than a missing one, because it reads as two
+ * separate problems.
+ *
+ * The boundary rules now prevent it upstream. This is a second, independent
+ * net, and it is pure arithmetic: two ADJACENT forms are rejoined only when
+ * they agree on identity AND the first one's own printed length exactly
+ * accounts for both. Deliberately strict, because the same code twice in a
+ * packet is normal - two counter offers, two AVIDs, two ABAs - and merging
+ * those would be the mirror-image mistake.
+ */
+function rejoinSplitForms(forms) {
+  const out = [];
+  for (const form of forms) {
+    const prev = out[out.length - 1];
+    if (prev && sameForm(prev, form) && adjacent(prev, form)) {
+      const declared = (prev.strip && prev.strip.declaredLength) || 0;
+      const combined = prev.pages.length + form.pages.length;
+      if (declared && declared === combined) {
+        console.log(`[document-audit] rejoined ${prev.code || prev.name} pages `
+          + `${prev.pages[0]}-${form.pages[form.pages.length - 1]}: it declared ${declared} pages `
+          + 'and was filed as two');
+        prev.pages = [...prev.pages, ...form.pages];
+        // The fuller audit wins. A form cut in two leaves one half missing the
+        // signature block, and on 834 Victoria Ln that half was the one
+        // stamped NeedReview - so taking the half that could actually see the
+        // signatures is what makes the rejoined status right.
+        if ((form.required_signers || []).length > (prev.required_signers || []).length) {
+          prev.required_signers = form.required_signers;
+          prev.present_signers = form.present_signers;
+        }
+        if (!prev.revision && form.revision) prev.revision = form.revision;
+        prev.review = `rejoined from two pieces: it declared ${declared} pages`;
+        continue;
+      }
+    }
+    out.push(form);
+  }
+  return out;
+}
+
+/** Same identity: the same code, or failing that the same name, and the same number. */
+function sameForm(a, b) {
+  const num = (f) => String(f.doc_no || '').trim();
+  if (num(a) !== num(b)) return false;      // Counter Offer No.1 vs No.2
+  const code = (f) => String(f.code || '').trim().toUpperCase();
+  if (code(a) && code(b)) return code(a) === code(b);
+  const name = (f) => String(f.name || '').trim().toLowerCase();
+  return !!name(a) && name(a) === name(b);
+}
+
+/** Do these two spans touch, in order? */
+function adjacent(a, b) {
+  return a.pages[a.pages.length - 1] + 1 === b.pages[0];
 }
 
 module.exports = {
   auditDocuments, groupForAudit,
   AUDIT_DOCS_PER_CALL, AUDIT_PAGES_PER_CALL, AUDIT_CONCURRENCY,
 };
-module.exports._internal = { hintFor, packetContext, applySplit, tallyBrands, brandKey, auditGroup, RULES, SHAPE };
+module.exports._internal = { hintFor, packetContext, applySplit, tallyBrands, brandKey, auditGroup, rejoinSplitForms, sameForm, RULES, SHAPE };

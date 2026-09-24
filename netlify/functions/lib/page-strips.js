@@ -402,6 +402,45 @@ function envelopeChanged(prev, next) {
 }
 
 /**
+ * Does this page print evidence that it CONTINUES the current document?
+ *
+ * The strongest signal in the whole packet, and it outranks a header title.
+ * A C.A.R. footer reading "DIA PAGE 3 OF 3" on the third page of a document
+ * already identified as the DIA is not evidence of a new form; it is the form
+ * numbering its own page. So is a branded footer's plain counter.
+ *
+ * THIS IS HERE BECAUSE 834 VICTORIA LN FILED TWO FORMS IN TWO PIECES EACH.
+ * The DIA declared 3 pages; its page 3 also carries the words "EXEMPT SELLER
+ * DISCLOSURE" in the top third, and that read as a title and started a new
+ * document - so the DIA filed as `DIA - ... - FX.pdf` (pages 1,2) and
+ * `DIA - ... - FX (2).pdf` (page 3). The SBSA did the same on "TABLE OF
+ * CONTENTS", filing pages 8 and 9-22 separately and labelling the one-page
+ * half NeedReview. Both halves of both forms named the same form, which is
+ * what a split form looks like from the outside.
+ *
+ * Widening the header strip to 30% is what exposed this: it was needed to
+ * catch Christie's low titles, and it necessarily also catches headings that
+ * sit a fifth of the way down a continuation page. A title read off a strip is
+ * inference; a page number printed beside the form's own code is a statement.
+ */
+function continuesDocument(current, r) {
+  if (!current) return false;
+  const expected = current.pages.length + 1;
+  // Its own C.A.R. code, numbered as the next page of this document.
+  if (r.carCode && current.carCode && r.carCode === current.carCode) {
+    const ctr = parseCounter(r.counter);
+    const m = r.m || ctr.m;
+    if (m === expected) return true;
+  }
+  // A branded form's counter doing the same, where neither prints a code.
+  if (!r.carCode && !current.carCode) {
+    const ctr = parseCounter(r.counter);
+    if (ctr.m === expected && ctr.m > 1) return true;
+  }
+  return false;
+}
+
+/**
  * Do two footer names positively agree that this is the SAME document?
  *
  * Distinct from `!footerNameChanged(...)`, which is merely "nothing
@@ -504,7 +543,7 @@ function documentsFromStrips(rows) {
     // branded form's trailing counter.
     const ctr = parseCounter(r.counter);
     const firstOf = (r.m === 1 && r.n > 1) ? r.n : ((ctr.m === 1 && ctr.n > 1) ? ctr.n : 0);
-    if (firstOf && !insideDeclaredSpan()) {
+    if (firstOf && !insideDeclaredSpan() && !continuesDocument(current, r)) {
       start({ ...r, n: firstOf }, r.carCode ? 'car-page-1' : 'counter-page-1');
       continue;
     }
@@ -519,6 +558,13 @@ function documentsFromStrips(rows) {
     // not, so positive footer agreement overrules the title. (This case only
     // appeared once the header strip was widened to 30% to catch Christie's
     // low titles: the wider strip sees more real titles AND more headings.)
+    // A page that numbers itself as this document's next page continues it,
+    // whatever the header strip picked up. See continuesDocument().
+    if (r.title && continuesDocument(current, r)) {
+      current.pages.push(p);
+      if (!current.footerName && r.footerName) current.footerName = r.footerName;
+      continue;
+    }
     if (r.title && current && footerNamesAgree(current.footerName, r.footerName)) {
       current.pages.push(p);
       continue;
@@ -527,10 +573,14 @@ function documentsFromStrips(rows) {
       const disputed = insideDeclaredSpan() ? current : null;
       start(r, 'header-title');
       if (disputed) {
-        const note = `a titled page starts here, but ${disputed.carCode || 'the document above'} `
-          + `declared ${disputed.declaredLength} pages and only got ${disputed.pages.length}`;
-        disputed.notes.push(note);
-        current.notes.push(note);
+        const who = disputed.carCode || disputed.title || 'the document above';
+        // Worded from each document's own point of view. One note for both
+        // halves read as if the SECOND document were the short one, which on
+        // 834 Victoria Ln put "DIA declared 3 pages and only got 1" on the
+        // ESD that followed it.
+        disputed.notes.push(`a titled page starts at page ${p}, but this document declared `
+          + `${disputed.declaredLength} pages and only got ${disputed.pages.length}`);
+        current.notes.push(`starts inside ${who}'s declared span of ${disputed.declaredLength} page(s)`);
       }
       continue;
     }

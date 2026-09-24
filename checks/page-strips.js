@@ -145,10 +145,56 @@ ok('and a title splits when the footers say nothing either way',
     row(1, { title: 'DISCLOSURE INFORMATION ADVISORY', carCode: 'DIA', m: 1, n: 3 }),
     row(2, { title: 'MOLD DISCLOSURE AND AGREEMENT' }),
     row(3, {})]);
-  ok('a title splits a declared span', docs.map((d) => d.pages.length), [1, 2]);
-  ok('and both halves are flagged for review',
-    docs.map((d) => d.notes.some((n) => /declared 3 pages/.test(n))), [true, true]);
+  ok('a title splits a declared span when nothing says otherwise',
+    docs.map((d) => d.pages.length), [1, 2]);
+  // Worded from each document's own point of view. One shared note read as if
+  // the SECOND document were the short one, which on 834 Victoria Ln put
+  // "DIA declared 3 pages and only got 1" on the ESD that followed it.
+  ok('the short document says it is short',
+    /declared 3 pages and only got 1/.test(docs[0].notes.join(' ')), true);
+  ok('and the new one says only where it starts',
+    /starts inside DIA's declared span/.test(docs[1].notes.join(' ')), true);
 }
+
+// --- 834 VICTORIA LN: TWO FORMS FILED IN TWO PIECES EACH --------------------
+// The real regression, 2026-09-24. Widening the header strip to 30% to catch
+// Christie's low titles also caught SECTION headings on continuation pages, and
+// a title was allowed to split a declared span. Both of these filed one form as
+// two files, and the compliance reconcile downstream then matched the wrong half
+// and reported the other half as a document nothing asked for.
+//
+// A title read off a strip is inference. A page number printed beside the
+// form's own code is a statement, and it wins.
+ok('the DIA is not split by "EXEMPT SELLER DISCLOSURE" on its own page 3',
+  spans([row(1, { title: 'DISCLOSURE INFORMATION ADVISORY', carCode: 'DIA', m: 1, n: 3 }),
+         row(2, { carCode: 'DIA', m: 2, n: 3 }),
+         row(3, { title: 'EXEMPT SELLER DISCLOSURE ("ESD")', carCode: 'DIA', m: 3, n: 3 }),
+         row(4, { title: 'EXEMPT SELLER DISCLOSURE', carCode: 'ESD', m: 1, n: 1 })]),
+  'pp1-3 pp4');
+
+ok('nor the SBSA by "TABLE OF CONTENTS" on its own page 2',
+  spans([row(8, { title: 'STATEWIDE BUYER AND SELLER ADVISORY', carCode: 'SBSA', m: 1, n: 15 }),
+         row(9, { title: 'TABLE OF CONTENTS', carCode: 'SBSA', m: 2, n: 15 }),
+         ...Array.from({ length: 13 }, (_, i) => row(10 + i, { carCode: 'SBSA', m: 3 + i, n: 15 })),
+         row(23, { title: 'SQUARE FOOTAGE AND LOT SIZE ADVISORY', carCode: 'SFLS', m: 1, n: 1 })]),
+  'pp8-22 pp23');
+
+// The evidence has to be the NEXT page number, not just a matching code: a
+// second copy of the same form in one packet (two counter offers, two AVIDs)
+// must still be two documents.
+ok('a second copy of the same form still starts a new document',
+  spans([row(1, { title: 'SELLER COUNTER OFFER', carCode: 'SCO', m: 1, n: 2 }),
+         row(2, { carCode: 'SCO', m: 2, n: 2 }),
+         row(3, { title: 'SELLER COUNTER OFFER', carCode: 'SCO', m: 1, n: 2 }),
+         row(4, { carCode: 'SCO', m: 2, n: 2 })]),
+  'pp1-2 pp3-4');
+
+// And a title on a page that does NOT number itself as the next page still
+// splits - otherwise a matching code would merge two unrelated forms.
+ok('a titled page numbered out of sequence still splits',
+  spans([row(1, { title: 'TRUST ADVISORY', carCode: 'TA', m: 1, n: 3 }),
+         row(2, { title: 'MOLD DISCLOSURE', carCode: 'TA', m: 7, n: 9 })]),
+  'pp1 pp2');
 
 // A span that disagrees with its own printed length is reported, never fixed
 // silently. Beverly Glen page 19 is page 1 of a 3-page property report and the

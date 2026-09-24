@@ -10,7 +10,7 @@
 // disputes a boundary, and the brokerage evidence an AVID's side is read from.
 
 const A = require('../netlify/functions/lib/document-audit.js');
-const { applySplit, tallyBrands, packetContext } = A._internal;
+const { applySplit, tallyBrands, packetContext, rejoinSplitForms } = A._internal;
 const split = require('../netlify/functions/disclosure-split-background.js');
 const { statusSuffix, formLabel } = split._internal;
 
@@ -67,6 +67,12 @@ ok('a one-page block cannot be split', applySplit(doc([7]), [1]), null);
     pieces.map((d) => d.declaredLength), [0, 0, 0]);
   ok('and every piece says it came out of a disputed block',
     pieces.every((d) => d.notes.some((n) => /split out of pages 18-20/.test(n))), true);
+  // The block's own span arithmetic described the MERGED block and stopped
+  // being true when it was split. On 834 Victoria Ln "span is 2 page(s) but
+  // the document says 1" rode onto both halves of a correctly split pair.
+  ok('but a stale span note does not ride onto the pieces',
+    applySplit(doc([6, 7], { notes: ['span is 2 page(s) but the document says 1'] }), [1])
+      .every((d) => d.notes.length === 1), true);
 }
 
 // --- the brokerage evidence an AVID's side is read from ---------------------
@@ -107,6 +113,61 @@ ok('a tie refuses to name a side',
   true);
 ok('no brands at all says so',
   /no brokerage names were read/.test(packetContext([doc([1]), doc([2])])), true);
+
+// --- one form filed as two files --------------------------------------------
+// The audit sees one block at a time, so it can say "two documents are in this
+// block" and can never say "this block and the next are halves of one form".
+// 834 Victoria Ln walked into that blind spot: the DIA filed as pages 1,2 plus
+// a separate page 3, and the SBSA as a 1-page NeedReview plus a 14-page FX.
+// Downstream the reconcile matched the WRONG half and reported the other as a
+// document nothing asked for, so a split form reads as two separate problems.
+//
+// Rejoining is pure arithmetic and deliberately strict: the same code twice in
+// one packet is NORMAL (two counter offers, two AVIDs, two brokerages' ABAs),
+// so identity alone is never enough - the first half's own printed length must
+// exactly account for both.
+const form = (code, name, pages, declared, req, pres, doc_no = '') =>
+  ({ code, name, pages, doc_no, revision: '', required_signers: req, present_signers: pres,
+     strip: { declaredLength: declared } });
+const rejoined = (fs) => rejoinSplitForms(fs)
+  .map((f) => `${f.code || f.name}:${f.pages[0]}-${f.pages[f.pages.length - 1]}`).join(' ');
+
+ok('the DIA is rejoined from its two pieces',
+  rejoined([form('DIA', 'Disclosure Information Advisory', [1, 2], 3, ['S'], ['S']),
+            form('DIA', 'Disclosure Information Advisory', [3], 3, ['S', 'B'], ['S', 'B'])]),
+  'DIA:1-3');
+ok('and so is the SBSA',
+  rejoined([form('SBSA', 'Statewide Buyer and Seller Advisory', [8], 15, [], []),
+            form('SBSA', 'Statewide Buyer and Seller Advisory',
+                 Array.from({ length: 14 }, (_, i) => 9 + i), 15, ['S', 'B'], ['S', 'B'])]),
+  'SBSA:8-22');
+// A form cut in two leaves one half without the signature block, and on 834
+// Victoria that half was the one stamped NeedReview. Taking the half that could
+// actually see the signatures is what makes the rejoined status right.
+ok('the rejoined form takes the fuller audit',
+  rejoinSplitForms([form('SBSA', 'SBSA', [8], 15, [], []),
+                    form('SBSA', 'SBSA', Array.from({ length: 14 }, (_, i) => 9 + i), 15, ['S', 'B'], ['S', 'B'])])
+    [0].required_signers,
+  ['S', 'B']);
+ok('two numbered counter offers are NOT merged',
+  rejoined([form('SCO', 'Seller Counter Offer', [1, 2], 2, ['S'], ['S'], '1'),
+            form('SCO', 'Seller Counter Offer', [3, 4], 2, ['S'], ['S'], '2')]),
+  'SCO:1-2 SCO:3-4');
+ok('nor two AVIDs whose length does not account for both',
+  rejoined([form('AVID', 'AVID', [1, 2, 3], 3, ['S'], ['S']),
+            form('AVID', 'AVID', [4, 5, 6], 3, ['S'], ['S'])]),
+  'AVID:1-3 AVID:4-6');
+// Two brokerages' ABAs, back to back, neither printing a length - the real
+// Beverly Glen pages 17 and 18.
+ok('nor two same-named documents that declare no length',
+  rejoined([form('', 'Affiliated Business Arrangement Disclosure Statement', [17], 0, [], []),
+            form('', 'Affiliated Business Arrangement Disclosure Statement', [18], 0, [], [])]),
+  'Affiliated Business Arrangement Disclosure Statement:17-17 Affiliated Business Arrangement Disclosure Statement:18-18');
+ok('nor halves that do not touch',
+  rejoined([form('DIA', 'DIA', [1, 2], 3, ['S'], ['S']),
+            form('TDS', 'TDS', [3], 0, ['S'], ['S']),
+            form('DIA', 'DIA', [4], 3, ['S'], ['S'])]),
+  'DIA:1-2 TDS:3-3 DIA:4-4');
 
 // --- the filename a document actually lands under ---------------------------
 // What Megan sees in the folder. The BA AVID is the case that started this:
