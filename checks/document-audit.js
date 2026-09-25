@@ -487,5 +487,36 @@ ok('a document with its own signature lines is not a parent',
   '[17] [27]');
 ok('an empty packet is fine', joined([]), '');
 
+// --- TWO BOOKLET RECEIPTS IN ONE PACKAGE ------------------------------------
+// 1333 S Beverly Glen carried both: the standard C.A.R. receipt on page 25 and
+// Christie's "Receipt for Links to Booklets" on page 32. Both are genuinely
+// booklet receipts, the audit correctly named them both "EQ Booklet Receipt",
+// and the second filed as "(2)" - which says nothing about which is which.
+// The C.A.R. one is the one belonging to no firm. Megan: "maybe we change this
+// version to say CAR EQ Booklet Receipt... and then the others can reference
+// the brokerage".
+ok('the C.A.R. receipt names itself',
+  formLabel({ code: '', name: 'EQ Booklet Receipt', brokerage: '' }),
+  'CAR EQ Booklet Receipt');
+ok("and a brokerage's names its firm instead",
+  formLabel({ code: '', name: 'EQ Booklet Receipt', brokerage: "AKG | Christie's International Real Estate" }),
+  "Christie's International Real Estate - EQ Booklet Receipt");
+// Naming them apart must not stop either matching her compliance line, or the
+// Doc would go on asking for a receipt sitting in the folder. "CAR " is not a
+// firm name, so the leading-firm lookahead cannot strip it.
+{
+  const { fileKey } = require('../netlify/functions/lib/compliance-doc.js');
+  ok('both still answer the same list line',
+    ['CAR EQ Booklet Receipt - FX.pdf',
+     "Christie's International Real Estate - EQ Booklet Receipt - FX.pdf"].map((f) => fileKey(f).key),
+    ['eq-booklet', 'eq-booklet']);
+  ok('as does her wording of it',
+    aliasFor('Earthquake Booklet Receipt (check if we got the brokerage version) -'), 'eq-booklet');
+}
+// The rule is exact: it must not rewrite a differently-named receipt.
+ok('a differently named receipt is left alone',
+  formLabel({ code: '', name: 'Receipt for Links to Booklets', brokerage: '' }),
+  'Receipt for Links to Booklets');
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

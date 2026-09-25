@@ -339,6 +339,24 @@ function formLabel(form) {
       return no ? `${parent} - Addendum No. ${no}` : `${parent} - Addendum`;
     }
   }
+  /**
+   * TWO BOOKLET RECEIPTS IN ONE PACKAGE IS NORMAL, so they cannot share a name.
+   *
+   * 1333 S Beverly Glen carried both: the standard C.A.R. receipt on page 25
+   * (printed twice on one sheet, a buyer block above a seller block) and
+   * Christie's own "Receipt for Links to Booklets" on page 32. Both are
+   * genuinely booklet receipts, the audit correctly named them both
+   * "EQ Booklet Receipt", and the second filed as "(2)" - which says nothing
+   * about which is which. Megan: "maybe we change this version to say CAR EQ
+   * Booklet Receipt... and then the others can reference the brokerage".
+   *
+   * The C.A.R. one is the one with no brokerage: it belongs to the form
+   * publisher, not to a firm. A brokerage equivalent already picks up its firm
+   * from the prefix below, so only this side needs saying.
+   */
+  if (/^eq booklet receipt$/i.test(clean(form.name)) && !brokerageName(form)) {
+    form = { ...form, name: 'CAR EQ Booklet Receipt' };
+  }
   let base = [form.code, form.name].filter(Boolean).join(' - ');
   /**
    * WHOSE DOCUMENT IS IT, FIRST IN THE NAME. Megan's request, 2026-09-24:

@@ -502,20 +502,34 @@ async function createDraft({ to, subject, htmlBody, threadId = '', inReplyTo = '
  * is something she changes without telling anyone, so it has to be READ rather
  * than remembered.
  *
- * ISOLATED TOKEN, DELIBERATELY. Reading settings needs the
- * gmail.settings.basic scope, and adding it to the main token's scope string
- * would mean that if it were ever unauthorised, EVERY Gmail call fails and the
- * email router goes down with it. So it mints its own token and any failure
- * falls back to the stored copy.
+ * THE EXISTING TOKEN IS TRIED FIRST. gmail.modify may already permit reading
+ * send-as settings; if it does, no new authorisation was ever needed and the
+ * extra scope is simply unused. Only on a 401/403 does it mint a second token
+ * scoped to gmail.settings.basic.
+ *
+ * THAT SECOND TOKEN IS ISOLATED, DELIBERATELY. Folding the settings scope into
+ * the main scope string would mean that if it were ever unauthorised, EVERY
+ * Gmail token request fails and the email router goes down with it. A separate
+ * request fails alone, and any failure at all falls back to the stored copy.
  */
 const SETTINGS_SCOPE = 'https://www.googleapis.com/auth/gmail.settings.basic';
 
 async function fetchSignature() {
-  const token = await getAccessToken({ scope: SETTINGS_SCOPE });
-  const res = await fetch(`${apiBase()}/settings/sendAs`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
+  const read = async (opts) => {
+    const token = await getAccessToken(opts);
+    const res = await fetch(`${apiBase()}/settings/sendAs`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    return res;
+  };
+
+  let res = await read();
+  if (res.status === 401 || res.status === 403) {
+    console.log('[gmail] send-as settings need their own scope, retrying with gmail.settings.basic');
+    res = await read({ scope: SETTINGS_SCOPE });
+  }
   if (!res.ok) throw new Error(`sendAs ${res.status}: ${(await res.text()).slice(0, 200)}`);
+
   const data = await res.json();
   const list = (data && data.sendAs) || [];
   // The default send-as identity is the one whose signature she actually uses.

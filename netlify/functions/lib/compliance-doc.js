@@ -53,7 +53,13 @@ const OUTSTANDING = /^(NEEDB[A-Za-z()+]*|Need[A-Za-z()+]*|N[A-Z+]*|MISSING)$/i;
 const ALIASES = [
   { key: 'avid-la', match: [/^la\s*avid\b/i, /^avid[\s-]*la\b/i] },
   { key: 'avid-ba', match: [/^ba\s*avid\b/i, /^avid[\s-]*ba\b/i] },
-  { key: 'eq-booklet', match: [/^(earthquake|eq)\s+booklet\s+receipt/i] },
+  /**
+   * "CAR EQ Booklet Receipt" has to alias too, or naming the C.A.R. version
+   * apart from the brokerage one would stop it matching her list line and the
+   * Doc would go on asking for a receipt sitting in the folder. The leading
+   * "CAR " is not a firm, so withoutLeadingFirm cannot strip it.
+   */
+  { key: 'eq-booklet', match: [/^(car\s+)?(earthquake|eq)\s+booklet\s+receipt/i] },
   { key: 'mls', match: [/^mls\b/i] },
   { key: 'nhd', match: [/^nhd\b/i] },
   { key: 'prelim', match: [/^prelim\b/i] },
