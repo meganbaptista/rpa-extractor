@@ -31,6 +31,29 @@
 // Gmail, no network, so the wording is reviewable without sending anything.
 // ============================================================================
 
+/**
+ * Checklist lines that never leave the Doc.
+ *
+ * Her list mixes items the OTHER side has a part in with items that are purely
+ * ours to do, and "MLS CLIENT TO SIGN" is the second kind: our client signing
+ * our own MLS paperwork is nothing the buyer's coordinator can act on or needs
+ * to know. Megan, 2026-09-24: "Could we make a rule to never show the 'MLS
+ * CLIENT TO SIGN' bullet point?"
+ *
+ * Matched on the normalised text so punctuation and casing in the Doc do not
+ * matter. Kept as a list because there will be more of these; add the line as
+ * she names them rather than trying to guess the category.
+ */
+const INTERNAL_ONLY = [
+  'mls client to sign',
+];
+
+function isInternalOnly(line) {
+  const t = String(line || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (!t) return false;
+  return INTERNAL_ONLY.some((x) => t === x || t.startsWith(`${x} `));
+}
+
 const OURS = new Set(['NeedSS', 'NeedLA']);
 /**
  * A broker signature carries NO SIDE. The audit's BR token means "the broker
@@ -128,7 +151,9 @@ function buildReply({ address, outstanding = [], senderName = '',
                       unsortedPages = [], outOfSequence = [] }) {
   const first = String(senderName || '').trim().split(/\s+/)[0];
   const lines = outstanding.map((o) => String(typeof o === 'string' ? o : (o && o.text) || '').trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    // Internal-only lines stay on the Doc and out of the email.
+    .filter((l) => !isInternalOnly(l));
   const p = [];
 
   p.push(`<p>Hi${first ? ` ${esc(first)}` : ''},</p>`);
@@ -170,4 +195,4 @@ function buildReply({ address, outstanding = [], senderName = '',
   };
 }
 
-module.exports = { buildReply, groupForReply, owedBy, missingWords, partyWords, docName };
+module.exports = { buildReply, groupForReply, owedBy, missingWords, partyWords, docName, isInternalOnly, INTERNAL_ONLY };

@@ -42,7 +42,7 @@ const text = (html) => html
     address: '834 Victoria Ln, Sugarloaf, CA 92386',
     senderName: 'Dana Whitfield',
     outstanding: [
-      { text: 'MLS CLIENT TO SIGN', action: 'keep' },
+      { text: 'LA AVID', action: 'keep' },
       { text: 'BA AVID - NeedSS', action: 'annotate' },
       { text: 'VP - once completed', action: 'keep' },
     ],
@@ -53,7 +53,7 @@ const text = (html) => html
     /Thanks so much for these! After my audit, here is where the file stands on my end:/.test(body[1]), true);
   ok('carries every line exactly as the Doc has it',
     body.filter((l) => l.startsWith('- ')),
-    ['- MLS CLIENT TO SIGN', '- BA AVID - NeedSS', '- VP - once completed']);
+    ['- LA AVID', '- BA AVID - NeedSS', '- VP - once completed']);
   // Her own trailing notes survive, so "VP - once completed" needs no special
   // handling: it lives in the Doc and the reply passes it on.
   ok('a note she keeps on a line is not stripped',
@@ -132,6 +132,37 @@ ok('an unparseable address searches for nothing at all',
 ok('a display name is used', gmail.senderNameOf('"Lesley Ann Carter" <l@x.com>'), 'Lesley Ann Carter');
 ok('and a bare address yields no name', gmail.senderNameOf('transactions@sothebys.realty'), '');
 ok('nor does an address sitting in the name slot', gmail.senderNameOf('"x@y.com" <x@y.com>'), '');
+
+// --- LINES THAT NEVER LEAVE THE DOC -----------------------------------------
+// Her checklist mixes items the other side has a part in with items purely
+// ours. "MLS CLIENT TO SIGN" is the second kind: our own client signing our
+// own MLS paperwork is nothing the buyer's coordinator can act on. Megan:
+// "Could we make a rule to never show the 'MLS CLIENT TO SIGN' bullet point?"
+const { isInternalOnly } = require('../netlify/functions/lib/disclosure-reply.js');
+ok('the internal line is hidden however it is punctuated',
+  ['MLS CLIENT TO SIGN', 'mls client to sign', 'MLS Client to Sign',
+   'MLS CLIENT TO SIGN - by Friday'].map(isInternalOnly),
+  [true, true, true, true]);
+// Narrow on purpose: a line that merely STARTS with MLS is a different item.
+ok('a different MLS line is not hidden', [isInternalOnly('MLS'), isInternalOnly('MLS Printout')],
+  [false, false]);
+ok('and nothing else is swept up',
+  ['LA AVID', 'BA AVID - NeedSS', 'VP - once completed'].map(isInternalOnly),
+  [false, false, false]);
+{
+  const r = buildReply({ address: 'X', senderName: 'Dana', outstanding: [
+    { text: 'MLS CLIENT TO SIGN' }, { text: 'LA AVID' }, { text: 'VP - once completed' }] });
+  ok('it is absent from the body and from the count',
+    [text(r.htmlBody).filter((l) => l.startsWith('- ')), r.asks],
+    [['- LA AVID', '- VP - once completed'], 2]);
+}
+// If every open line is internal, the reply must read as clear rather than
+// printing an empty list under a heading promising one.
+{
+  const r = buildReply({ address: 'X', outstanding: [{ text: 'MLS CLIENT TO SIGN' }] });
+  ok('an all-internal list reads as nothing outstanding',
+    [/is accounted for/.test(r.htmlBody), r.asks], [true, 0]);
+}
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

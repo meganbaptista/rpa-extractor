@@ -36,9 +36,16 @@ const { withSignature } = require('./lib/signature');
 
 const DONE_STORE = 'disclosure-email-done';
 
-/** The Gmail label that marks an incoming disclosure thread. */
+/**
+ * The Gmail label that marks an incoming disclosure thread.
+ *
+ * Megan's, 2026-09-24: "How about 'FX Disclosures' for the label?" Defaulted
+ * rather than left blank so there is nothing to configure, with the env var
+ * kept as an override in case she renames it.
+ */
+const DEFAULT_THREAD_LABEL = 'FX Disclosures';
 function threadLabel() {
-  return String(process.env.DISCLOSURE_THREAD_LABEL || '').trim();
+  return String(process.env.DISCLOSURE_THREAD_LABEL || DEFAULT_THREAD_LABEL).trim();
 }
 
 function blobsConfig(name) {
@@ -76,15 +83,10 @@ exports.handler = async function (event) {
     }
 
     const label = threadLabel();
-    if (!label) {
-      // Not an error worth waking anyone for, but it IS why no draft appeared.
-      console.warn('[disclosure-email] DISCLOSURE_THREAD_LABEL is not set, so no thread can be found');
-    }
-
-    const thread = label ? await gmail.findLabelledThread(label, address).catch((err) => {
+    const thread = await gmail.findLabelledThread(label, address).catch((err) => {
       console.warn(`[disclosure-email] thread lookup failed: ${err.message}`);
       return null;
-    }) : null;
+    });
 
     const reply = buildReply({
       address,
@@ -132,9 +134,8 @@ exports.handler = async function (event) {
       await alert(`disclosure-email-no-thread:${address}`,
         `Drafted the disclosure reply for ${address}, but could not find a labelled email thread for `
         + `it, so the draft has no recipient and is not in a conversation. `
-        + (label
-          ? `Check that the incoming email is labelled "${label}" and mentions the address.`
-          : 'DISCLOSURE_THREAD_LABEL is not set, so no thread can be looked up.'),
+        + `Check that the incoming email is labelled "${label}" and mentions the street number `
+        + 'and street name.',
         { source: 'disclosure-pipeline', label: 'Disclosure Pipeline' });
     }
 
@@ -148,4 +149,4 @@ exports.handler = async function (event) {
   }
 };
 
-module.exports._internal = { threadLabel };
+module.exports._internal = { threadLabel, DEFAULT_THREAD_LABEL };
