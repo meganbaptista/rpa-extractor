@@ -13,6 +13,15 @@ const { CONSUMERS, passesBetaGuard } = require('./consumers');
 const EVENTS = {
   DISCLOSURE_UPLOADED: 'disclosure.uploaded', // producer: watcher, on a new file in an Incoming folder
   DISCLOSURE_SPLIT: 'disclosure.split',       // producer: splitter, once per-form files exist
+  /**
+   * producer: the compliance consumer, once the Doc has been reconciled.
+   *
+   * Carries the lines the reconcile LEFT STANDING, which is what the reply to
+   * the sending coordinator is made of. Emitted rather than having the email
+   * consumer re-read the Doc, so the email and the Doc are built from ONE read
+   * and cannot disagree about what is outstanding.
+   */
+  COMPLIANCE_RECONCILED: 'compliance.reconciled',
 };
 
 // The envelope version. Bump only on a breaking shape change so consumers can

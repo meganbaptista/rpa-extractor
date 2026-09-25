@@ -32,7 +32,7 @@ const drive = require('./lib/drive');
 const { parseRequestBody } = require('./lib/parse-body');
 const { alert } = require('./lib/alert');
 const docs = require('./lib/docs');
-const { EVENTS } = require('./lib/events');
+const { EVENTS, makeEvent, publish } = require('./lib/events');
 const { planDoc, findComplianceDocUrl } = require('./lib/compliance-doc');
 
 const DONE_STORE = 'disclosure-compliance-done';
@@ -161,9 +161,38 @@ exports.handler = async function (event) {
       .filter((n) => n.toLowerCase().endsWith('.pdf'));
 
     const plan = planDoc(text, files);
+
+    /**
+     * THE LINES THE RECONCILE LEAVES STANDING ARE THE REPLY.
+     *
+     * Passed downstream verbatim, in Doc order, with an annotated line already
+     * carrying its status ("BA AVID - NeedSS"). Megan: "what if we illustrate
+     * more of the google docs checklist... After my audit, here is where the
+     * file stands on my end". Reformatting her wording is how it stops being
+     * her list, so nothing here interprets it.
+     */
+    const outstanding = plan.lines
+      .filter((l) => l.action === 'keep' || l.action === 'annotate' || l.action === 'review')
+      .map((l) => ({ text: l.action === 'annotate' ? l.to : l.text, action: l.action }));
     const changes = plan.lines.filter((l) => l.action === 'delete' || l.action === 'annotate');
 
     const report = describe(address, plan, docUrl, envelope.coverage, writingEnabled() && changes.length > 0);
+
+    /**
+     * Emitted whether or not the Doc was written, because what is OUTSTANDING
+     * is true either way - a preview run has the same answer as a live one.
+     * The email consumer is the subscriber; it is disabled by default, so this
+     * is inert until Megan turns it on.
+     */
+    await publish(makeEvent(EVENTS.COMPLIANCE_RECONCILED, {
+      id: eventId,
+      source: envelope.source,
+      location: envelope.location,
+      address,
+      docUrl,
+      outstanding,
+      coverage: envelope.coverage,
+    }));
     console.log('[disclosure-compliance]\n' + report);
 
     if (!writingEnabled()) {

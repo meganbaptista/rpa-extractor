@@ -30,7 +30,13 @@ const CONSUMERS = [
   // Enabled 2026-09-23. PREVIEW ONLY until COMPLIANCE_DOC_WRITE=true — it
   // reports what it would change to the alert hook and touches no Doc.
   { name: 'compliance',       fn: 'disclosure-compliance-background', events: ['disclosure.split'],    enabled: true  },
-  { name: 'email-draft',      fn: 'disclosure-email-background',      events: ['disclosure.split'],    enabled: false },
+  /**
+   * Listens for `compliance.reconciled`, NOT `disclosure.split`: the reply is
+   * made of the compliance list's leftover lines, so it needs the reconcile's
+   * output rather than the splitter's. Built 2026-09-24 and left DISABLED -
+   * turning it on drafts mail about real deals to real people.
+   */
+  { name: 'email-draft',      fn: 'disclosure-email-background',      events: ['compliance.reconciled'], enabled: false },
   { name: 'timeline',         fn: 'disclosure-timeline-background',   events: ['disclosure.uploaded'], enabled: false },
 ];
 

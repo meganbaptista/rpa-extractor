@@ -336,6 +336,118 @@ async function markRead(id) {
   return modifyMessage(id, { remove: ['UNREAD'] });
 }
 
+
+// ----------------------------------------------------------------------------
+// FINDING THE THREAD, AND REPLYING INTO IT AS A DRAFT.
+// ----------------------------------------------------------------------------
+// The disclosure pipeline is triggered by a FILE appearing in Drive, so it has
+// no idea which email thread the package came from. Searching the mailbox for
+// the property address would be guesswork: a subject line might say "902
+// Beverly Glen", "1333 S. Beverly Glen #902" or nothing at all.
+//
+// Megan's answer, and it is the right one: "Maybe we label the email something
+// that claude can find that thread?" A label is a DEFINITE statement that this
+// thread is the one, made by the person who knows. So the lookup is
+// label-scoped, and the address is only used to pick between threads that
+// already carry the label.
+// ----------------------------------------------------------------------------
+
+/**
+ * A Gmail search term for a property, loose enough to survive how people
+ * actually write addresses in a subject line.
+ *
+ * Just the house number and the first word of the street, and NOT as a quoted
+ * phrase. A quoted phrase in Gmail matches contiguous words, so "1333 Beverly"
+ * would never match "1333 S Beverly Glen" - the directional sits between them.
+ * Unquoted, Gmail ANDs the terms, which matches every way a person writes it:
+ * "1333 S Beverly Glen #902", "1333 Beverly Glen Blvd", "Disclosures 1333
+ * Beverly". The label already restricts the search to disclosure threads, so
+ * two distinctive terms are enough on their own.
+ *
+ * The directional is dropped rather than kept for the same reason - half of
+ * these emails omit it.
+ */
+function addressSearchTerm(address) {
+  const t = String(address || '').replace(/[",]/g, ' ').trim();
+  const m = t.match(/^\s*(\d+[A-Za-z]?)\s+(?:[NSEW]\.?\s+)?([A-Za-z][A-Za-z'-]*)/);
+  if (!m) return '';
+  return `${m[1]} ${m[2]}`;
+}
+
+/**
+ * The newest labelled thread for this property, or null.
+ *
+ * Returns the sender too, because the reply goes to whoever sent the package -
+ * Megan: "Could we address the reply to the person who sent the disclosures in
+ * the thread email before? It's typically a TC."
+ */
+async function findLabelledThread(labelName, address, { newerThanDays = 45 } = {}) {
+  const term = addressSearchTerm(address);
+  if (!labelName || !term) return null;
+  const id = await labelId(labelName);
+  if (!id) return null;
+  const msgs = await listMessages({
+    labelIds: [id],
+    q: `${term} newer_than:${newerThanDays}d`,
+    maxPages: 1,
+    pageSize: 25,
+  });
+  if (!msgs.length) return null;
+  // listMessages returns newest first; read the newest for its headers.
+  const newest = await getMessage(msgs[0].id);
+  const h = newest.headers || {};
+  return {
+    threadId: newest.threadId,
+    messageId: h['message-id'] || h['Message-ID'] || '',
+    from: h.from || '',
+    subject: h.subject || '',
+    senderName: senderNameOf(h.from || ''),
+  };
+}
+
+/**
+ * "Lesley Ann Carter <lesley@x.com>" -> "Lesley Ann Carter".
+ *
+ * Returns '' when the header carries no display name, rather than guessing
+ * from the local part. "some.tc@firm.com" would become "Hi some," and
+ * "transactions@sothebys.realty" would become "Hi transactions," - an email to
+ * another firm under Megan's name is not the place to guess at somebody's
+ * name. A bare "Hi," is correct and reads as normal.
+ */
+function senderNameOf(from) {
+  const t = String(from || '').trim();
+  const named = t.match(/^\s*"?([^"<]+?)"?\s*</);
+  if (!named) return '';
+  const name = named[1].trim();
+  // An address in the display-name slot is not a name.
+  return /@/.test(name) ? '' : name;
+}
+
+/**
+ * Create a DRAFT reply. Never sends.
+ *
+ * Megan asked for a draft rather than a send, and that is the right shape for
+ * a letter going to another firm under her name. Threading needs both the
+ * `threadId` AND the In-Reply-To / References headers: with only the threadId
+ * Gmail files the draft in the thread but the recipient's client may still
+ * show it as a new conversation.
+ */
+async function createDraft({ to, subject, htmlBody, threadId = '', inReplyTo = '' }) {
+  const headers = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset="UTF-8"',
+  ];
+  if (inReplyTo) {
+    headers.push(`In-Reply-To: ${inReplyTo}`);
+    headers.push(`References: ${inReplyTo}`);
+  }
+  const raw = b64url(`${headers.join('\r\n')}\r\n\r\n${htmlBody}`);
+  const message = threadId ? { raw, threadId } : { raw };
+  return apiPost('/drafts', { message });
+}
+
 module.exports = {
   // auth / low-level
   getAccessToken,
@@ -348,6 +460,11 @@ module.exports = {
   // messages
   listMessages,
   getMessage,
+  // threads + drafts
+  addressSearchTerm,
+  findLabelledThread,
+  senderNameOf,
+  createDraft,
   getThreadLabelIds,
   // mutations
   modifyMessage,
