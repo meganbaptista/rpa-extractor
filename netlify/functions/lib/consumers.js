@@ -33,10 +33,14 @@ const CONSUMERS = [
   /**
    * Listens for `compliance.reconciled`, NOT `disclosure.split`: the reply is
    * made of the compliance list's leftover lines, so it needs the reconcile's
-   * output rather than the splitter's. Built 2026-09-24 and left DISABLED -
-   * turning it on drafts mail about real deals to real people.
+   * output rather than the splitter's.
+   *
+   * LIVE since 2026-09-24, on Megan's say-so. It writes DRAFTS and has no code
+   * path that sends, so the worst it can do is leave a draft she deletes. It
+   * needs the incoming email labelled "FX Disclosures" to find the thread; if
+   * it cannot, it still drafts, unaddressed, and says so.
    */
-  { name: 'email-draft',      fn: 'disclosure-email-background',      events: ['compliance.reconciled'], enabled: false },
+  { name: 'email-draft',      fn: 'disclosure-email-background',      events: ['compliance.reconciled'], enabled: true  },
   { name: 'timeline',         fn: 'disclosure-timeline-background',   events: ['disclosure.uploaded'], enabled: false },
 ];
 
