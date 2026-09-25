@@ -48,6 +48,28 @@ const INTERNAL_ONLY = [
   'mls client to sign',
 ];
 
+/**
+ * Whole SECTIONS of the checklist that never reach the email.
+ *
+ * Her Doc is not one list. Under "CLOSING PACKAGE ITEMS" sit Prelim Receipt,
+ * QS / FIRPTA, Signed Commission Instructions, Closing Statement and the
+ * escrow signings: none of it is disclosures, none of it is anything the
+ * sending coordinator has a part in, and all six turned up in the first live
+ * draft. Megan: "we need to remove CLOSING PACKAGE ITEMS: from being listed".
+ *
+ * Matched on the heading the line sits under, so the rule follows the Doc's
+ * own structure rather than trying to recognise each item.
+ */
+const EXCLUDED_SECTIONS = [
+  'closing package items',
+];
+
+function isExcludedSection(heading) {
+  const t = String(heading || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (!t) return false;
+  return EXCLUDED_SECTIONS.some((x) => t === x || t.startsWith(`${x} `));
+}
+
 function isInternalOnly(line) {
   const t = String(line || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   if (!t) return false;
@@ -150,9 +172,13 @@ function esc(t) {
 function buildReply({ address, outstanding = [], senderName = '',
                       unsortedPages = [], outOfSequence = [] }) {
   const first = String(senderName || '').trim().split(/\s+/)[0];
-  const lines = outstanding.map((o) => String(typeof o === 'string' ? o : (o && o.text) || '').trim())
+  const lines = outstanding
+    // A whole section can be out of scope for the email even though every
+    // line in it is genuinely outstanding on the Doc.
+    .filter((o) => !isExcludedSection(o && o.section))
+    .map((o) => String(typeof o === 'string' ? o : (o && o.text) || '').trim())
     .filter(Boolean)
-    // Internal-only lines stay on the Doc and out of the email.
+    // And individual lines that are ours alone.
     .filter((l) => !isInternalOnly(l));
   const p = [];
 
@@ -165,7 +191,7 @@ function buildReply({ address, outstanding = [], senderName = '',
     return { subject: `${address} - disclosures received`, htmlBody: p.join('\n'), asks: 0 };
   }
 
-  p.push('<p>Thanks so much for these! After my audit, here is where the file stands on my end:</p>');
+  p.push('<p>Thanks so much for these! After my audit, here is what is still pending from the file:</p>');
   // A plain list in her own wording. No bullets-with-commentary, no regrouping
   // by who owes what: the list IS the message.
   p.push('<ul>');
@@ -195,4 +221,4 @@ function buildReply({ address, outstanding = [], senderName = '',
   };
 }
 
-module.exports = { buildReply, groupForReply, owedBy, missingWords, partyWords, docName, isInternalOnly, INTERNAL_ONLY };
+module.exports = { buildReply, groupForReply, owedBy, missingWords, partyWords, docName, isInternalOnly, INTERNAL_ONLY, isExcludedSection, EXCLUDED_SECTIONS };

@@ -171,9 +171,16 @@ exports.handler = async function (event) {
      * file stands on my end". Reformatting her wording is how it stops being
      * her list, so nothing here interprets it.
      */
-    const outstanding = plan.lines
-      .filter((l) => l.action === 'keep' || l.action === 'annotate' || l.action === 'review')
-      .map((l) => ({ text: l.action === 'annotate' ? l.to : l.text, action: l.action }));
+    let section = '';
+    const outstanding = [];
+    for (const l of plan.lines) {
+      // A non-bullet line is a heading, and it governs everything under it
+      // until the next one. Carried along so the reply can drop a whole
+      // section (CLOSING PACKAGE ITEMS) without having to recognise its items.
+      if (l.action === 'heading') { section = String(l.text || '').trim(); continue; }
+      if (l.action !== 'keep' && l.action !== 'annotate' && l.action !== 'review') continue;
+      outstanding.push({ text: l.action === 'annotate' ? l.to : l.text, action: l.action, section });
+    }
     const changes = plan.lines.filter((l) => l.action === 'delete' || l.action === 'annotate');
 
     const report = describe(address, plan, docUrl, envelope.coverage, writingEnabled() && changes.length > 0);

@@ -49,8 +49,8 @@ const text = (html) => html
   });
   const body = text(r.htmlBody);
   ok('greets the sender by first name', body[0], 'Hi Dana,');
-  ok('opens with where the file stands',
-    /Thanks so much for these! After my audit, here is where the file stands on my end:/.test(body[1]), true);
+  ok('opens with what is still pending',
+    /Thanks so much for these! After my audit, here is what is still pending from the file:/.test(body[1]), true);
   ok('carries every line exactly as the Doc has it',
     body.filter((l) => l.startsWith('- ')),
     ['- LA AVID', '- BA AVID - NeedSS', '- VP - once completed']);
@@ -138,7 +138,7 @@ ok('nor does an address sitting in the name slot', gmail.senderNameOf('"x@y.com"
 // ours. "MLS CLIENT TO SIGN" is the second kind: our own client signing our
 // own MLS paperwork is nothing the buyer's coordinator can act on. Megan:
 // "Could we make a rule to never show the 'MLS CLIENT TO SIGN' bullet point?"
-const { isInternalOnly } = require('../netlify/functions/lib/disclosure-reply.js');
+const { isInternalOnly, isExcludedSection } = require('../netlify/functions/lib/disclosure-reply.js');
 ok('the internal line is hidden however it is punctuated',
   ['MLS CLIENT TO SIGN', 'mls client to sign', 'MLS Client to Sign',
    'MLS CLIENT TO SIGN - by Friday'].map(isInternalOnly),
@@ -162,6 +162,27 @@ ok('and nothing else is swept up',
   const r = buildReply({ address: 'X', outstanding: [{ text: 'MLS CLIENT TO SIGN' }] });
   ok('an all-internal list reads as nothing outstanding',
     [/is accounted for/.test(r.htmlBody), r.asks], [true, 0]);
+}
+
+// A whole section can be out of scope for the email even though every line in
+// it is genuinely outstanding on the Doc. Her list keeps CLOSING PACKAGE ITEMS
+// under its own heading: prelim receipt, FIRPTA, commission instructions,
+// closing statement, escrow signings. All six reached the first live draft.
+ok('a section heading is matched with or without its colon',
+  ['CLOSING PACKAGE ITEMS:', 'closing package items', 'Closing Package Items'].map(isExcludedSection),
+  [true, true, true]);
+ok('and the sections that belong in the email are kept',
+  ['DISCLOSURES', 'NOTES:', ''].map(isExcludedSection), [false, false, false]);
+{
+  const r = buildReply({ address: 'X', senderName: 'Jennifer', outstanding: [
+    { text: 'LA AVID', section: 'DISCLOSURES' },
+    { text: 'VP - once completed', section: 'DISCLOSURES' },
+    { text: 'Prelim Receipt', section: 'CLOSING PACKAGE ITEMS:' },
+    { text: 'QS / FIRPTA', section: 'CLOSING PACKAGE ITEMS:' },
+    { text: 'Escrow Instructions Signed', section: 'CLOSING PACKAGE ITEMS:' }] });
+  ok('the closing package never reaches the email',
+    [text(r.htmlBody).filter((l) => l.startsWith('- ')), r.asks],
+    [['- LA AVID', '- VP - once completed'], 2]);
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');

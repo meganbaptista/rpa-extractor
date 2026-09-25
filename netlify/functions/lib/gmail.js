@@ -68,16 +68,27 @@ function subject() {
 // Keyed by subject so switching mailboxes can't reuse the wrong token.
 let _token = { value: null, exp: 0, sub: null };
 
-async function getAccessToken() {
+/**
+ * `scope` overrides the default for ONE call and is never cached.
+ *
+ * Used only to read her Gmail signature, which needs gmail.settings.basic.
+ * Kept out of the main scope string on purpose: if that scope were ever
+ * unauthorised in the Workspace admin console, folding it in would make EVERY
+ * Gmail token request fail and take the email router down with it. A separate,
+ * uncached request fails alone.
+ */
+async function getAccessToken({ scope } = {}) {
   const sub = subject();
   const now = Math.floor(Date.now() / 1000);
-  if (_token.value && _token.sub === sub && _token.exp - 60 > now) return _token.value;
+  const wanted = scope || GMAIL_SCOPE;
+  const cacheable = wanted === GMAIL_SCOPE;
+  if (cacheable && _token.value && _token.sub === sub && _token.exp - 60 > now) return _token.value;
 
   const creds = loadCreds();
   const header = { alg: 'RS256', typ: 'JWT' };
   // sub = the impersonated mailbox. Requires the SA's client_id + gmail.modify
   // scope authorized in the Workspace Admin console (see file header).
-  const claim = { iss: creds.client_email, sub, scope: GMAIL_SCOPE, aud: TOKEN_URL, iat: now, exp: now + 3600 };
+  const claim = { iss: creds.client_email, sub, scope: wanted, aud: TOKEN_URL, iat: now, exp: now + 3600 };
   const unsigned = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(claim))}`;
   const signer = crypto.createSign('RSA-SHA256');
   signer.update(unsigned);
@@ -97,6 +108,7 @@ async function getAccessToken() {
   if (!res.ok || !data.access_token) {
     throw new Error(`gmail token exchange failed (${res.status}): ${JSON.stringify(data).slice(0, 300)}`);
   }
+  if (!cacheable) return data.access_token;
   _token = { value: data.access_token, exp: now + (data.expires_in || 3600), sub };
   return _token.value;
 }
@@ -393,16 +405,44 @@ async function findLabelledThread(labelName, address, { newerThanDays = 45 } = {
     pageSize: 25,
   });
   if (!msgs.length) return null;
-  // listMessages returns newest first; read the newest for its headers.
-  const newest = await getMessage(msgs[0].id);
-  const h = newest.headers || {};
-  return {
-    threadId: newest.threadId,
-    messageId: h['message-id'] || h['Message-ID'] || '',
-    from: h.from || '',
-    subject: h.subject || '',
-    senderName: senderNameOf(h.from || ''),
-  };
+
+  /**
+   * THE REPLY GOES TO THE OTHER SIDE, NOT BACK TO US.
+   *
+   * The first live draft, 2026-09-24, opened "Hi Megan," and was addressed to
+   * her own mailbox. The newest message in the labelled thread was HER reply
+   * on it - "Received, thank you." - and taking the most recent sender got her
+   * own name. A thread is a conversation; the person who sent the package is
+   * the most recent participant who is NOT us.
+   *
+   * Walks newest first and takes the first message from anyone else, so a
+   * thread she has already replied on still finds the coordinator underneath.
+   */
+  const me = String(process.env.GMAIL_IMPERSONATE_SUBJECT
+    || process.env.GOOGLE_IMPERSONATE_SUBJECT || '').trim().toLowerCase();
+  let fallback = null;
+  for (const m of msgs) {
+    const msg = await getMessage(m.id);
+    const h = msg.headers || {};
+    const from = h.from || '';
+    const hit = {
+      threadId: msg.threadId,
+      messageId: h['message-id'] || h['Message-ID'] || '',
+      from,
+      subject: h.subject || '',
+      senderName: senderNameOf(from),
+    };
+    if (!fallback) fallback = hit;      // in case every message is ours
+    if (me && from.toLowerCase().includes(me)) continue;
+    return hit;
+  }
+  /**
+   * Every message in the thread is ours. Returning the thread anyway keeps the
+   * draft IN the conversation, where she can pick the recipient; returning
+   * null would produce a loose draft with no context at all. The recipient is
+   * blanked rather than set to her own address.
+   */
+  return fallback ? { ...fallback, from: '', senderName: '', selfOnly: true } : null;
 }
 
 /**
@@ -448,6 +488,43 @@ async function createDraft({ to, subject, htmlBody, threadId = '', inReplyTo = '
   return apiPost('/drafts', { message });
 }
 
+/**
+ * HER LIVE GMAIL SIGNATURE, so a drafted reply is signed the way she signs.
+ *
+ * A draft created through the API is stored exactly as submitted: Gmail's
+ * signature is inserted by the COMPOSE UI, not by the account, and it is never
+ * added retroactively. So a draft has to carry one.
+ *
+ * Hardcoding it went stale immediately. The first live draft, 2026-09-24, came
+ * out with her previous signature (Georgia, teal rule, "Owner, My TC
+ * Concierge") while her real one now reads "Transaction Concierge" with a
+ * different photo. Megan: "It also used my wrong signature line." A signature
+ * is something she changes without telling anyone, so it has to be READ rather
+ * than remembered.
+ *
+ * ISOLATED TOKEN, DELIBERATELY. Reading settings needs the
+ * gmail.settings.basic scope, and adding it to the main token's scope string
+ * would mean that if it were ever unauthorised, EVERY Gmail call fails and the
+ * email router goes down with it. So it mints its own token and any failure
+ * falls back to the stored copy.
+ */
+const SETTINGS_SCOPE = 'https://www.googleapis.com/auth/gmail.settings.basic';
+
+async function fetchSignature() {
+  const token = await getAccessToken({ scope: SETTINGS_SCOPE });
+  const res = await fetch(`${apiBase()}/settings/sendAs`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`sendAs ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = await res.json();
+  const list = (data && data.sendAs) || [];
+  // The default send-as identity is the one whose signature she actually uses.
+  const primary = list.find((x) => x.isDefault) || list.find((x) => x.isPrimary) || list[0];
+  const sig = primary && String(primary.signature || '').trim();
+  if (!sig) throw new Error('no signature set on the default send-as address');
+  return sig;
+}
+
 module.exports = {
   // auth / low-level
   getAccessToken,
@@ -465,6 +542,7 @@ module.exports = {
   findLabelledThread,
   senderNameOf,
   createDraft,
+  fetchSignature,
   getThreadLabelIds,
   // mutations
   modifyMessage,

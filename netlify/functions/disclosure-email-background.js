@@ -32,7 +32,7 @@ const { parseRequestBody } = require('./lib/parse-body');
 const { alert } = require('./lib/alert');
 const gmail = require('./lib/gmail');
 const { buildReply } = require('./lib/disclosure-reply');
-const { withSignature } = require('./lib/signature');
+const { withSignature, liveSignature } = require('./lib/signature');
 
 const DONE_STORE = 'disclosure-email-done';
 
@@ -107,13 +107,15 @@ exports.handler = async function (event) {
     const draft = await gmail.createDraft({
       to: thread ? thread.from : '',
       subject: thread && thread.subject ? `Re: ${thread.subject}` : reply.subject,
-      htmlBody: withSignature(reply.htmlBody),
+      htmlBody: withSignature(reply.htmlBody, await liveSignature(gmail)),
       threadId: thread ? thread.threadId : '',
       inReplyTo: thread ? thread.messageId : '',
     });
 
     console.log(`[disclosure-email] drafted reply for ${address}: ${reply.asks} open line(s), `
-      + (thread ? `in thread ${thread.threadId} to ${thread.from}` : 'NO THREAD FOUND, draft has no recipient'));
+      + (thread
+        ? `in thread ${thread.threadId} to ${thread.from || 'NOBODY (every message in it is ours)'}`
+        : 'NO THREAD FOUND, draft has no recipient'));
 
     if (eventId) {
       await done.setJSON(eventId, {
@@ -130,7 +132,14 @@ exports.handler = async function (event) {
      * email about it - the draft IS the notification, sitting in her drafts
      * folder. Same rule as the compliance write.
      */
-    if (!thread) {
+    if (thread && thread.selfOnly) {
+      // The thread was found but holds only our own messages, so there is
+      // nobody in it to reply to yet.
+      await alert(`disclosure-email-no-recipient:${address}`,
+        `Drafted the disclosure reply for ${address} into its thread, but every message in that `
+        + 'thread is from us, so the draft has no recipient. Add the address and send.',
+        { source: 'disclosure-pipeline', label: 'Disclosure Pipeline' });
+    } else if (!thread) {
       await alert(`disclosure-email-no-thread:${address}`,
         `Drafted the disclosure reply for ${address}, but could not find a labelled email thread for `
         + `it, so the draft has no recipient and is not in a conversation. `
