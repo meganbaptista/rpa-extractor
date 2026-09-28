@@ -53,6 +53,8 @@ const OUTSTANDING = /^(NEEDB[A-Za-z()+]*|Need[A-Za-z()+]*|N[A-Z+]*|MISSING)$/i;
 const ALIASES = [
   { key: 'avid-la', match: [/^la\s*avid\b/i, /^avid[\s-]*la\b/i] },
   { key: 'avid-ba', match: [/^ba\s*avid\b/i, /^avid[\s-]*ba\b/i] },
+  { key: 'aaa-la', match: [/^la\s*aaa\b/i, /^aaa[\s-]*la\b/i] },
+  { key: 'aaa-ba', match: [/^ba\s*aaa\b/i, /^aaa[\s-]*ba\b/i] },
   /**
    * "CAR EQ Booklet Receipt" has to alias too, or naming the C.A.R. version
    * apart from the brokerage one would stop it matching her list line and the

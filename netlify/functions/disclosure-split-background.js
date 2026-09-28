@@ -357,6 +357,14 @@ function formLabel(form) {
   if (/^eq booklet receipt$/i.test(clean(form.name)) && !brokerageName(form)) {
     form = { ...form, name: 'CAR EQ Booklet Receipt' };
   }
+  /**
+   * THE AAA LEADS WITH ITS SIDE: "LA AAA - Additional Agent Acknowledgement".
+   * Megan, 2026-09-28: "can we save it as 'LA AAA...' vs 'BA AAA..' based on
+   * what is checked in section 1?" It is also how her checklist words the
+   * line, so the reconcile matches it without an alias.
+   */
+  const aaaSide = clean(form.code).match(/^AAA-(LA|BA)$/i);
+  if (aaaSide) form = { ...form, code: `${aaaSide[1].toUpperCase()} AAA` };
   let base = [form.code, form.name].filter(Boolean).join(' - ');
   /**
    * WHOSE DOCUMENT IS IT, FIRST IN THE NAME. Megan's request, 2026-09-24:

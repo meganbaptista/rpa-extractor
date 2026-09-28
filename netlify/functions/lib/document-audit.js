@@ -91,6 +91,11 @@ const RULES =
   'recurs throughout a seller-disclosure package, so an AVID matching the recurring brokerage is ' +
   'AVID-LA and one matching a different, clearly buyer-side brokerage is AVID-BA. Only when it cannot ' +
   'be matched to either side from any evidence, use plain "AVID" rather than guessing.\n' +
+  'AAA side: a C.A.R. Additional Agent Acknowledgement (Form AAA) says whose side it is in paragraph ' +
+  '1, where exactly one box is checked. Set "code" to "AAA-LA" when 1A ("Multiple Associate-Licensees ' +
+  'working with Seller/Housing Provider") is checked and "AAA-BA" when 1B ("Multiple ' +
+  'Associate-Licensees working with Buyer/Tenant") is checked. Read the checkbox, not the brokerage. ' +
+  'If neither or both are checked, use plain "AAA".\n' +
   'TOA (Text Overflow Addendum): a continuation sheet for whatever form ran out of space in a field. ' +
   'Its body starts by naming the PARENT form\'s code in square brackets, e.g. "[SPQ]" or "[TDS]". Set ' +
   '"code" to "TOA" and "parent_code" to that bracketed code ("" if none is printed).\n' +
@@ -242,6 +247,13 @@ function tokensForLabel(label) {
   const out = new Set();
   if (/buyer'?s?\s*agent|agent.*buyer/.test(t)) out.add('BA');
   if (/(seller|listing)'?s?\s*agent|agent.*seller/.test(t)) out.add('LA');
+  // "Seller/Tenant" and "Owner/Tenant" name whoever OCCUPIES the listing, which
+  // is our side. Reading the tenant as the buyer filed Christie's personal
+  // belongings acknowledgement for 3643 Ballina as NEEDB with both sellers
+  // signed and no buyer line on the page.
+  if (!out.size && /\btenant/.test(t) && /\b(seller|owner|landlord|lessor)/.test(t) && !/\bbuyer/.test(t)) {
+    return ['S'];
+  }
   if (!out.size) {
     if (/\bbuyer|\btenant/.test(t)) out.add('B');
     if (/\bseller|\blandlord/.test(t)) out.add('S');
@@ -285,9 +297,33 @@ function normTokens(arr) {
  *     four "Buyer's or Seller's" lines with two signed cannot tell you which
  *     two from the list, but the document itself plainly can.
  */
+/**
+ * FORMS ONLY THE SELLER SIGNS, whatever lines are printed on them.
+ *
+ * The personal belongings acknowledgement is the seller's (or the occupying
+ * tenant's) receipt of a warning about their own valuables. Christie's prints
+ * two "Seller/Tenant" lines; Compass prints "Seller/Lessor" AND a "Buyer/Tenant"
+ * line, which on a sale is left blank because there is no buyer to sign it.
+ * Megan, 2026-09-28: "This form is FX with just seller signature."
+ */
+const SELLER_ONLY_FORMS = [
+  /secure\s+(and|&)\s+protect\s+personal\s+belongings/i,
+];
+
+function isSellerOnlyForm(audit) {
+  const name = String((audit && audit.name) || '');
+  return SELLER_ONLY_FORMS.some((re) => re.test(name));
+}
+
 function resolveSigners(audit, code) {
   const lines = Array.isArray(audit.signature_lines) ? audit.signature_lines : [];
-  const side = /AVID-BA/i.test(code || '') ? 'BA' : (/AVID-LA/i.test(code || '') ? 'LA' : null);
+  if (isSellerOnlyForm(audit)) {
+    // WHO signed stays the model's answer, as below: a one-seller deal leaves
+    // the second printed line blank, so counting lines would read NeedSS.
+    const signed = normTokens(audit.present_signers).includes('S');
+    return { required_signers: ['S'], present_signers: signed ? ['S'] : [], lines, signerAmbiguity: 0 };
+  }
+  const side = /(AVID|AAA)-BA/i.test(code || '') ? 'BA' : (/(AVID|AAA)-LA/i.test(code || '') ? 'LA' : null);
   const required = new Set();
   for (const l of lines) {
     for (const tok of tokensForLabel(l && l.label)) {

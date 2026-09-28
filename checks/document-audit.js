@@ -518,5 +518,32 @@ ok('a differently named receipt is left alone',
   formLabel({ code: '', name: 'Receipt for Links to Booklets', brokerage: '' }),
   'Receipt for Links to Booklets');
 
+// --- seller-only forms + AAA side (3643 Ballina, 2026-09-28) ----------------
+ok('"Seller/Tenant" is the seller, not the buyer', tokensForLabel('Seller/Tenant'), ['S']);
+ok('"Owner/Tenant" is the seller', tokensForLabel('Owner/Tenant'), ['S']);
+ok('"Buyer/Tenant" is still the buyer', tokensForLabel('Buyer/Tenant'), ['B']);
+const belongings = (name, lines, present) => {
+  const r = resolveSigners({ name, signature_lines: lines, required_signers: ['S', 'B'], present_signers: present }, '');
+  return statusSuffix({ code: '', name, ...r });
+};
+ok("Christie's belongings ack with the seller signed is FX",
+  belongings('Seller or Tenant Acknowledgment of Obligation to Secure and Protect Personal Belongings',
+    [L('Seller/Tenant', true), L('Seller/Tenant', true)], ['S']), 'FX');
+ok('Compass belongings ack ignores its blank Buyer/Tenant line',
+  belongings('Seller or Tenant Acknowledgement of Obligation to Secure & Protect Personal Belongings',
+    [L('Seller/Lessor', true), L('Buyer/Tenant', false)], ['S']), 'FX');
+ok('belongings ack with the seller unsigned still says so',
+  belongings('Seller or Tenant Acknowledgment of Obligation to Secure and Protect Personal Belongings',
+    [L('Seller/Tenant', false)], []), 'NeedSS');
+ok('AAA 1A files as LA AAA',
+  formLabel({ code: 'AAA-LA', name: 'Additional Agent Acknowledgement', brokerage: '' }),
+  'LA AAA - Additional Agent Acknowledgement');
+ok('AAA 1B files as BA AAA',
+  formLabel({ code: 'AAA-BA', name: 'Additional Agent Acknowledgement', brokerage: '' }),
+  'BA AAA - Additional Agent Acknowledgement');
+ok('AAA with no side stays plain',
+  formLabel({ code: 'AAA', name: 'Additional Agent Acknowledgement', brokerage: '' }),
+  'AAA - Additional Agent Acknowledgement');
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

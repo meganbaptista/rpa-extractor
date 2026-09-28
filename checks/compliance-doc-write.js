@@ -203,6 +203,8 @@ ok('and so are the hand-named shapes',
   ['FX', 'FX', 'FX']);
 // The label must survive intact, or the file stops matching its line.
 ok('the label is unaffected by the spacing', fileKey('BA AVID - need SS.pdf').key, 'avid-ba');
+ok('LA AAA file keys to the LA AAA line', fileKey('LA AAA - Additional Agent Acknowledgement - FX.pdf').key, 'aaa-la');
+ok('BA AAA never answers LA AAA', fileKey('BA AAA - Additional Agent Acknowledgement - NeedSS.pdf').key, 'aaa-ba');
 ok('a normalised status still reads as outstanding', OUTSTANDING.test(status('BA AVID - need SS.pdf')), true);
 
 // End to end: that one file, against her real BA AVID line.
