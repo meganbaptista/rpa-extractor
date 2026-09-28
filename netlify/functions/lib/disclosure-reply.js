@@ -146,6 +146,29 @@ function groupForReply(forms) {
   return out;
 }
 
+/** A note that is nothing but a signature status: "NeedSS", "NeedSS+LA". */
+const STATUS_NOTE = /^(NEEDB|Need)[A-Za-z()]*(\+[A-Za-z()]+)*$/i;
+
+/**
+ * One checklist line as a list item: the item plain, her note bold italic.
+ *
+ * Megan's sent reply for 3643 Ballina, 2026-09-28, is the template:
+ *   BA AVID - ***NeedSS (I will get this)***
+ *   Contingency Release full
+ *   VP - ***once completed***
+ * The note is everything after the first " - ". When it is a signature only
+ * OUR side owes, "(I will get this)" says so, "so they kinda know where we
+ * stand". The wording of the line itself is still hers and still verbatim.
+ */
+function listItem(line) {
+  const cut = line.search(/\s[-\u2013]\s/);
+  const item = (cut > 0 ? line.slice(0, cut) : line).replace(/\s*[-\u2013]\s*$/, '').trim();
+  const note = cut > 0 ? line.slice(cut + 3).replace(/\s*[-\u2013]\s*$/, '').trim() : '';
+  if (!note) return esc(item);
+  const mine = STATUS_NOTE.test(note) && owedBy(note) === 'us';
+  return `${esc(item)} - <b><i>${esc(note)}${mine ? ' (I will get this)' : ''}</i></b>`;
+}
+
 function esc(t) {
   return String(t == null ? '' : t)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -195,7 +218,7 @@ function buildReply({ address, outstanding = [], senderName = '',
   // A plain list in her own wording. No bullets-with-commentary, no regrouping
   // by who owes what: the list IS the message.
   p.push('<ul>');
-  for (const l of lines) p.push(`<li>${esc(l)}</li>`);
+  for (const l of lines) p.push(`<li>${listItem(l)}</li>`);
   p.push('</ul>');
 
   if (unsortedPages.length) {
@@ -221,4 +244,4 @@ function buildReply({ address, outstanding = [], senderName = '',
   };
 }
 
-module.exports = { buildReply, groupForReply, owedBy, missingWords, partyWords, docName, isInternalOnly, INTERNAL_ONLY, isExcludedSection, EXCLUDED_SECTIONS };
+module.exports = { buildReply, listItem, groupForReply, owedBy, missingWords, partyWords, docName, isInternalOnly, INTERNAL_ONLY, isExcludedSection, EXCLUDED_SECTIONS };
