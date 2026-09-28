@@ -125,9 +125,23 @@ function itemKey(line) {
   return aliasFor(text) || norm(text.split(/\s+[-–]\s+|\s*\(/)[0]);
 }
 
-/** `SPQ - Seller Property Questionnaire - FX.pdf` -> { key: 'spq', status: 'FX' }. */
+/**
+ * `FX - SPQ - Seller Property Questionnaire.pdf` -> { key: 'spq', status: 'FX' },
+ * and the older `SPQ - Seller Property Questionnaire - FX.pdf` the same.
+ */
 function fileKey(filename) {
   const base = String(filename || '').replace(/\.pdf$/i, '').trim();
+  /**
+   * THE SPLITTER PUTS THE STATUS FIRST since 2026-09-28, so Drive's truncated
+   * names still show it. Only the splitter's own words are accepted here, and
+   * only before a " - ": the trailing test's bare `N...` would read "NHD - ..."
+   * as a status. A collision's " (2)" is dropped from the label.
+   */
+  const lead = base.match(/^(FX|Need[A-Za-z()+]*|NB|MISSING)\s+-\s+/i);
+  if (lead) {
+    const label = base.slice(lead[0].length).replace(/\s*\(\d+\)$/, '').trim();
+    return { key: aliasFor(label) || norm(label), status: lead[1] };
+  }
   /**
    * THE STATUS IS THE LAST TOKEN, however it was punctuated.
    *

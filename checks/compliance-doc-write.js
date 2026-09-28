@@ -203,6 +203,11 @@ ok('and so are the hand-named shapes',
   ['FX', 'FX', 'FX']);
 // The label must survive intact, or the file stops matching its line.
 ok('the label is unaffected by the spacing', fileKey('BA AVID - need SS.pdf').key, 'avid-ba');
+ok('a leading status is read', fileKey('NeedSS - AVID-BA - Agent Visual Inspection Disclosure.pdf'), { key: 'avid-ba', status: 'NeedSS' });
+ok('a leading FX with a brokerage label', fileKey("FX - Christie's International Real Estate - EQ Booklet Receipt.pdf"), { key: 'eq-booklet', status: 'FX' });
+ok('a leading-status collision drops its (2)', fileKey('FX - SPQ - Seller Property Questionnaire (2).pdf').key, fileKey('FX - SPQ - Seller Property Questionnaire.pdf').key);
+ok('NHD is a form code, not a status', fileKey('NHD - Natural Hazard Disclosure Statement - FX.pdf'), { key: 'nhd', status: 'FX' });
+ok('LA AAA leading status', fileKey('FX - LA AAA - Additional Agent Acknowledgement.pdf'), { key: 'aaa-la', status: 'FX' });
 ok('LA AAA file keys to the LA AAA line', fileKey('LA AAA - Additional Agent Acknowledgement - FX.pdf').key, 'aaa-la');
 ok('BA AAA never answers LA AAA', fileKey('BA AAA - Additional Agent Acknowledgement - NeedSS.pdf').key, 'aaa-ba');
 ok('a normalised status still reads as outstanding', OUTSTANDING.test(status('BA AVID - need SS.pdf')), true);

@@ -10,9 +10,9 @@
 //   2. Asks Opus 4.8 to map each CAR form -> its page range, AND audit which
 //      required parties (Buyer/Seller/Buyer's Agent/Listing Agent) have signed.
 //   3. Splits the PDF into one file per form with pdf-lib (copyPages).
-//   4. Names each "<CODE> - <Full Name> - <STATUS>.pdf" where STATUS is `FX`
-//      (fully executed) or `N` + the missing parties (B, S, BA, LA) in fixed
-//      order, e.g. `NB`, `NB+S`. Duplicates keep both via " (2)".
+//   4. Names each "<STATUS> - <CODE> - <Full Name>.pdf" where STATUS is `FX`
+//      (fully executed) or `Need` + the missing parties (B, S, BA, LA) in
+//      fixed order, e.g. `NEEDB`, `NeedSS+LA`. Duplicates keep both via " (2)".
 //   5. Uploads the split files into the property folder (location.propertyFolderId).
 //   6. Archives the original to Incoming/_processed/ and emits `disclosure.split`.
 //
@@ -664,7 +664,14 @@ exports.handler = async function (event) {
     for (const form of forms) {
       const status = statusSuffix(form);
       const label = formLabel(form);
-      const base = `${label} - ${status}`;
+      /**
+       * THE STATUS LEADS THE NAME. Megan, 2026-09-28: the names are so long
+       * that Drive truncates them, so a status at the end was often not on
+       * screen at all ("Christie's International Real Estate - LOCAL AREA
+       * DISCLOSURES..."). First, it is the first thing read when the folder is
+       * sorted by date added. compliance-doc's fileKey reads it at either end.
+       */
+      const base = `${status} - ${label}`;
       const filename = uniqueName(base, taken);
       /**
        * UNIDENTIFIED GOES TO UNSORTED, not to a file named after a guess. Its
