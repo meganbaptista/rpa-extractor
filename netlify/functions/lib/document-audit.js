@@ -176,6 +176,16 @@ const RULES =
   'reporting only the signed ones made an unsigned form read as fully executed, which is the one ' +
   'status a coordinator acts on without opening the file.\n' +
   '    Count them individually: two Seller lines on a two-seller deal are TWO entries, not one.\n' +
+  '    FOOTER INITIALS BOXES ARE LINES TOO. C.A.R. forms print an initials box at the foot of a ' +
+  'page, e.g. "Buyer\'s/Tenant\'s Initials ____ / ____" at the bottom of LPD page 1. List EACH box ' +
+  'as its own entry, with "(page N)" added to the printed label, N being the page within this ' +
+  'document: {"label":"Buyer\'s/Tenant\'s Initials (page 1)","signed":false}. They are the marks ' +
+  'most often missed: on 83558 Tourmaline an LPD with its signature page complete and its page-1 ' +
+  'buyer initials blank was filed as fully executed. A party whose footer initials are blank is ' +
+  'NOT present, however completely they signed elsewhere.\n' +
+  '    OPTIONAL INITIALS ARE NOT LINES. A box that only applies if a party chooses that option - ' +
+  'printed "(if initialed)", like LPD paragraph 3A(2) - is blank whenever the party chose the ' +
+  'other one. Leave it out of signature_lines entirely.\n' +
   '  - "required_signers": the subset of ["B","S","BA","LA","BR"] this document requires, judged from ' +
   'those printed lines and nothing else.\n' +
   '  - "present_signers": the subset of required_signers who have ACTUALLY completed their signature ' +
@@ -335,6 +345,34 @@ function resolveSigners(audit, code) {
 
   const present = new Set();
   for (const tok of normTokens(audit.present_signers)) if (required.has(tok)) present.add(tok);
+
+  /**
+   * A BLANK INITIALS BOX OVERRULES "PRESENT".
+   *
+   * 83558 Tourmaline, 2026-09-29: the LPD's buyer signed page 2, so the audit
+   * called the buyer present and the form filed FX, with the "Buyer's/Tenant's
+   * Initials" box on page 1 empty. Megan caught it by hand.
+   *
+   * Grouped by label, and the page number the prompt asks for is part of the
+   * label, so each box is judged on its own. A group with ANY mark in it is
+   * left to the model: "____ / ____" on a one-buyer deal leaves the second slot
+   * blank, and counting slots would chase a buyer who does not exist. Only a
+   * box nobody touched removes its party. Optional "(if initialed)" boxes never
+   * count, in case the model lists one anyway.
+   */
+  const boxes = new Map();
+  for (const l of lines) {
+    const label = String((l && l.label) || '');
+    if (!/initial/i.test(label) || /if\s+initialed/i.test(label)) continue;
+    const k = label.toLowerCase().replace(/\s+/g, ' ').trim();
+    const g = boxes.get(k) || { signed: false, tokens: tokensForLabel(label) };
+    g.signed = g.signed || !!l.signed;
+    boxes.set(k, g);
+  }
+  for (const g of boxes.values()) {
+    if (g.signed) continue;
+    for (const tok of g.tokens) present.delete(tok);
+  }
 
   /**
    * WHEN THE PAGE DOES NOT SAY WHICH PARTY, DO NOT NAME ONE.

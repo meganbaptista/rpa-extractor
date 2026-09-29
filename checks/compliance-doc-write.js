@@ -203,11 +203,11 @@ ok('and so are the hand-named shapes',
   ['FX', 'FX', 'FX']);
 // The label must survive intact, or the file stops matching its line.
 ok('the label is unaffected by the spacing', fileKey('BA AVID - need SS.pdf').key, 'avid-ba');
-ok('a leading status is read', fileKey('NeedSS - AVID-BA - Agent Visual Inspection Disclosure.pdf'), { key: 'avid-ba', status: 'NeedSS' });
-ok('a leading FX with a brokerage label', fileKey("FX - Christie's International Real Estate - EQ Booklet Receipt.pdf"), { key: 'eq-booklet', status: 'FX' });
+ok('a leading status is read', ((k) => ({ key: k.key, status: k.status }))(fileKey('NeedSS - AVID-BA - Agent Visual Inspection Disclosure.pdf')), { key: 'avid-ba', status: 'NeedSS' });
+ok('a leading FX with a brokerage label', ((k) => ({ key: k.key, status: k.status }))(fileKey("FX - Christie's International Real Estate - EQ Booklet Receipt.pdf")), { key: 'eq-booklet', status: 'FX' });
 ok('a leading-status collision drops its (2)', fileKey('FX - SPQ - Seller Property Questionnaire (2).pdf').key, fileKey('FX - SPQ - Seller Property Questionnaire.pdf').key);
-ok('NHD is a form code, not a status', fileKey('NHD - Natural Hazard Disclosure Statement - FX.pdf'), { key: 'nhd', status: 'FX' });
-ok('LA AAA leading status', fileKey('FX - LA AAA - Additional Agent Acknowledgement.pdf'), { key: 'aaa-la', status: 'FX' });
+ok('NHD is a form code, not a status', ((k) => ({ key: k.key, status: k.status }))(fileKey('NHD - Natural Hazard Disclosure Statement - FX.pdf')), { key: 'nhd', status: 'FX' });
+ok('LA AAA leading status', ((k) => ({ key: k.key, status: k.status }))(fileKey('FX - LA AAA - Additional Agent Acknowledgement.pdf')), { key: 'aaa-la', status: 'FX' });
 ok('LA AAA file keys to the LA AAA line', fileKey('LA AAA - Additional Agent Acknowledgement - FX.pdf').key, 'aaa-la');
 ok('BA AAA never answers LA AAA', fileKey('BA AAA - Additional Agent Acknowledgement - NeedSS.pdf').key, 'aaa-ba');
 ok('a normalised status still reads as outstanding', OUTSTANDING.test(status('BA AVID - need SS.pdf')), true);
@@ -217,6 +217,19 @@ ok('a normalised status still reads as outstanding', OUTSTANDING.test(status('BA
   const plan = planDoc('- BA AVID', ['BA AVID - need SS.pdf']);
   ok('the BA AVID line is annotated rather than left for review',
     [plan.lines[0].action, plan.lines[0].to], ['annotate', 'BA AVID - NeedSS']);
+}
+
+// THE STATUS-FIRST RENAME BROKE THE CODE FALLBACK (83558 Tourmaline, 2026-09-29).
+// "LPD 1978 -" is not a prefix of the LPD's long name, so it clears on the
+// shared code - which was read off the FILENAME, and the filename now opens
+// with "FX".
+{
+  const p = planDoc('DISCLOSURES\n- LPD 1978 - \n', [
+    'FX - LPD - Lead-Based Paint and Lead-Based Paint Hazards Disclosure, Acknowledgment and Addendum.pdf']);
+  ok('LPD 1978 clears on a status-first LPD', p.lines.find((l) => /LPD/.test(l.text || '')).action, 'delete');
+  const q = planDoc('DISCLOSURES\n- LPD 1978 - \n', [
+    'NEEDB - LPD - Lead-Based Paint and Lead-Based Paint Hazards Disclosure, Acknowledgment and Addendum.pdf']);
+  ok('and a NEEDB one annotates it', q.lines.find((l) => /LPD/.test(l.text || '')).to, 'LPD 1978 - NEEDB');
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');

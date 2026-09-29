@@ -140,7 +140,7 @@ function fileKey(filename) {
   const lead = base.match(/^(FX|Need[A-Za-z()+]*|NB|MISSING)\s+-\s+/i);
   if (lead) {
     const label = base.slice(lead[0].length).replace(/\s*\(\d+\)$/, '').trim();
-    return { key: aliasFor(label) || norm(label), status: lead[1] };
+    return { key: aliasFor(label) || norm(label), status: lead[1], label };
   }
   /**
    * THE STATUS IS THE LAST TOKEN, however it was punctuated.
@@ -171,7 +171,7 @@ function fileKey(filename) {
   const m = base.match(/[\s-]+(Need\s*[A-Za-z()+]*|N[A-Za-z+]*|MISSING|FX)\s*$/i);
   const status = m ? m[1].replace(/^need\s+/i, 'Need') : '';
   const label = status ? base.slice(0, m.index).replace(/[\s-]+$/, '') : base;
-  return { key: aliasFor(label) || norm(label), status };
+  return { key: aliasFor(label) || norm(label), status, label };
 }
 
 /**
@@ -279,7 +279,10 @@ function planLine(line, files) {
   let hit =
     eligible.find((f) => f.key === key) ||
     eligible.find((f) => answers(key, f.key)) ||
-    (code ? eligible.find((f) => leadingCode(f.filename) === code) : undefined);
+    // The LABEL, not the filename: since the status moved to the front, a
+    // filename opens with "FX", and "LPD 1978" stopped clearing on 83558
+    // Tourmaline with "FX - LPD - Lead-Based Paint..." sitting in the folder.
+    (code ? eligible.find((f) => leadingCode(f.label) === code) : undefined);
 
   if (!hit) {
     const scored = eligible

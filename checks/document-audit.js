@@ -545,5 +545,28 @@ ok('AAA with no side stays plain',
   formLabel({ code: 'AAA', name: 'Additional Agent Acknowledgement', brokerage: '' }),
   'AAA - Additional Agent Acknowledgement');
 
+// --- blank footer initials (83558 Tourmaline LPD, 2026-09-29) ----------------
+{
+  const lpd = (lines) => {
+    const r = resolveSigners({ signature_lines: lines, required_signers: ['S', 'B', 'LA', 'BA'],
+                               present_signers: ['S', 'B', 'LA', 'BA'] }, 'LPD');
+    return statusSuffix({ code: 'LPD', name: 'Lead-Based Paint Disclosure', ...r });
+  };
+  const signedPage2 = [L('Seller or Housing Provider', true), L('Agent (Broker representing Seller)', true),
+                       L('Buyer or Tenant', true), L('Agent (Broker obtaining the Offer)', true)];
+  ok('blank page-1 buyer initials make the LPD NEEDB',
+    lpd([L("Buyer's/Tenant's Initials (page 1)", false), L("Buyer's/Tenant's Initials (page 1)", false), ...signedPage2]),
+    'NEEDB');
+  ok('one of two slots initialed is left to the model (one-buyer deal)',
+    lpd([L("Buyer's/Tenant's Initials (page 1)", true), L("Buyer's/Tenant's Initials (page 1)", false), ...signedPage2]),
+    'FX');
+  ok('an optional (if initialed) box never counts',
+    lpd([L("Buyer's/Tenant's Initials (page 1)", true), L('(if initialed) Buyer', false), ...signedPage2]),
+    'FX');
+  ok('each page is judged on its own',
+    lpd([L("Seller's Initials (page 1)", true), L("Seller's Initials (page 2)", false), ...signedPage2]),
+    'NeedSS');
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);
