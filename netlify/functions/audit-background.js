@@ -77,6 +77,7 @@ const usageLog = require('./lib/usage-log');
 const { callClaude: callClaudeShared } = require('./lib/claude');
 const { parseRequestBody } = require('./lib/parse-body');
 const { applyCounterChain } = require('./lib/counter-chain');
+const { STORE_NAME: CACHE_STORE } = require('./lib/audit-cache');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 
@@ -695,6 +696,17 @@ exports.handler = async function (event) {
       completedAt: completedAt,
       result: envelope,
     });
+
+    // File it under the PDF's fingerprint, so the same packet dropped again
+    // is not audited again (lib/audit-cache.js). Only a parsed audit is kept:
+    // an unparsed one should be retried, not repeated. Never fails the audit.
+    if (payload.cache_key && auditPart.structured) {
+      try {
+        await getStore(blobsConfig(CACHE_STORE)).setJSON(payload.cache_key, { jobId, completedAt, result: envelope });
+      } catch (e) {
+        console.warn(`[audit-background] jobId=${jobId} audit cache write failed: ${e.message}`);
+      }
+    }
     console.log(`[audit-background] jobId=${jobId} complete -- overall_status=${auditPart.structured && auditPart.structured.overall_status}`);
 
     // ----- ZAPIER FAN-OUT (success path only; fully isolated) ---------------

@@ -119,7 +119,12 @@ function estimateCost(model, u) {
   const outTok = u.output_tokens || 0;
   const cacheRead = u.cache_read_input_tokens || 0;
   const cacheWrite = u.cache_creation_input_tokens || 0;
-  const usd = (inTok * p.in + outTok * p.out + cacheRead * p.in * 0.1 + cacheWrite * p.in * 1.25) / 1e6;
+  // A 1-hour cache write bills at 2x input, a 5-minute one at 1.25x. The API
+  // splits them in usage.cache_creation; older responses carry only the total.
+  const split = u.cache_creation || {};
+  const write1h = split.ephemeral_1h_input_tokens || 0;
+  const write5m = split.ephemeral_5m_input_tokens != null ? split.ephemeral_5m_input_tokens : cacheWrite - write1h;
+  const usd = (inTok * p.in + outTok * p.out + cacheRead * p.in * 0.1 + write5m * p.in * 1.25 + write1h * p.in * 2) / 1e6;
   return Math.round(usd * 10000) / 10000;
 }
 

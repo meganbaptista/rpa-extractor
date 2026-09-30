@@ -54,6 +54,9 @@ Triggered by 10724 Wilshire #803: an SMCO #1 written to a DIFFERENT buyer's offe
 - **The model reads, code judges.** PART 2 now carries a `transcription` block (RPA page 1 + every counter's header, literal values). `lib/counter-chain.js` compares: C1 counter buyer/seller vs RPA 1A, C2 "dated" vs the countered document's date (RPA Date Prepared or the countered counter's Date), C3 a countered counter missing from the packet, C4 property. Hits go first in findings/action_items, set `overall_status` to `issues_found` (Megan's call), and lead the summary. Payload shape unchanged, so Zapier/PS need nothing.
 - Tests: `node checks/counter-chain.js` (placeholder names; the real packet stays out of the repo). Verified live on the real Wilshire CONTRACT.pdf: all three flags.
 
+### e) Audit cache: the same contract is audited once (2026-09-30)
+`lib/audit-cache.js`. audit-submit fingerprints the assembled PDF (sha256 of the base64) and, on a hit, writes the saved result as the new job's `complete` record and returns at once (`cached: true`): no extraction, audit, Call B or Zap post. audit-background files each parsed audit under its key. Key = `AUDIT_VERSION:tenant:sha256` - **bump `AUDIT_VERSION` whenever the audit prompt or its checks change**, or old audits keep being served. Overrides / prompt_override runs never use or fill it. A full run costs ~$2.14 (Sept 2026 medians: audit $0.93, Call B $0.79, extraction $0.42). Tests: `node checks/audit-cache.js`.
+
 ## 5. Downstream (Zapier → Process Street) — owner's side, VERIFY before relying
 - Frontend posts `extracted.rpa` to the RPA Zapier catch-hook (get the exact hook URL/IDs from the owner; don't trust any pasted from this doc).
 - A Formatter **"Split Text"** step ("Buyer Names (separate)") splits `buyer_names` on comma and **shatters entity names**. Now that `buyer_1..4` exist, the plan is to **retire that Split Text step and map `buyer_1..4` directly**.

@@ -40,6 +40,7 @@
 
 const { getStore } = require('@netlify/blobs');
 const crypto = require('crypto');
+const { STORE_NAME: CACHE_STORE, auditCacheKey, isExperiment } = require('./lib/audit-cache');
 
 console.log('[audit-submit] module loading');
 
@@ -112,11 +113,41 @@ exports.handler = async function (event) {
     }
     console.log(`[audit-submit] jobId=${jobId} assembled ${totalChunks} chunks -> ${assembledBase64.length} b64 chars`);
 
+    // ----- Step 1a: THE SAME CONTRACT IS AUDITED ONCE (lib/audit-cache.js).
+    // An identical PDF already audited returns that audit now: no extraction,
+    // no audit, no Call B, no Zap post (it was posted the first time).
+    const cacheKey = isExperiment(body) ? null : auditCacheKey(assembledBase64, body.tenant);
+    if (cacheKey) {
+      let hit = null;
+      try {
+        hit = await getStore(blobsConfig(CACHE_STORE)).get(cacheKey, { type: 'json' });
+      } catch (e) {
+        console.warn(`[audit-submit] audit cache read failed (running the audit): ${e.message}`);
+      }
+      if (hit && hit.result) {
+        await getStore(blobsConfig('audit-results')).setJSON(jobId, {
+          status: 'complete',
+          completedAt: Date.now(),
+          result: hit.result,
+          cached: true,
+          cachedFrom: hit.jobId || null,
+          cachedAt: hit.completedAt || null,
+        });
+        for (let i = 0; i < totalChunks; i++) {
+          try { await payloadStore.delete(`chunk:${uploadId}:${i}`); } catch (e) { /* best effort */ }
+        }
+        console.log(`[audit-submit] jobId=${jobId} cache hit (${cacheKey.slice(0, 24)}...) from ${hit.jobId}`);
+        return { statusCode: 200, headers, body: JSON.stringify({ jobId, status: 'complete', cached: true }) };
+      }
+    }
+
     // Write the assembled payload under jobId — the exact shape the extractor's
     // submit.js produces, so extraction can read it: { documents:[{data,label}] }.
+    // cache_key rides along so audit-background can file the finished audit.
     await payloadStore.setJSON(jobId, {
       documents: [{ data: assembledBase64, label }],
       prompt_override: body.prompt_override || null,
+      cache_key: cacheKey,
     });
 
     // ----- Step 1b: clean up the temp chunk keys (best-effort).

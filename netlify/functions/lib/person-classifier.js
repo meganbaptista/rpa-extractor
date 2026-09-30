@@ -149,7 +149,15 @@ async function callClassifier(system, tool, userText, note = '', attempt = 0) {
     // mark it cacheable. The breakpoint on the system block caches the static
     // prefix (tool schema + rulebook); only the per-email body pays full price.
     // Cache hits bill at ~10% of input — a big cut once emails arrive in bursts.
-    system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+    //
+    // ONE HOUR, NOT FIVE MINUTES (2026-09-30). The default cache lives 5
+    // minutes, and emails arrive further apart than that often enough that
+    // September re-wrote the ~8k-token rulebook on 1,360 of 9,463 calls - 14%
+    // of calls, $102 (33%) of the classifier's $312. A 1-hour write costs 2x
+    // input instead of 1.25x, but at ~45 emails a working hour it is written a
+    // handful of times a day and read the rest. The model sees byte-identical
+    // input either way, so routing cannot change.
+    system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }],
     tools: [tool],
     tool_choice: { type: 'tool', name: tool.name },
     messages: [{ role: 'user', content: userText }],
