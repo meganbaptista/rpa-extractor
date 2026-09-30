@@ -76,6 +76,7 @@ console.log('[audit-background] @netlify/blobs loaded');
 const usageLog = require('./lib/usage-log');
 const { callClaude: callClaudeShared } = require('./lib/claude');
 const { parseRequestBody } = require('./lib/parse-body');
+const { applyCounterChain } = require('./lib/counter-chain');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 
@@ -388,9 +389,9 @@ For each counter offer in the packet, transcribe these fields:
   - Date (top right corner of the first page): the date THIS counter offer itself was issued. This is a separate field in its own right, located at the top right of the page on its own line labeled "Date". Transcribe what you literally see in this top-right Date field, or write BLANK.
   - "This is a counter offer to..." reference checkbox: state which of the three checkboxes is checked, if any. The three options are: Purchase Agreement (the default, indicated by neither alternative box being checked) / Buyer Counter Offer No. (if checked, also transcribe the number filled into the field next to it) / Other (if checked, also transcribe what was written in the field next to it). Write which option applies.
   - "dated [date]" reference field: the date INSIDE the body sentence "This is a counter offer to the [Offer], dated _______". This date refers to WHEN THE DOCUMENT BEING COUNTERED WAS DATED -- it is NOT the same field as the top-right Date above. Transcribe what you literally see in this in-sentence "dated" field, or write BLANK.
-  - Property: the property address line in the body
-  - Buyer: the buyer name line in the body
-  - Seller: the seller name line in the body
+  - Property: the property address line in the body -- write the address itself
+  - Buyer: the buyer name line in the body -- write the NAME(S) exactly as printed, never "filled" or "present"
+  - Seller: the seller name line in the body -- write the NAME(S) exactly as printed, never "filled" or "present"
 
 IMPORTANT -- the two dates are distinct: the top-right "Date" field captures when THIS counter offer was issued; the in-sentence "dated [date]" field captures the date of the document this counter is responding to. They are two separate required fields with similar labels. A filled "dated" reference does NOT satisfy the top-right Date, and vice versa. Both must be present. If the top-right Date is blank, that is a missing field even when the "dated" reference is filled (and vice versa).
 
@@ -448,7 +449,28 @@ followed by a single JSON object (no markdown fences) with this shape:
   ],
   "action_items": [
     "one clean, send-ready line per issue, plain English, phrased as a notice or request to the other side -- no severity tags, no S1/N codes, no internal jargon"
-  ]
+  ],
+  "transcription": {
+    "rpa": {
+      "date_prepared": "RPA page 1 'Date Prepared', literally as written",
+      "buyer": "RPA paragraph 1A 'THIS IS AN OFFER FROM', every name including any continuation line",
+      "seller": "the seller as named on the RPA (Section 33D printed name, or 33B(2) entity name)",
+      "property": "RPA paragraph 1B property address"
+    },
+    "counters": [
+      {
+        "form": "SCO" | "SMCO" | "BCO",
+        "number": "the Counter Offer No.",
+        "packet_position": 1,
+        "date": "the top-right Date of THIS counter",
+        "counters": "what it counters, as checked: 'Purchase Agreement', 'Seller Counter Offer No. 1', 'Seller Multiple Counter Offer No. 1', 'Buyer Counter Offer No. 1', or 'Other: ...'",
+        "dated": "the in-sentence 'dated' date of the document it counters",
+        "property": "the Property line",
+        "buyer": "the Buyer line",
+        "seller": "the Seller line"
+      }
+    ]
+  }
 }
 Rules for PART 2:
 - "overall_status": "complete" if every required signature/initial is present, valid, and only normal-at-this-stage blanks remain; "issues_found" if a required signature/initial is genuinely missing OR a present signature is invalid (an S1 entity-signed-in-its-own-name or S2 assignment/nominee-language defect); "needs_review" if you could not clearly determine something and a human must check.
@@ -457,6 +479,7 @@ Rules for PART 2:
 - Per-page initials appear in "findings" ONLY as a specific named page that is genuinely missing or unreadable -- never as a page range, and never at all if the page-by-page pass found them present.
 - This audit does not produce QC findings. Do not add findings for blank data fields, form-choice issues, or other non-signature observations.
 - "action_items": a client-ready restatement of the findings for the transaction coordinator to copy and send to the OTHER side of the deal. Write ONE line per issue in plain English, phrased as a clear notice or courteous request (e.g. "Seller's signature on the SCO and RPA (Section 33D) shows the trust name only -- please have the trustee re-execute signing with capacity, e.g. 'Jane Doe, Trustee'."). NO severity tags, NO S1/S2/N codes, NO internal jargon -- it must read like a message a coordinator would send to the other agent. Combine closely related findings into a single line where that reads more naturally. Order from most to least important. If there are no findings, use an empty array. The action_items must correspond to the findings -- do not introduce issues not in "findings". NEVER use em dashes ("—") or en dashes ("–") anywhere in action_items; restructure with periods, commas, parentheses, or the word "to" instead (ordinary hyphens in compound words are fine).
+- "transcription": the literal contents of the fields you transcribed in the N2 pass, plus the RPA's page-1 identification, one entry per counter in packet order ("packet_position" 1 = top of the packet). Copy each field EXACTLY as written on the document -- the actual names, dates and address, never a judgment like "filled", "present", "matches" or "complete". Write "BLANK" for an empty field. Every counter offer in the packet gets an entry, including earlier links in the chain and counters that were countered rather than accepted. If there are no counter offers, use an empty "counters" array. Do NOT judge whether the counters agree with the RPA or with each other -- a separate check compares them from this transcription, so an accurate literal copy is the entire job here.
 - The JSON must be valid and parseable. PART 1 prose is the audit; PART 2 JSON is the machine-readable summary of it -- they must agree.`;
 }
 
@@ -653,6 +676,16 @@ exports.handler = async function (event) {
 
     // Split PART 1 prose from the PART 2 structured JSON.
     const auditPart = parseAuditResponse(raw);
+
+    // COUNTER-CHAIN CONSISTENCY, in code over the model's transcription:
+    // a counter for a different buyer, a "dated" that is not the document it
+    // counters, a countered counter missing from the packet (10724 Wilshire
+    // #803, 2026-09-30). Folds its findings into the structured audit and
+    // sets issues_found. See lib/counter-chain.js.
+    const chain = applyCounterChain(auditPart);
+    if (chain.findings.length) {
+      console.log(`[audit-background] jobId=${jobId} counter chain: ${chain.findings.length} finding(s)`);
+    }
 
     const envelope = buildEnvelope(auditPart);
 
