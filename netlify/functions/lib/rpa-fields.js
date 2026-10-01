@@ -50,6 +50,36 @@ const FIELDS = {
       sprp_date: { type: "string", description: "Seller Purchase of Replacement Property contingency date if SPRP addendum attached. Empty if not applicable." },
       cop_date: { type: "string", description: "Sale of Buyer's Property contingency date if COP addendum attached. Empty if not applicable." },
 
+      // ─── DAY COUNTS + COP/SPRP TIMING (2026-10-01) ────────────────────────
+      // The dates above are worked out from Acceptance, which is WRONG on a
+      // deal whose time periods wait for a COP/SPRP release (SPRP 2A, COP 11A).
+      // These keep the raw counts so Keeva can recompute every date from the
+      // release day instead. Counts are as FINALLY agreed: a counter offer or
+      // addendum that changes a number wins over the RPA. Digits only.
+      close_of_escrow_days: { type: "string", description: "RPA paragraph 3B as finally agreed: the NUMBER of Days after Acceptance if close of escrow is written as days (e.g. '30'). Empty string if close of escrow is written as a specific calendar date instead. Digits only." },
+      close_of_escrow_specific_date: { type: "string", description: "RPA paragraph 3B as finally agreed: ISO date (YYYY-MM-DD) ONLY if close of escrow is written as a specific calendar date (the 'on ___ (date)' option). Empty string if it is written as a number of Days after Acceptance. A specific-date close of escrow never moves with a COP/SPRP." },
+      emd_business_days: { type: "string", description: "RPA paragraph 3D(1) as finally agreed: the number of BUSINESS days after Acceptance the initial deposit is due (printed default 3 unless another number is written in its blank). Digits only. Empty if unreadable." },
+      inspection_contingency_days: { type: "string", description: "RPA paragraph 3L(3) investigation contingency as finally agreed: the number of Days after Acceptance (the printed default unless another number is written in its '(or __)' blank, or a counter offer changes it). Digits only. Empty if unreadable." },
+      loan_contingency_days: { type: "string", description: "RPA paragraph 3L(1) loan contingency as finally agreed: the number of Days after Acceptance. Digits only. Empty if 'No loan contingency' is checked or unreadable." },
+      appraisal_contingency_days: { type: "string", description: "RPA paragraph 3L(2) appraisal contingency as finally agreed: the number of Days after Acceptance. Digits only. Empty if 'No appraisal contingency' is checked or unreadable." },
+      seller_disclosures_days: { type: "string", description: "RPA paragraph 3N(1) as finally agreed: the number of Days after Acceptance the Seller must deliver disclosures. Digits only. Empty if unreadable." },
+
+      sprp_attached: { type: "string", description: "Yes/No. 'Yes' if a C.A.R. SELLER'S PURCHASE OF REPLACEMENT PROPERTY (SPRP) addendum is in the packet (it may be attached to the RPA or to a counter offer)." },
+      sprp_finding_days: { type: "string", description: "SPRP paragraph 1A 'FINDING REPLACEMENT PROPERTY': the number of Days after Acceptance the Seller has to remove the contingency (printed '17 (or __)' - return the written number if the blank is filled, else 17). Digits only. Empty if no SPRP." },
+      sprp_already_in_contract: { type: "string", description: "Yes/No. SPRP paragraph 1B: 'Yes' only if the box 'Seller has entered into a contract to acquire replacement property' is CHECKED. 'No' if unchecked. Empty if no SPRP." },
+      sprp_close_contingency: { type: "string", description: "Yes/No. SPRP paragraph 1C 'CLOSE OF REPLACEMENT PROPERTY': 'Yes' only if its box is CHECKED. Empty if no SPRP." },
+      sprp_time_periods: { type: "string", description: "SPRP paragraph 'TIME PERIODS' (2A on the 6/26 form): return exactly 'As in Agreement' if the 'remain as specified in the Agreement' box is CHECKED, or 'After removal' if it is NOT checked (the form's default: time periods begin the Day after Seller removes the Finding Replacement Property Contingency). Empty if no SPRP. Read the box itself; never infer from other paragraphs." },
+      sprp_deposit_timing: { type: "string", description: "SPRP paragraph 'BUYER'S DEPOSIT' (2B on the 6/26 form): 'As in Agreement' if the 'as specified in the Agreement' box is CHECKED, 'After removal' if NOT checked (default: 3 business Days after Seller's removal notice). Empty if no SPRP." },
+      sprp_coe_extension: { type: "string", description: "SPRP paragraph 'CLOSE OF ESCROW' (2C on the 6/26 form): if a box is checked, the extension literally, e.g. '30 additional Days' or 'until 2026-12-15'. Empty if neither box is checked or no SPRP." },
+
+      cop_attached: { type: "string", description: "Yes/No. 'Yes' if a C.A.R. CONTINGENCY FOR SALE OF BUYER'S PROPERTY (COP) addendum is in the packet." },
+      cop_type: { type: "string", description: "COP paragraph 1: return exactly 'A' (contract AND close of escrow on Buyer's Property - the default when neither B nor C is checked), 'B' if the 'Only entering into a contract' box is checked, or 'C' if the 'Only the close of escrow... already in escrow' box is checked. Empty if no COP." },
+      cop_contract_days: { type: "string", description: "COP paragraph 2A: the number of Days after Acceptance the Buyer has to enter into a contract for the sale of Buyer's Property (printed '17 (or __)'). Digits only. Empty if no COP or if paragraph 1C is checked." },
+      cop_buyer_coe_date: { type: "string", description: "COP paragraph 1C: ISO date of the Buyer's Property's contractual close of escrow, if written. Empty otherwise." },
+      cop_close_days_before: { type: "string", description: "COP paragraph 4 option (ii): if its box 'no later than __ Days prior to the scheduled close of escrow of Seller's Property' is CHECKED, the number of Days (printed '5 (or __)'). Empty if unchecked (Buyer's Property must then close by Seller's close of escrow) or no COP." },
+      cop_time_periods: { type: "string", description: "COP paragraph 11A 'CONTRACT OBLIGATIONS OTHER THAN DEPOSIT': return exactly 'As in Agreement' if its box is NOT checked (the form's default), or 'After buyer delivery' if the box 'on the Day after Buyer Delivers to Seller any of the following' IS checked. Empty if no COP. Read the box itself." },
+      cop_deposit_timing: { type: "string", description: "COP paragraph 11B 'BUYER'S DEPOSIT': 'As in Agreement' if its box is NOT checked, 'After buyer delivery' if the 'within 3 business days after Buyer Delivers' box IS checked. Empty if no COP." },
+
       // ─── PRICE & FINANCIAL ────────────────────────────────────────────────
       final_purchase_price: { type: "string", description: "Final agreed purchase price. Use the LATEST counter offer price (BCO or SCO) if any exist; otherwise use RPA paragraph 3A. Numeric only, e.g. '1315000' or '1,315,000'." },
       buyer_agent_commission_amount: { type: "string", description: "Buyer's broker compensation from RPA paragraph 3G(3). Either percentage (e.g. '2.5%') or fixed amount (e.g. '$15,000')." },

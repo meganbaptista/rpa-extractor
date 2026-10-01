@@ -625,7 +625,7 @@ exports.handler = async function(event, context) {
         },
         body: JSON.stringify({
           model: modelUsed,
-          max_tokens: 4096,
+          max_tokens: 8192, // 112 fields since 2026-10-01; billed per token used, so headroom is free,
           tools: [tool],
           tool_choice: { type: "tool", name: tool.name },
           messages: [{ role: 'user', content: msgContent }]
