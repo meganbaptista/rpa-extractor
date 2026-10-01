@@ -456,7 +456,7 @@ followed by a single JSON object (no markdown fences) with this shape:
       "date_prepared": "RPA page 1 'Date Prepared', literally as written",
       "buyer": "RPA paragraph 1A 'THIS IS AN OFFER FROM', every name including any continuation line",
       "seller": "the seller as named on the RPA (Section 33D printed name, or 33B(2) entity name)",
-      "property": "RPA paragraph 1B property address"
+      "property": "RPA paragraph 1B property address, with its city and ZIP code"
     },
     "counters": [
       {
@@ -464,12 +464,17 @@ followed by a single JSON object (no markdown fences) with this shape:
         "number": "the Counter Offer No.",
         "packet_position": 1,
         "date": "the top-right Date of THIS counter",
-        "counters": "what it counters, as checked: 'Purchase Agreement', 'Seller Counter Offer No. 1', 'Seller Multiple Counter Offer No. 1', 'Buyer Counter Offer No. 1', or 'Other: ...'",
+        "counters": "what it counters, as checked: 'Purchase Agreement', 'Seller Counter Offer No. 1', 'Seller Multiple Counter Offer No. 1', 'Buyer Counter Offer No. 1', or 'Other: ...'. Copy the number exactly; if the number is blank write it as 'No. BLANK'. If no box is checked and no number is filled in, write 'BLANK' -- do not infer which document was meant",
         "dated": "the in-sentence 'dated' date of the document it counters",
         "property": "the Property line",
         "buyer": "the Buyer line",
-        "seller": "the Seller line"
+        "seller": "the Seller line",
+        "accepted_subject_to": "the ACCEPTANCE paragraph's '(If checked) SUBJECT TO THE ATTACHED ... COUNTER OFFER No. __': if that box is checked, the form and number written, e.g. 'Seller Counter Offer No. 3'; 'BLANK' if the box is not checked",
+        "addenda": "every 'Addendum No. __' checked in the counter's ADDENDA; ATTACHMENTS paragraph, with its number, e.g. 'Addendum No. 1'; 'BLANK' if none is checked"
       }
+    ],
+    "addenda": [
+      { "form": "ADM" | "ADM-GEN", "number": "the Addendum No.", "date": "its dated date" }
     ]
   }
 }
@@ -480,7 +485,7 @@ Rules for PART 2:
 - Per-page initials appear in "findings" ONLY as a specific named page that is genuinely missing or unreadable -- never as a page range, and never at all if the page-by-page pass found them present.
 - This audit does not produce QC findings. Do not add findings for blank data fields, form-choice issues, or other non-signature observations.
 - "action_items": a client-ready restatement of the findings for the transaction coordinator to copy and send to the OTHER side of the deal. Write ONE line per issue in plain English, phrased as a clear notice or courteous request (e.g. "Seller's signature on the SCO and RPA (Section 33D) shows the trust name only -- please have the trustee re-execute signing with capacity, e.g. 'Jane Doe, Trustee'."). NO severity tags, NO S1/S2/N codes, NO internal jargon -- it must read like a message a coordinator would send to the other agent. Combine closely related findings into a single line where that reads more naturally. Order from most to least important. If there are no findings, use an empty array. The action_items must correspond to the findings -- do not introduce issues not in "findings". NEVER use em dashes ("—") or en dashes ("–") anywhere in action_items; restructure with periods, commas, parentheses, or the word "to" instead (ordinary hyphens in compound words are fine).
-- "transcription": the literal contents of the fields you transcribed in the N2 pass, plus the RPA's page-1 identification, one entry per counter in packet order ("packet_position" 1 = top of the packet). Copy each field EXACTLY as written on the document -- the actual names, dates and address, never a judgment like "filled", "present", "matches" or "complete". Write "BLANK" for an empty field. Every counter offer in the packet gets an entry, including earlier links in the chain and counters that were countered rather than accepted. If there are no counter offers, use an empty "counters" array. Do NOT judge whether the counters agree with the RPA or with each other -- a separate check compares them from this transcription, so an accurate literal copy is the entire job here.
+- "transcription": the literal contents of the fields you transcribed in the N2 pass, plus the RPA's page-1 identification, one entry per counter in packet order ("packet_position" 1 = top of the packet). Copy each field EXACTLY as written on the document -- the actual names, dates and address, never a judgment like "filled", "present", "matches" or "complete". Write "BLANK" for an empty field. Every counter offer in the packet gets an entry, including earlier links in the chain and counters that were countered rather than accepted. If there are no counter offers, use an empty "counters" array. "addenda" lists every C.A.R. Addendum (Form ADM) and Addendum - Generic (Form ADM-GEN) in the packet, one entry each with its printed number; use an empty array if there are none. Do NOT judge whether the counters agree with the RPA or with each other -- a separate check compares them from this transcription, so an accurate literal copy is the entire job here.
 - The JSON must be valid and parseable. PART 1 prose is the audit; PART 2 JSON is the machine-readable summary of it -- they must agree.`;
 }
 

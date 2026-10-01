@@ -20,8 +20,20 @@
 //   C2  a counter's "dated" is not the date of the document it counters
 //       (the RPA's Date Prepared, or the countered counter's own Date)
 //   C3  a counter counters another counter that is not in the packet
-//   C4  a counter's Property line is not the RPA's property
+//   C4  a counter's Property line is not the RPA's property (street, or ZIP)
+//   C5  two counters from the same side in a row
+//   C6  an acceptance "subject to the attached ... Counter Offer No. __" that
+//       names a counter not in the packet, or one that came BEFORE it
+//   C7  a counter attaching an "Addendum No. __" that is not in the packet
 // Any hit makes the audit "issues_found" (Megan, 2026-09-30).
+//
+// 3637 Loadstone (2026-10-01) is why C2 no longer gives up on a header it
+// cannot read. SCO #2 checked neither box and gave "dated 09/04/2026"; the
+// faithful transcription of an unchecked line is "BLANK", which counterRef
+// read as "OTHER" and C2 skipped, so the more honestly the model copied the
+// form, the more surely the check stayed silent. And BCO #3's blank "Seller
+// Counter Offer No. ___" was compared against whichever SCO came first, which
+// raised a false date mismatch against SCO #3.
 //
 // Tolerant where a real chain varies: word order, middle initials, commas,
 // "Trust"/"Trustee"/"Living", "and/or assignee", "St"/"Street". A field the
@@ -130,7 +142,11 @@ function propertyKey(value) {
 /** "SMCO", "Seller Multiple Counter Offer No. 1" -> { form: 'SMCO', number: '1' }. */
 function counterRef(text) {
   const s = String(text || '').toLowerCase();
-  if (!s.trim() || /purchase agreement|\brpa\b|original offer|the offer/.test(s)) return { form: 'RPA' };
+  // Nothing checked and nothing named: the header does not say. What that
+  // MEANS depends on the form (see formDefault), so it is not decided here.
+  if (isBlank(s) || /^\s*(none|neither|nothing|not|un)[\s-]*(box(es)?\s*)?(checked|marked|selected)?\s*$/.test(s)
+      || /^(neither|no) box(es)? (is |are )?(checked|marked)/.test(s.trim())) return { form: 'UNSTATED' };
+  if (/purchase agreement|\brpa\b|original offer|the offer/.test(s)) return { form: 'RPA' };
   const form = /multiple|smco/.test(s) ? 'SMCO' : /seller|sco/.test(s) ? 'SCO' : /buyer|bco/.test(s) ? 'BCO' : null;
   const number = (/(?:no\.?|#|number)\s*(\d+)/.exec(s) || /\b(\d+)\b/.exec(s) || [])[1] || null;
   return form ? { form, number } : { form: 'OTHER', text };
@@ -145,6 +161,51 @@ function formOf(counter) {
 }
 
 const label = (c) => `${formOf(c)} #${c.number || '?'}`;
+
+/** Which side wrote it. An SMCO is the seller's, like an SCO. */
+const sideOf = (form) => (form === 'BCO' ? 'buyer' : (form === 'SCO' || form === 'SMCO' ? 'seller' : null));
+
+/**
+ * WHAT AN UNCHECKED HEADER COUNTERS, by the form's own wording. An SCO or
+ * SMCO reads "This is a counter offer to the Purchase Agreement, OR [ ] Buyer
+ * Counter Offer No. __": with no box checked it counters the Purchase
+ * Agreement, which is correct on SCO #1 and wrong on any later one. A BCO
+ * reads "...to the Seller Counter Offer No. __, OR [ ] Seller Multiple Counter
+ * Offer No. __", so unchecked means an SCO whose number was left blank.
+ */
+function formDefault(counter) {
+  return formOf(counter) === 'BCO' ? { form: 'SCO', number: null } : { form: 'RPA' };
+}
+
+/** "Sherman Oaks, CA 91403" -> "91403"; the last ZIP on the line. */
+function zipOf(value) {
+  const all = String(value || '').match(/\b\d{5}(?:-\d{4})?\b/g);
+  return all ? all[all.length - 1].slice(0, 5) : null;
+}
+
+/** Every "Addendum No. N" a field names: "Addendum No. 1", "ADM 1, 2". */
+function addendumNumbers(value) {
+  if (isBlank(value)) return [];
+  const s = String(value);
+  const out = new Set();
+  for (const m of s.matchAll(/(?:no\.?|#|number)\s*(\d+)/gi)) out.add(m[1]);
+  if (!out.size) for (const m of s.matchAll(/\b(\d+)\b/g)) out.add(m[1]);
+  return [...out];
+}
+
+/**
+ * The chain in the order it happened: by each counter's own Date, and on the
+ * same day by packet position (packets are stacked newest on top, so the
+ * LOWER document came first). A counter with no readable Date is left out of
+ * the ordering rather than guessed into it.
+ */
+function chronological(counters) {
+  return counters
+    .map((c) => ({ c, d: isoDate(c.date), pos: Number(c.packet_position) || 0 }))
+    .filter((x) => x.d)
+    .sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : b.pos - a.pos))
+    .map((x) => x.c);
+}
 
 // ---------------------------------------------------------------- check ----
 
@@ -193,44 +254,166 @@ function checkCounterChain(transcription) {
           `${label(c)} is for "${c.property}", but the RPA is for "${rpa.property}".`,
           `${label(c)} is written for a different property ("${c.property}"). Please confirm and send the correct counter offer.`,
         );
-      }
-    }
-
-    // C2 / C3 - what it counters, and when that was dated.
-    const ref = counterRef(c.counters);
-    const dated = isoDate(c.dated);
-    if (ref.form === 'RPA') {
-      const prepared = isoDate(rpa.date_prepared);
-      if (dated && prepared && dated !== prepared) {
-        add(
-          where,
-          "\"Dated\" does not match the RPA's Date Prepared",
-          `${label(c)} counters a purchase agreement dated ${printed(dated)}, but this RPA was prepared ${printed(prepared)}.`,
-          `${label(c)} refers to a purchase agreement dated ${printed(dated)}, but the purchase agreement in this transaction is dated ${printed(prepared)}. Please confirm the counter offer is for this offer.`,
-        );
-      }
-    } else if (ref.form === 'SCO' || ref.form === 'SMCO' || ref.form === 'BCO') {
-      const target = counters.find((o) => o !== c && formOf(o) === ref.form && (!ref.number || String(o.number) === String(ref.number)));
-      const name = `${ref.form} #${ref.number || '?'}`;
-      if (!target) {
-        add(
-          where,
-          `Counters ${name}, which is not in the packet`,
-          `${label(c)} is a counter to ${name}${dated ? ` dated ${printed(dated)}` : ''}, but no ${name} is in this packet.`,
-          `${label(c)} responds to ${name}${dated ? ` dated ${printed(dated)}` : ''}, which we have not received. Please send a copy of ${name}.`,
-        );
       } else {
-        const targetDate = isoDate(target.date);
-        if (dated && targetDate && dated !== targetDate) {
+        // Same street, different ZIP: SCO #1 and #2 on 3637 Loadstone gave
+        // 91360 (Thousand Oaks) for a Sherman Oaks 91403 property.
+        const za = zipOf(rpa.property);
+        const zb = zipOf(c.property);
+        if (za && zb && za !== zb) {
           add(
             where,
-            `"Dated" does not match ${name}'s date`,
-            `${label(c)} counters ${name} dated ${printed(dated)}, but the ${name} in this packet is dated ${printed(targetDate)}. The ${name} in the packet may be the wrong one, and the correct one may be missing.`,
-            `${label(c)} responds to ${name} dated ${printed(dated)}, but the ${name} we received is dated ${printed(targetDate)}. Please send the ${name} dated ${printed(dated)}.`,
+            "ZIP code on the counter is not the RPA's",
+            `${label(c)} gives the property's ZIP as ${zb}, but the RPA's is ${za}.`,
+            `${label(c)} shows the property's ZIP code as ${zb}; the purchase agreement has ${za}. Please correct the ZIP code on ${label(c)}.`,
           );
         }
       }
     }
+
+    // C2 / C3 - what it counters, and when that was dated.
+    let ref = counterRef(c.counters);
+    const unchecked = ref.form === 'UNSTATED';
+    if (unchecked) ref = formDefault(c);
+    const dated = isoDate(c.dated);
+    const ownDate = isoDate(c.date);
+    // The latest counter of a form dated on or before this one: the closest
+    // thing it could have meant, offered when the date matches nothing.
+    const closestEarlier = (form) => counters
+      .filter((o) => o !== c && formOf(o) === form && isoDate(o.date) && (!ownDate || isoDate(o.date) <= ownDate))
+      .sort((a, b) => (isoDate(a.date) < isoDate(b.date) ? 1 : -1))[0];
+
+    if (ref.form === 'RPA') {
+      const prepared = isoDate(rpa.date_prepared);
+      if (dated && prepared && dated !== prepared) {
+        // An unchecked SCO is a counter to the RPA on its face; when its date
+        // is a buyer counter's, the box was what got missed.
+        const meant = unchecked ? counters.find((o) => o !== c && formOf(o) === 'BCO' && isoDate(o.date) === dated) : null;
+        const near = unchecked ? closestEarlier('BCO') : null;
+        if (meant) {
+          add(
+            where,
+            'Neither box is checked, so it reads as a counter to the purchase agreement',
+            `${label(c)} checks neither "Buyer Counter Offer" nor "Other", so on its face it counters the purchase agreement (prepared ${printed(prepared)}), but its "dated" ${printed(dated)} is ${label(meant)}'s date.`,
+            `${label(c)} does not have the "Buyer Counter Offer" box checked, so it reads as a counter to the purchase agreement. It appears to respond to ${label(meant)}; please check the box and fill in No. ${meant.number || '__'}.`,
+          );
+        } else if (near) {
+          add(
+            where,
+            `"Dated" matches no document in the packet`,
+            `${label(c)} checks neither "Buyer Counter Offer" nor "Other", and its "dated" ${printed(dated)} is neither the purchase agreement's date (${printed(prepared)}) nor any buyer counter offer's. It most likely responds to ${label(near)}, dated ${printed(isoDate(near.date))}.`,
+            `${label(c)} does not say which offer it counters (no box checked), and the date it refers to (${printed(dated)}) does not match any offer in this transaction. If it responds to ${label(near)}, please check the "Buyer Counter Offer" box, fill in No. ${near.number || '__'} and correct the date to ${printed(isoDate(near.date))}.`,
+          );
+        } else {
+          add(
+            where,
+            "\"Dated\" does not match the RPA's Date Prepared",
+            `${label(c)} counters a purchase agreement dated ${printed(dated)}, but this RPA was prepared ${printed(prepared)}.`,
+            `${label(c)} refers to a purchase agreement dated ${printed(dated)}, but the purchase agreement in this transaction is dated ${printed(prepared)}. Please confirm the counter offer is for this offer.`,
+          );
+        }
+      }
+    } else if (ref.form === 'SCO' || ref.form === 'SMCO' || ref.form === 'BCO') {
+      const sameForm = counters.filter((o) => o !== c && formOf(o) === ref.form);
+      if (ref.number) {
+        const target = sameForm.find((o) => String(o.number) === String(ref.number));
+        const name = `${ref.form} #${ref.number}`;
+        if (!target) {
+          add(
+            where,
+            `Counters ${name}, which is not in the packet`,
+            `${label(c)} is a counter to ${name}${dated ? ` dated ${printed(dated)}` : ''}, but no ${name} is in this packet.`,
+            `${label(c)} responds to ${name}${dated ? ` dated ${printed(dated)}` : ''}, which we have not received. Please send a copy of ${name}.`,
+          );
+        } else {
+          const targetDate = isoDate(target.date);
+          if (dated && targetDate && dated !== targetDate) {
+            add(
+              where,
+              `"Dated" does not match ${name}'s date`,
+              `${label(c)} counters ${name} dated ${printed(dated)}, but the ${name} in this packet is dated ${printed(targetDate)}. The ${name} in the packet may be the wrong one, and the correct one may be missing.`,
+              `${label(c)} responds to ${name} dated ${printed(dated)}, but the ${name} we received is dated ${printed(targetDate)}. Please send the ${name} dated ${printed(dated)}.`,
+            );
+          }
+        }
+      } else if (dated) {
+        // NO NUMBER: judge it by the date, never by whichever counter of that
+        // form happens to come first. A blank number with a matching date is
+        // only a blank (N2's finding); a date matching nothing is this one.
+        if (!sameForm.length) {
+          add(
+            where,
+            `Counters a ${ref.form} that is not in the packet`,
+            `${label(c)} is a counter to a ${ref.form} dated ${printed(dated)}, but there is no ${ref.form} in this packet.`,
+            `${label(c)} responds to a ${ref.form} dated ${printed(dated)}, which we have not received. Please send a copy.`,
+          );
+        } else if (!sameForm.some((o) => isoDate(o.date) === dated)) {
+          const near = closestEarlier(ref.form);
+          add(
+            where,
+            `"Dated" matches no ${ref.form} in the packet`,
+            `${label(c)} leaves the ${ref.form} number blank and refers to one dated ${printed(dated)}; no ${ref.form} in this packet has that date${near ? ` (the closest earlier is ${label(near)}, dated ${printed(isoDate(near.date))})` : ''}.`,
+            `${label(c)} does not say which ${ref.form} it counters, and the date it refers to (${printed(dated)}) does not match any ${ref.form} we have. Please fill in the ${ref.form} number and confirm the date.`,
+          );
+        }
+      }
+    }
+
+    // C6 - "I/WE accept ... SUBJECT TO THE ATTACHED ... COUNTER OFFER No. __".
+    // The reply has to come AFTER this counter and from the other side.
+    const reply = counterRef(c.accepted_subject_to);
+    if ((reply.form === 'SCO' || reply.form === 'SMCO' || reply.form === 'BCO') && reply.number) {
+      const name = `${reply.form} #${reply.number}`;
+      const target = counters.find((o) => o !== c && formOf(o) === reply.form && String(o.number) === String(reply.number));
+      const targetDate = target && isoDate(target.date);
+      if (!target) {
+        add(
+          where,
+          `Accepted subject to ${name}, which is not in the packet`,
+          `${label(c)}'s acceptance is "subject to the attached" ${name}, but no ${name} is in this packet.`,
+          `${label(c)} was accepted subject to ${name}, which we have not received. Please send a copy of ${name}.`,
+        );
+      } else if (sideOf(reply.form) === sideOf(formOf(c)) || (targetDate && ownDate && targetDate < ownDate)) {
+        const earlier = targetDate && ownDate && targetDate < ownDate;
+        add(
+          where,
+          `Accepted subject to ${name}, which ${earlier ? 'came before it' : 'is from the same side'}`,
+          `${label(c)}'s acceptance is "subject to the attached" ${name}, but ${name}${earlier ? ` is dated ${printed(targetDate)}, before ${label(c)} (${printed(ownDate)}), so it cannot be the reply to it` : ' was written by the same side'}. The number is probably wrong, or ${label(c)} should not have been signed.`,
+          `The acceptance on ${label(c)} refers to the attached ${name}, which ${earlier ? 'was written before it' : 'is not a reply from the other side'}. Please confirm which counter offer the signature on ${label(c)} was meant for.`,
+        );
+      }
+    }
+
+    // C7 - an addendum the counter attaches.
+    if (Array.isArray(transcription && transcription.addenda)) {
+      const have = new Set(transcription.addenda.map((a) => String((a && a.number) || '').trim()).filter(Boolean));
+      for (const n of addendumNumbers(c.addenda)) {
+        if (have.has(n)) continue;
+        const listed = transcription.addenda.map((a) => `${a.form || 'Addendum'} No. ${a.number || '?'}`).join(', ');
+        add(
+          where,
+          `Attaches Addendum No. ${n}, which is not in the packet`,
+          `${label(c)} checks "Addendum No. ${n}" as part of the counter, but the packet has ${listed || 'no addendum'}.`,
+          `${label(c)} lists Addendum No. ${n} as attached, but we have not received an Addendum No. ${n}${listed ? ` (we have ${listed})` : ''}. Please send it, or correct the addendum number.`,
+        );
+      }
+    }
+  }
+
+  // C5 - the same side twice in a row. Legitimate when a later counter revives
+  // an expired one (Loadstone's BCO #3 does, in its own terms), which this
+  // check cannot read, so it asks rather than asserts.
+  const order = chronological(counters);
+  for (let i = 1; i < order.length; i++) {
+    const prev = order[i - 1];
+    const cur = order[i];
+    const side = sideOf(formOf(cur));
+    if (!side || side !== sideOf(formOf(prev))) continue;
+    add(
+      `${label(cur)} header`,
+      `Two ${side} counters in a row`,
+      `${label(prev)} (${printed(isoDate(prev.date))}) and ${label(cur)} (${printed(isoDate(cur.date))}) are consecutive ${side} counter offers with no ${side === 'buyer' ? 'seller' : 'buyer'} counter between them.`,
+      `${label(prev)} and ${label(cur)} are both ${side} counter offers with nothing from the other side in between. Please confirm ${label(prev)} expired or was withdrawn, and that ${label(cur)} is the one that governs.`,
+    );
   }
   return { findings, actions };
 }
@@ -264,4 +447,4 @@ function applyCounterChain(auditPart) {
   return result;
 }
 
-module.exports = { checkCounterChain, applyCounterChain, _internal: { isoDate, sameParty, nameTokens, propertyKey, counterRef } };
+module.exports = { checkCounterChain, applyCounterChain, _internal: { isoDate, sameParty, nameTokens, propertyKey, counterRef, zipOf, addendumNumbers, chronological } };

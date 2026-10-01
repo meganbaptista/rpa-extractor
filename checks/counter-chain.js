@@ -97,6 +97,57 @@ ok('blank fields: left to N2', blanks.findings, []);
 const wrongProperty = checkCounterChain({ rpa, counters: [{ form: 'SCO', number: '1', date: '9/20/2026', counters: 'Purchase Agreement', dated: '9/19/2026', property: '200 Other Avenue', buyer: 'Alex Rivera', seller: 'Sam Seller' }] });
 ok('wrong property: flagged', issues(wrongProperty), ["SCO #1 header: Property on the counter is not the RPA's property"]);
 
+// ---- the Loadstone shape (3637 Loadstone Dr, 2026-10-01), placeholder names --
+// RPA 09/01 -> SCO #1 -> BCO #1 (09/03) -> SCO #2 (09/07, NO box checked,
+// "dated 09/04") -> BCO #2 (09/08, expired) -> BCO #3 (09/29, revives; SCO
+// number blank; "Addendum No. 1" checked) -> SCO #3 (09/30). The sellers also
+// signed BCO #2 on 09/30 "subject to the attached SCO No. 2". The packet holds
+// one addendum, Addendum - Generic No. 2. SCO #1 and #2 give ZIP 91360 for a
+// 91403 property.
+{
+  const lrpa = { date_prepared: 'September 1, 2026', buyer: 'Alex Rivera, Jordan Rivera', seller: 'Sam Seller, Pat Seller', property: '200 Example Dr, Sherman Oaks, CA 91403' };
+  const P = { buyer: 'Alex Rivera, Jordan Rivera', seller: 'Sam Seller, Pat Seller' };
+  const good = '200 Example Dr, Sherman Oaks, CA 91403';
+  const counters = [
+    { form: 'SCO', number: '3', packet_position: 1, date: '09/30/2026', counters: 'Buyer Counter Offer No. 3', dated: '9/29/2026', property: good, ...P, accepted_subject_to: 'BLANK', addenda: 'BLANK' },
+    { form: 'BCO', number: '3', packet_position: 2, date: 'September 29, 2026', counters: 'Seller Counter Offer No. BLANK', dated: 'September 7, 2026', property: good, ...P, accepted_subject_to: 'Seller Counter Offer No. 3', addenda: 'Addendum No. 1' },
+    { form: 'BCO', number: '2', packet_position: 3, date: 'September 8, 2026', counters: 'Seller Counter Offer No. 2', dated: 'September 7, 2026', property: good, ...P, accepted_subject_to: 'Seller Counter Offer No. 2', addenda: 'BLANK' },
+    { form: 'SCO', number: '2', packet_position: 4, date: '09/07/2026', counters: 'BLANK', dated: '09/04/2026', property: '200 Example Dr, Sherman Oaks , CA 91360', ...P, accepted_subject_to: 'BLANK', addenda: 'BLANK' },
+    { form: 'BCO', number: '1', packet_position: 5, date: 'September 3, 2026', counters: 'Seller Counter Offer No. 1', dated: 'September 3, 2026', property: good, ...P, accepted_subject_to: 'BLANK', addenda: 'BLANK' },
+    { form: 'SCO', number: '1', packet_position: 6, date: '09/03/2026', counters: 'BLANK', dated: '09/01/2026', property: '200 Example Dr, Sherman Oaks , CA 91360', ...P, accepted_subject_to: 'BLANK', addenda: 'BLANK' },
+  ];
+  const r = checkCounterChain({ rpa: lrpa, counters, addenda: [{ form: 'ADM-GEN', number: '2', date: '09/29/2026' }] });
+  const got = issues(r).sort();
+  ok('loadstone: every finding, and nothing else', got, [
+    'BCO #2 header: Accepted subject to SCO #2, which came before it',
+    'BCO #3 header: Attaches Addendum No. 1, which is not in the packet',
+    'BCO #3 header: Two buyer counters in a row',
+    'SCO #1 header: ZIP code on the counter is not the RPA\'s',
+    'SCO #2 header: "Dated" matches no document in the packet',
+    'SCO #2 header: ZIP code on the counter is not the RPA\'s',
+  ].sort());
+  ok('loadstone: SCO #2 points at BCO #1 and its real date',
+    /BCO #1, dated 09\/03\/2026/.test(r.findings.find((f) => /SCO #2/.test(f.location) && /Dated/.test(f.issue)).detail), true);
+  // The two quiet ones, said out loud: SCO #1 unchecked is a counter to the
+  // RPA by the form's own wording, and its 09/01 is the RPA's date; BCO #3's
+  // blank SCO number is N2's blank, because September 7 IS SCO #2's date.
+  ok('loadstone: SCO #1 unchecked and dated the RPA is fine', got.some((g) => /^SCO #1 header: .*(Dated|box)/.test(g)), false);
+  ok('loadstone: BCO #3 blank number is not compared to SCO #3', got.some((g) => /^BCO #3 header: .*Dated/.test(g)), false);
+
+  // SCO #2 with the box unchecked but the date right (BCO #1's): the box.
+  const boxOnly = counters.map((c) => (c.form === 'SCO' && c.number === '2' ? { ...c, dated: '09/03/2026' } : c));
+  ok('loadstone: right date, box unchecked -> says check the box',
+    issues(checkCounterChain({ rpa: lrpa, counters: boxOnly })).filter((g) => g.startsWith('SCO #2 header: N')),
+    ['SCO #2 header: Neither box is checked, so it reads as a counter to the purchase agreement']);
+  // However the model words "nothing checked", it is the same reading.
+  for (const v of ['BLANK', 'None checked', 'Neither box checked', '']) {
+    ok(`ref: "${v}" is unstated`, counterRef(v).form, 'UNSTATED');
+  }
+  // No addenda transcribed at all (an older audit) -> C7 stays silent.
+  ok('loadstone: no addenda list, no addendum finding',
+    issues(checkCounterChain({ rpa: lrpa, counters })).some((g) => /Addendum/.test(g)), false);
+}
+
 // ---- folded into the audit ---------------------------------------------
 const part = {
   prose: 'The packet is signature-complete.',
