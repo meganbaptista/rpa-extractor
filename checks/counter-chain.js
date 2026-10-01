@@ -110,8 +110,8 @@ ok('wrong property: flagged', issues(wrongProperty), ["SCO #1 header: Property o
   const good = '200 Example Dr, Sherman Oaks, CA 91403';
   const counters = [
     { form: 'SCO', number: '3', packet_position: 1, date: '09/30/2026', counters: 'Buyer Counter Offer No. 3', dated: '9/29/2026', property: good, ...P, accepted_subject_to: 'BLANK', addenda: 'BLANK' },
-    { form: 'BCO', number: '3', packet_position: 2, date: 'September 29, 2026', counters: 'Seller Counter Offer No. BLANK', dated: 'September 7, 2026', property: good, ...P, accepted_subject_to: 'Seller Counter Offer No. 3', addenda: 'Addendum No. 1' },
-    { form: 'BCO', number: '2', packet_position: 3, date: 'September 8, 2026', counters: 'Seller Counter Offer No. 2', dated: 'September 7, 2026', property: good, ...P, accepted_subject_to: 'Seller Counter Offer No. 2', addenda: 'BLANK' },
+    { form: 'BCO', number: '3', packet_position: 2, date: 'September 29, 2026', counters: 'Seller Counter Offer No. BLANK', dated: 'September 7, 2026', property: good, ...P, accepted_subject_to: { checked: true, form: 'Seller Counter Offer', number: '3' }, addenda: 'Addendum No. 1' },
+    { form: 'BCO', number: '2', packet_position: 3, date: 'September 8, 2026', counters: 'Seller Counter Offer No. 2', dated: 'September 7, 2026', property: good, ...P, accepted_subject_to: { checked: true, form: 'Seller Counter Offer', number: '2' }, addenda: 'BLANK' },
     { form: 'SCO', number: '2', packet_position: 4, date: '09/07/2026', counters: 'BLANK', dated: '09/04/2026', property: '200 Example Dr, Sherman Oaks , CA 91360', ...P, accepted_subject_to: 'BLANK', addenda: 'BLANK' },
     { form: 'BCO', number: '1', packet_position: 5, date: 'September 3, 2026', counters: 'Seller Counter Offer No. 1', dated: 'September 3, 2026', property: good, ...P, accepted_subject_to: 'BLANK', addenda: 'BLANK' },
     { form: 'SCO', number: '1', packet_position: 6, date: '09/03/2026', counters: 'BLANK', dated: '09/01/2026', property: '200 Example Dr, Sherman Oaks , CA 91360', ...P, accepted_subject_to: 'BLANK', addenda: 'BLANK' },
@@ -139,6 +139,30 @@ ok('wrong property: flagged', issues(wrongProperty), ["SCO #1 header: Property o
   ok('loadstone: right date, box unchecked -> says check the box',
     issues(checkCounterChain({ rpa: lrpa, counters: boxOnly })).filter((g) => g.startsWith('SCO #2 header: N')),
     ['SCO #2 header: Neither box is checked, so it reads as a counter to the purchase agreement']);
+
+  // THE FIRST LIVE RUN (v3), as the model actually transcribed it: SCO #3's
+  // own header copied into its empty acceptance box, BCO #3's blank SCO
+  // number filled in as 3, and SCO #2 given the form's printed default.
+  {
+    const live = counters.map((c) => {
+      if (c.form === 'SCO' && c.number === '3') return { ...c, accepted_subject_to: 'Buyer Counter Offer No. 3' };
+      if (c.form === 'BCO' && c.number === '3') return { ...c, counters: 'Seller Counter Offer No. 3' };
+      if (c.form === 'SCO' && c.number === '2') return { ...c, counters: 'Purchase Agreement' };
+      return c;
+    });
+    const lr = checkCounterChain({ rpa: lrpa, counters: live, addenda: [{ form: 'ADM-GEN', number: '2' }] });
+    const lg = issues(lr);
+    ok('live: an unchecked acceptance (old string shape) is not judged', lg.some((g) => /^SCO #3 header: Accepted/.test(g)), false);
+    ok('live: also when the box is said to be empty',
+      issues(checkCounterChain({ rpa: lrpa, counters: live.map((c) => (c.form === 'SCO' && c.number === '3' ? { ...c, accepted_subject_to: { checked: false, form: 'Buyer Counter Offer', number: '3' } } : c)) })).some((g) => /^SCO #3 header: Accepted/.test(g)), false);
+    ok('live: BCO #3 filled-in number -> points to SCO #2 by its date',
+      lg.filter((g) => g.startsWith('BCO #3 header: Counter number')), ['BCO #3 header: Counter number does not fit: its date is SCO #2\'s']);
+    ok('live: and the action says No. 2',
+      /to No\. 2\./.test(lr.actions[lr.findings.findIndex((f) => /Counter number/.test(f.issue))]), true);
+    ok('live: SCO #2 read as "Purchase Agreement" still names BCO #1',
+      lr.findings.filter((f) => /^SCO #2/.test(f.location) && /Dated/.test(f.issue)).map((f) => /BCO #1, dated 09\/03\/2026/.test(f.detail)), [true]);
+    ok('live: BCO #2 real acceptance still caught', lg.includes('BCO #2 header: Accepted subject to SCO #2, which came before it'), true);
+  }
   // However the model words "nothing checked", it is the same reading.
   for (const v of ['BLANK', 'None checked', 'Neither box checked', '']) {
     ok(`ref: "${v}" is unstated`, counterRef(v).form, 'UNSTATED');

@@ -464,12 +464,12 @@ followed by a single JSON object (no markdown fences) with this shape:
         "number": "the Counter Offer No.",
         "packet_position": 1,
         "date": "the top-right Date of THIS counter",
-        "counters": "what it counters, as checked: 'Purchase Agreement', 'Seller Counter Offer No. 1', 'Seller Multiple Counter Offer No. 1', 'Buyer Counter Offer No. 1', or 'Other: ...'. Copy the number exactly; if the number is blank write it as 'No. BLANK'. If no box is checked and no number is filled in, write 'BLANK' -- do not infer which document was meant",
+        "counters": "what it counters, as checked: 'Purchase Agreement', 'Seller Counter Offer No. 1', 'Seller Multiple Counter Offer No. 1', 'Buyer Counter Offer No. 1', or 'Other: ...'. Copy the number exactly; if the number is blank write it as 'No. BLANK' -- never fill in the number you think was meant, even when the date makes it obvious (a separate check works that out from the date). If no box is checked and no number is filled in, write 'BLANK' -- do not infer which document was meant",
         "dated": "the in-sentence 'dated' date of the document it counters",
         "property": "the Property line",
         "buyer": "the Buyer line",
         "seller": "the Seller line",
-        "accepted_subject_to": "the ACCEPTANCE paragraph's '(If checked) SUBJECT TO THE ATTACHED ... COUNTER OFFER No. __': if that box is checked, the form and number written, e.g. 'Seller Counter Offer No. 3'; 'BLANK' if the box is not checked",
+        "accepted_subject_to": { "checked": "true ONLY if the ACCEPTANCE paragraph's '(If checked) SUBJECT TO THE ATTACHED ... COUNTER OFFER No. __' box is visibly marked; false if it is empty. This box is in the acceptance/signature paragraph near the bottom of the counter, NOT the header -- never copy the header's 'counter offer to ...' number here. It is usually empty", "form": "the form named beside that box, e.g. 'Seller Counter Offer'", "number": "the number written in its blank, or 'BLANK'" },
         "addenda": "every 'Addendum No. __' checked in the counter's ADDENDA; ATTACHMENTS paragraph, with its number, e.g. 'Addendum No. 1'; 'BLANK' if none is checked"
       }
     ],

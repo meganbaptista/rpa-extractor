@@ -18,7 +18,8 @@
 //   AUDIT_VERSION  bump it whenever the audit's prompt or its checks change,
 //                  so a better audit is never hidden behind an old cached one
 //                  (the counter-chain check of 2026-09-30 is v2; the
-//                  Loadstone chain checks of 2026-10-01 are v3).
+//                  Loadstone chain checks of 2026-10-01 are v3; their
+//                  live-run fixes the same day are v4).
 //   tenant         a firm's audit is served only to that firm (V2-ready;
 //                  "default" until Keeva has tenants).
 //   sha256         of the PDF's base64, which is the bytes.
@@ -29,7 +30,7 @@
 
 const crypto = require('crypto');
 
-const AUDIT_VERSION = 'v3';
+const AUDIT_VERSION = 'v4';
 const STORE_NAME = 'audit-cache';
 
 function auditCacheKey(pdfBase64, tenant) {

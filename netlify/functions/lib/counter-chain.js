@@ -287,20 +287,25 @@ function checkCounterChain(transcription) {
       if (dated && prepared && dated !== prepared) {
         // An unchecked SCO is a counter to the RPA on its face; when its date
         // is a buyer counter's, the box was what got missed.
-        const meant = unchecked ? counters.find((o) => o !== c && formOf(o) === 'BCO' && isoDate(o.date) === dated) : null;
-        const near = unchecked ? closestEarlier('BCO') : null;
+        // Whether the model wrote "BLANK" or the form's printed default
+        // ("Purchase Agreement" - what it wrote on the live Loadstone run),
+        // a seller counter that comes after a buyer counter and gives a date
+        // that is not the RPA's has almost certainly lost its box.
+        const isSellerCounter = sideOf(formOf(c)) === 'seller';
+        const meant = isSellerCounter ? counters.find((o) => o !== c && formOf(o) === 'BCO' && isoDate(o.date) === dated) : null;
+        const near = isSellerCounter ? closestEarlier('BCO') : null;
         if (meant) {
           add(
             where,
             'Neither box is checked, so it reads as a counter to the purchase agreement',
-            `${label(c)} checks neither "Buyer Counter Offer" nor "Other", so on its face it counters the purchase agreement (prepared ${printed(prepared)}), but its "dated" ${printed(dated)} is ${label(meant)}'s date.`,
+            `${label(c)} does not have the "Buyer Counter Offer" box checked, so on its face it counters the purchase agreement (prepared ${printed(prepared)}), but its "dated" ${printed(dated)} is ${label(meant)}'s date.`,
             `${label(c)} does not have the "Buyer Counter Offer" box checked, so it reads as a counter to the purchase agreement. It appears to respond to ${label(meant)}; please check the box and fill in No. ${meant.number || '__'}.`,
           );
         } else if (near) {
           add(
             where,
             `"Dated" matches no document in the packet`,
-            `${label(c)} checks neither "Buyer Counter Offer" nor "Other", and its "dated" ${printed(dated)} is neither the purchase agreement's date (${printed(prepared)}) nor any buyer counter offer's. It most likely responds to ${label(near)}, dated ${printed(isoDate(near.date))}.`,
+            `${label(c)} does not have the "Buyer Counter Offer" box checked, and its "dated" ${printed(dated)} is neither the purchase agreement's date (${printed(prepared)}) nor any buyer counter offer's. It most likely responds to ${label(near)}, dated ${printed(isoDate(near.date))}.`,
             `${label(c)} does not say which offer it counters (no box checked), and the date it refers to (${printed(dated)}) does not match any offer in this transaction. If it responds to ${label(near)}, please check the "Buyer Counter Offer" box, fill in No. ${near.number || '__'} and correct the date to ${printed(isoDate(near.date))}.`,
           );
         } else {
@@ -326,7 +331,20 @@ function checkCounterChain(transcription) {
           );
         } else {
           const targetDate = isoDate(target.date);
-          if (dated && targetDate && dated !== targetDate) {
+          // The number points at a counter written AFTER this one, and another
+          // of that form carries the date it gives: the number is wrong (or
+          // was blank and got filled in), so say which one it means. Loadstone
+          // BCO #3: blank SCO number, "dated September 7" = SCO #2, and SCO #3
+          // is dated 09/30, the day after BCO #3.
+          const byDate = sameForm.find((o) => o !== target && isoDate(o.date) === dated);
+          if (dated && targetDate && dated !== targetDate && byDate && ownDate && targetDate > ownDate) {
+            add(
+              where,
+              `Counter number does not fit: its date is ${label(byDate)}'s`,
+              `${label(c)}'s header points to ${name}, but ${name} is dated ${printed(targetDate)}, after ${label(c)} (${printed(ownDate)}); its "dated" ${printed(dated)} is ${label(byDate)}'s date.`,
+              `${label(c)} appears to respond to ${label(byDate)} (dated ${printed(dated)}). Please fill in or correct the ${ref.form} number on ${label(c)} to No. ${byDate.number || '__'}.`,
+            );
+          } else if (dated && targetDate && dated !== targetDate) {
             add(
               where,
               `"Dated" does not match ${name}'s date`,
@@ -360,7 +378,17 @@ function checkCounterChain(transcription) {
 
     // C6 - "I/WE accept ... SUBJECT TO THE ATTACHED ... COUNTER OFFER No. __".
     // The reply has to come AFTER this counter and from the other side.
-    const reply = counterRef(c.accepted_subject_to);
+    //
+    // ONLY A BOX THE MODEL SAYS IS CHECKED. On the first live Loadstone run
+    // the model copied SCO #3's own header ("Buyer Counter Offer No. 3") into
+    // its acceptance, whose box is empty, and the check accused a clean
+    // signature. The transcription now carries `checked`; the old plain-string
+    // shape is still read, but a string alone is no longer enough.
+    const acc = c.accepted_subject_to;
+    const accChecked = acc && typeof acc === 'object' ? acc.checked === true : false;
+    const reply = accChecked
+      ? counterRef(`${acc.form || ''} No. ${acc.number || ''}`)
+      : { form: 'UNSTATED' };
     if ((reply.form === 'SCO' || reply.form === 'SMCO' || reply.form === 'BCO') && reply.number) {
       const name = `${reply.form} #${reply.number}`;
       const target = counters.find((o) => o !== c && formOf(o) === reply.form && String(o.number) === String(reply.number));
