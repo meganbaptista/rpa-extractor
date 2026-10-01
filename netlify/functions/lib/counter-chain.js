@@ -385,7 +385,14 @@ function checkCounterChain(transcription) {
     // signature. The transcription now carries `checked`; the old plain-string
     // shape is still read, but a string alone is no longer enough.
     const acc = c.accepted_subject_to;
-    const accChecked = acc && typeof acc === 'object' ? acc.checked === true : false;
+    // The literal box ("[X]") is asked for alongside the boolean because a
+    // bare true/false drifted: telling the model the box was "usually empty"
+    // made it read BCO #2's marked box as empty and drop a real finding.
+    // Either one marked is enough; a "[ ]" overrules a stray true.
+    const accBox = acc && typeof acc === 'object' ? String(acc.box || '') : '';
+    const accChecked = acc && typeof acc === 'object'
+      ? (/\[\s*\]/.test(accBox) ? false : (/\[\s*[^\s\]]+\s*\]/.test(accBox) || acc.checked === true || acc.checked === 'true'))
+      : false;
     const reply = accChecked
       ? counterRef(`${acc.form || ''} No. ${acc.number || ''}`)
       : { form: 'UNSTATED' };

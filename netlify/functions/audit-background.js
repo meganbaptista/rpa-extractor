@@ -469,7 +469,7 @@ followed by a single JSON object (no markdown fences) with this shape:
         "property": "the Property line",
         "buyer": "the Buyer line",
         "seller": "the Seller line",
-        "accepted_subject_to": { "checked": "true ONLY if the ACCEPTANCE paragraph's '(If checked) SUBJECT TO THE ATTACHED ... COUNTER OFFER No. __' box is visibly marked; false if it is empty. This box is in the acceptance/signature paragraph near the bottom of the counter, NOT the header -- never copy the header's 'counter offer to ...' number here. It is usually empty", "form": "the form named beside that box, e.g. 'Seller Counter Offer'", "number": "the number written in its blank, or 'BLANK'" },
+        "accepted_subject_to": { "box": "the ACCEPTANCE paragraph's '(If checked) SUBJECT TO THE ATTACHED ... COUNTER OFFER No. __' box exactly as it appears: '[X]' if it carries a mark of any kind, '[ ]' if it is empty. Look at the box itself. This box sits in the acceptance paragraph just above the other side's signatures (on a BCO, paragraph 4 at the bottom of page 1), NOT in the header -- never copy the header's 'counter offer to ...' line here", "checked": true, "form": "the form named beside that box, e.g. 'Seller Counter Offer'", "number": "the number written in its blank, or 'BLANK'" },
         "addenda": "every 'Addendum No. __' checked in the counter's ADDENDA; ATTACHMENTS paragraph, with its number, e.g. 'Addendum No. 1'; 'BLANK' if none is checked"
       }
     ],

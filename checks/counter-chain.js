@@ -163,6 +163,18 @@ ok('wrong property: flagged', issues(wrongProperty), ["SCO #1 header: Property o
       lr.findings.filter((f) => /^SCO #2/.test(f.location) && /Dated/.test(f.issue)).map((f) => /BCO #1, dated 09\/03\/2026/.test(f.detail)), [true]);
     ok('live: BCO #2 real acceptance still caught', lg.includes('BCO #2 header: Accepted subject to SCO #2, which came before it'), true);
   }
+
+  // The acceptance box, read literally (v5). "[X]" counts, "[ ]" never does,
+  // even with a stray checked:true beside it.
+  {
+    const withBox = (box, checked) => counters.map((c) => (c.form === 'BCO' && c.number === '2'
+      ? { ...c, accepted_subject_to: { box, checked, form: 'Seller Counter Offer', number: '2' } } : c));
+    const caught = (box, checked) => issues(checkCounterChain({ rpa: lrpa, counters: withBox(box, checked) })).includes('BCO #2 header: Accepted subject to SCO #2, which came before it');
+    ok('box "[X]" with checked:false is still caught', caught('[X]', false), true);
+    ok('box "[x]" is caught', caught('[x]', undefined), true);
+    ok('box "[ ]" is not, even with checked:true', caught('[ ]', true), false);
+    ok('no box, checked:true is caught (v4 shape)', caught('', true), true);
+  }
   // However the model words "nothing checked", it is the same reading.
   for (const v of ['BLANK', 'None checked', 'Neither box checked', '']) {
     ok(`ref: "${v}" is unstated`, counterRef(v).form, 'UNSTATED');
