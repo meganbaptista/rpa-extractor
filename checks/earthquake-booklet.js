@@ -73,5 +73,28 @@ ok('relabel: earthquake questions under "ESD" only',
   M.relabelEarthquakeFlags(flags).map((f) => f.form),
   ['Earthquake Risk Disclosure Statement', 'Earthquake Risk Disclosure Statement', 'ESD', 'TDS']);
 
+// ---- the free seller-signature check (Dunkirk's statement was unsigned) ----
+{
+  const forms = [
+    { code: 'ESD', name: 'Exempt Seller Disclosure', signed: '9/30/2026' },
+    { code: '', name: "Residential Earthquake Risk Disclosure Statement (Homeowner's Guide to Earthquake Safety)", signed: '' },
+    { code: '', name: "Residential Earthquake Risk Disclosure Statement (Homeowner's Guide to Earthquake Safety, 2020 Edition)", signed: '' },
+    { code: 'LPD', name: 'Lead-Based Paint Disclosure', signed: '9/30/2026' },
+    { code: 'SBSA', name: 'Statewide Buyer and Seller Advisory', signed: '' },
+    { code: 'DIA', name: 'Disclosure Information Advisory', signed: '' },
+    { code: '', name: 'Earthquake/Environmental Hazards Booklet Receipt', signed: '' },
+    { code: '', name: 'TruLine Mold Disclosure', signed: '' },
+  ];
+  const got = M.unsignedSellerForms(forms).map((f) => f.code || f.name);
+  ok('unsigned: the statement once (two copies, one family), and the SBSA', got,
+    ["Residential Earthquake Risk Disclosure Statement (Homeowner's Guide to Earthquake Safety)", 'SBSA']);
+  // A signed copy anywhere clears the family: the booklet's blank cannot raise it.
+  const withSigned = forms.map((f) => (/2020 Edition/.test(f.name) ? { ...f, signed: '9/30/2026' } : f));
+  ok('unsigned: any signed copy clears the family', M.unsignedSellerForms(withSigned).map((f) => f.code || f.name), ['SBSA']);
+  ok('a receipt is not the statement', M.requiresSellerSignature({ name: 'NHD Receipt' }), false);
+  ok('a brokerage form with no known seller line is never accused', M.requiresSellerSignature({ name: 'TruLine Mold Disclosure' }), false);
+  ok('AVID-LA counts as AVID', M.requiresSellerSignature({ code: 'AVID-LA' }), true);
+}
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall earthquake-booklet checks pass');

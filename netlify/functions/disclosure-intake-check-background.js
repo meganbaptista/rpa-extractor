@@ -2605,6 +2605,61 @@ function compareNatural(a, b) {
 // Array.sort is stable in Node, so two flags on the same form AND item keep the
 // order the review reported them in.
 /**
+ * A SELLER FORM WITH NO SELLER SIGNATURE (10323 Dunkirk, 2026-10-02).
+ *
+ * The earthquake statement arrived with every box answered and the seller's
+ * line holding only a typed "Carol Ann Walsh, Trustee": no signature, no date.
+ * Nothing in the intake looked at signatures. This is the FREE version Megan
+ * chose: identify already reads the date beside the seller's signature on
+ * every form ("signed"), so a seller-signed form with none is the evidence.
+ *
+ * What it cannot do, by construction: see initials, see the listing agent's
+ * line, or tell "not signed" from "signed but the date was unreadable". That
+ * last one is why it goes to VERIFY, which a person reads, rather than the
+ * chase email, unless SELLER_SIGNATURE_CHASE=true. The full per-line audit
+ * (lib/document-audit.js, seller + listing agent, footer initials) is the
+ * planned upgrade before Keeva launches.
+ *
+ * Only forms that ALWAYS carry a seller signature line, so a form with no seller
+ * line can never be accused. Judged per FORM FAMILY across the delivery: any
+ * signed copy clears it, so a blank template bundled in a vendor report or the
+ * earthquake guide booklet cannot raise it on its own.
+ */
+const SELLER_SIGNED_CODES = new Set(['TDS', 'SPQ', 'ESD', 'FHDS', 'LPD', 'AVID', 'WCMD', 'WHSD', 'SBSA', 'SFLS', 'MCA', 'NHD']);
+const SELLER_SIGNED_NAMES = [/earthquake\s+risk\s+disclosure\s+statement/i];
+const sellerSignatureChase = () => String(process.env.SELLER_SIGNATURE_CHASE || '').toLowerCase() === 'true';
+
+/** "Residential Earthquake Risk Disclosure Statement (..., 2020 Edition)" -> one family. */
+function formFamily(f) {
+  const code = String((f && f.code) || '').trim().toUpperCase().replace(/[\s-]+(LA|BA)$/, '');
+  if (code) return code;
+  return String((f && f.name) || '').toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function requiresSellerSignature(f) {
+  const code = String((f && f.code) || '').trim().toUpperCase().replace(/[\s-]+(LA|BA)$/, '');
+  if (code && SELLER_SIGNED_CODES.has(code)) return true;
+  const name = String((f && f.name) || '');
+  // "NHD Receipt" / booklet receipts are not the statement.
+  if (/receipt|booklet|pamphlet/i.test(name)) return false;
+  return SELLER_SIGNED_NAMES.some((re) => re.test(name));
+}
+
+/** The seller-signed forms in this delivery with no seller signature date on any copy. */
+function unsignedSellerForms(forms) {
+  const families = new Map();
+  for (const f of forms || []) {
+    if (!f || !requiresSellerSignature(f)) continue;
+    const key = formFamily(f);
+    if (!key) continue;
+    const g = families.get(key) || { form: f, signed: false };
+    if (String(f.signed || '').trim()) g.signed = true;
+    families.set(key, g);
+  }
+  return [...families.values()].filter((g) => !g.signed).map((g) => g.form);
+}
+
+/**
  * "ESD" ON AN EARTHQUAKE QUESTION IS THE WRONG FORM. On 10323 Dunkirk the
  * review labelled the Residential Earthquake Risk Disclosure Statement's items
  * "ESD 1" ... "ESD 7" (Earthquake Safety Disclosure, presumably), which is the
@@ -3448,6 +3503,30 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
         + 'before requesting anything',
     });
   }
+  // Seller-signed forms with no seller signature date on any copy. See
+  // unsignedSellerForms: VERIFY by default, the chase email only by choice.
+  const unsigned = unsignedSellerForms(currentForms);
+  for (const f of unsigned) {
+    const label = f.code ? `${f.code}${f.name ? ` (${f.name})` : ''}` : (f.name || 'a seller form');
+    if (sellerSignatureChase()) {
+      flags.push({
+        form: f.code || f.name || '', item: 'seller signature', issue: 'seller_signature_missing',
+        reason: 'no seller signature or signature date appears on this form',
+      });
+    } else {
+      verify.push({
+        item: `${f.code || f.name || 'Seller form'} seller signature`,
+        note: `no seller signature date could be read on ${label}. It may be unsigned (the 10323 Dunkirk `
+          + 'earthquake statement had only the typed name), or signed with a date the reader missed. '
+          + 'Check the signature line before requesting anything',
+      });
+    }
+  }
+  if (unsigned.length) {
+    console.log(`[disclosure-intake] ${unsigned.length} seller-signed form(s) with no seller signature date, `
+      + `routed to ${sellerSignatureChase() ? 'the chase email' : 'VERIFY'}: `
+      + `${unsigned.map((f) => f.code || f.name).join(', ')}`);
+  }
   if (duplicateFlags.length) {
     console.log(`[disclosure-intake] ${duplicateFlags.length} duplicate-copy flag(s) routed to VERIFY `
       + `(NOT chased): ${duplicateFlags.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
@@ -3501,7 +3580,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const flagRef = (f) => [f.form, f.item].filter(Boolean).join(' ');
   const isRevise = (f) => !!f.should_be || !!f.other_form || !!f.document || !!f.source
     || f.issue === 'answer_contradicts_package' || f.issue === 'detail_incomplete'
-    || f.issue === 'verify_mismatch' || f.issue === 'entity_signer'
+    || f.issue === 'verify_mismatch' || f.issue === 'entity_signer' || f.issue === 'seller_signature_missing'
     || f.issue === 'yes_no_explanation' || f.issue === 'unanswered' || f.issue === 'explanation_unclear';
   const sourceVerb = (src) => (/(documents|instructions)\b/i.test(src) ? 'indicate' : 'indicates');
   // Type-specific wording so each correction reads like a TC, not a template.
@@ -3519,6 +3598,9 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     }
     if (f.issue === 'entity_signer') {
       return stripDashes(f.reason);
+    }
+    if (f.issue === 'seller_signature_missing') {
+      return `${f.form || 'This form'}: the seller's signature and date appear to be missing; please have the seller sign and date it, or send the signed copy.`;
     }
     // Response-completion issues: the seller needs to complete/clarify the answer, so
     // these are revision requests (not "confirm") and never a Yes/No correction.
@@ -3738,7 +3820,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold
