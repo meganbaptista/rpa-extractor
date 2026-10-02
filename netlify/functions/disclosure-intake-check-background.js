@@ -1951,7 +1951,56 @@ const hasQaTitle = (text) => QA_TITLE_PATTERNS.some((re) => re.test(text.slice(0
 
 // Choose the Q&A pages to audit from the text layer. Returns { usable, pages, selection }.
 // usable=false means the text layer can't be trusted → caller runs Path B (image classifier).
-function selectQAPagesFromText(texts, pageCount) {
+/**
+ * THE EARTHQUAKE GUIDE BOOKLET IS NOT A SELLER'S FORM (10323 Dunkirk, 2026-10-02).
+ *
+ * The "Homeowner's Guide to Earthquake Safety" prints a BLANK Residential
+ * Earthquake Risk Disclosure Statement as one of its pages, followed by one
+ * explanation chapter per item ("Item 1 Is your water heater braced..."). The
+ * text picker read the blank statement as a Q&A page and every chapter as a
+ * seller-answered question, took pages 13-24 of the 39-page booklet, and the
+ * review chased the listing agent for all 11 items "left unanswered" - while
+ * the filled, separately delivered statement sat in the other batch with 0
+ * flags. Same trap as the vendor-bundled blank FHDS (3499 Beverly Glen).
+ *
+ * The booklet is recognised by its RUNNING HEADER on many pages: the filled
+ * statement carries that header too, but on one page, so it is never mistaken
+ * for the booklet, and a seller packet that bundles the booklet only loses the
+ * booklet's own pages. The chapters are never reviewed. The booklet's statement
+ * page is reviewed only when it is the ONLY copy of the statement in the
+ * delivery - an agent can fill it in place - and skipped when a separate copy
+ * exists (opts.skipBookletStatement, decided across the whole delivery).
+ */
+const RX_EQ_GUIDE_HEADER = /HOMEOWNER['\u2019]?S\s+GUIDE\s+TO\s+EARTHQUAKE\s+SAFETY/i;
+const EQ_BOOKLET_MIN_HEADER_PAGES = 5;
+const isEqStatementPage = (t) => /Residential\s+Earthquake\s+Risk\s+Disclosure\s+Statement/i.test(t || '')
+  && /Answer\s+these\s+questions\s+to\s+the\s+best\s+of\s+your\s+knowledge/i.test(t || '');
+
+/** The booklet's page runs: header pages clustered with gaps of at most 2 pages, 5+ header pages each. */
+function eqBookletRuns(texts) {
+  const hdr = (texts || []).filter((p) => RX_EQ_GUIDE_HEADER.test(p.text || '')).map((p) => p.num).sort((a, b) => a - b);
+  const runs = [];
+  let cur = null;
+  for (const n of hdr) {
+    if (cur && n - cur.end <= 3) { cur.end = n; cur.count++; } else { cur = { start: n, end: n, count: 1 }; runs.push(cur); }
+  }
+  return runs.filter((r) => r.count >= EQ_BOOKLET_MIN_HEADER_PAGES);
+}
+
+/** Where the earthquake statement sits: the booklet's (blank) copy, and any copy outside a booklet. */
+function eqStatementLayout(texts) {
+  const runs = eqBookletRuns(texts);
+  const inBooklet = (n) => runs.some((r) => n >= r.start && n <= r.end);
+  const statementPages = (texts || []).filter((p) => isEqStatementPage(p.text)).map((p) => p.num);
+  return {
+    runs,
+    inBooklet,
+    bookletStatementPages: statementPages.filter(inBooklet),
+    standaloneStatementPages: statementPages.filter((n) => !inBooklet(n)),
+  };
+}
+
+function selectQAPagesFromText(texts, pageCount, opts = {}) {
   if (!isTextLayerUsable(texts)) return { usable: false, pages: [], selection: '' };
   const byNum = new Map(texts.map((p) => [p.num, p.text]));
   const include = new Set();
@@ -2018,8 +2067,26 @@ function selectQAPagesFromText(texts, pageCount) {
     }
   }
 
+  // The earthquake guide booklet: drop its chapters, and its blank statement
+  // too when a separate copy is in the delivery. See RX_EQ_GUIDE_HEADER.
+  let bookletNote = '';
+  const eq = eqStatementLayout(texts);
+  if (eq.runs.length) {
+    const before = include.size;
+    for (const n of [...include]) {
+      if (!eq.inBooklet(n)) continue;
+      const keep = eq.bookletStatementPages.includes(n) && !opts.skipBookletStatement && !eq.standaloneStatementPages.length;
+      if (!keep) include.delete(n);
+    }
+    const dropped = before - include.size;
+    if (dropped) {
+      bookletNote = ` (earthquake guide booklet pp${eq.runs.map((r) => `${r.start}-${r.end}`).join(',')}: ${dropped} page(s) not reviewed`
+        + `${eq.bookletStatementPages.length && (opts.skipBookletStatement || eq.standaloneStatementPages.length) ? ', its blank statement skipped because a separate copy is in this delivery' : ''})`;
+    }
+  }
+
   const pages = [...include].sort((a, b) => a - b);
-  const selection = `text-driven ${pages.length}/${pageCount}pp [${pages.join(',') || 'none'}]`;
+  const selection = `text-driven ${pages.length}/${pageCount}pp [${pages.join(',') || 'none'}]${bookletNote}`;
   return { usable: true, pages, selection };
 }
 
@@ -2095,7 +2162,7 @@ async function classifyQAPagesWindowed(buffer, pageCount, name) {
 //   status 'no_qa'  — document genuinely has no seller Q&A pages (an RPA, an NHD report): nothing to
 //                     audit, and critically NOT a reason to dump the whole PDF at the model
 //   status 'failed' — could not read/render the document at all (logged loud, never silent)
-async function renderQAPageImages(buffer, name) {
+async function renderQAPageImages(buffer, name, opts = {}) {
   const pageCount = await pdfPageCount(buffer);
   if (!pageCount) return { images: [], selection: `${name}: unreadable (0 pages)`, status: 'failed' };
 
@@ -2110,8 +2177,8 @@ async function renderQAPageImages(buffer, name) {
   } else {
     // PATH A — deterministic text-layer selection across the whole document. Preferred: no
     // classifier coin-flip, no per-page image cost just to decide, whole-document coverage.
-    const texts = await pdfPageTexts(buffer);
-    const a = selectQAPagesFromText(texts, pageCount);
+    const texts = opts.texts || await pdfPageTexts(buffer);
+    const a = selectQAPagesFromText(texts, pageCount, opts);
     if (a.usable) {
       qaNums = a.pages;
       selection = `${name}: ${a.selection}`;
@@ -2328,7 +2395,10 @@ async function reviewAnswers(docs) {
   for (const d of docs) {
     try {
       const buf = Buffer.from(d.base64 || '', 'base64');
-      const { images, selection, status } = await renderQAPageImages(buf, d.name);
+      const { images, selection, status } = await renderQAPageImages(buf, d.name, {
+        texts: d._texts,
+        skipBookletStatement: d._skipBookletStatement === true,
+      });
       qaImages = qaImages.concat(images);
       if (selection) selections.push(selection);
       if (status === 'failed') anyFailed = true;
@@ -2534,6 +2604,28 @@ function compareNatural(a, b) {
 
 // Array.sort is stable in Node, so two flags on the same form AND item keep the
 // order the review reported them in.
+/**
+ * "ESD" ON AN EARTHQUAKE QUESTION IS THE WRONG FORM. On 10323 Dunkirk the
+ * review labelled the Residential Earthquake Risk Disclosure Statement's items
+ * "ESD 1" ... "ESD 7" (Earthquake Safety Disclosure, presumably), which is the
+ * code of the Exempt Seller Disclosure - a different form with none of these
+ * questions. A flag labelled ESD whose item or reason is about one of the
+ * statement's features is relabelled, so a real chase names the right form.
+ */
+const EQ_STATEMENT_NAME = 'Earthquake Risk Disclosure Statement';
+const RX_EQ_STATEMENT_TOPIC = /water\s*heater|bolted|cripple|crawl\s*space|unreinforced\s+masonry|hillside|tall\s+(foundation\s+walls|posts)|piers?\s+and\s+posts|room\s+over\s+(the\s+)?garage/i;
+function relabelEarthquakeFlags(list) {
+  let n = 0;
+  for (const f of list || []) {
+    if (!f || !/^\s*esd\s*$/i.test(String(f.form || ''))) continue;
+    if (!RX_EQ_STATEMENT_TOPIC.test(`${f.item || ''} ${f.reason || ''}`)) continue;
+    f.form = EQ_STATEMENT_NAME;
+    n++;
+  }
+  if (n) console.log(`[disclosure-intake] ${n} flag(s) labelled ESD were earthquake-statement items, relabelled "${EQ_STATEMENT_NAME}"`);
+  return list;
+}
+
 function sortFlags(list) {
   return (list || []).slice().sort((a, b) => {
     const [ra, ta] = formRank(a && a.form);
@@ -2718,6 +2810,38 @@ async function identifyAndReview(batch) {
   };
 }
 
+/**
+ * Across the WHOLE delivery: is there an earthquake statement outside a guide
+ * booklet? If so, every booklet's blank copy is skipped. Decided before the
+ * documents are batched, because on 10323 Dunkirk the booklet and the filled
+ * statement landed in different batches and neither batch could see the other.
+ * The page texts are kept on each doc so the answer review does not extract
+ * them a second time. Only multi-page PDFs are read: the picker reviews short
+ * ones whole and never consults their text.
+ */
+async function markEqBookletStatements(docs) {
+  let standalone = false;
+  const withBooklet = [];
+  for (const d of docs) {
+    try {
+      const buf = Buffer.from(d.base64 || '', 'base64');
+      const texts = await pdfPageTexts(buf);
+      if (!texts.length) continue;
+      if (texts.length > QA_REVIEW_ALL_MAX_PAGES) d._texts = texts;
+      const eq = eqStatementLayout(texts);
+      if (eq.standaloneStatementPages.length) standalone = true;
+      if (eq.bookletStatementPages.length) withBooklet.push(d);
+    } catch (err) {
+      console.warn(`[disclosure-intake] earthquake-booklet scan skipped "${d.name}": ${err.message}`);
+    }
+  }
+  if (standalone && withBooklet.length) {
+    for (const d of withBooklet) d._skipBookletStatement = true;
+    console.log(`[disclosure-intake] earthquake statement delivered separately; the blank copy inside `
+      + `${withBooklet.map((d) => d.name).join(', ')} will not be reviewed`);
+  }
+}
+
 // A seller's explanations sheet is EVIDENCE FOR OTHER FORMS, not a form in its own right, so it
 // must be in the SAME request as the form it explains or it may as well not exist.
 //
@@ -2739,6 +2863,7 @@ const isExplanationSheet = (d) => /explanation/i.test(String(d.name || ''))
 
 async function identifyFormsChunked(docs) {
   if (docs.length <= 1) return identifyAndReview(docs);
+  await markEqBookletStatements(docs);
   const MAX_BATCH_B64 = 18 * 1024 * 1024; // keep each request well under the 32MB cap
   const MAX_BATCH_DOCS = 10;              // and bounded on page/doc count
 
@@ -3293,7 +3418,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // produced a different running order every run. Sorting HERE, before the
   // revise/confirm split, means the email, the Process Street comment and
   // response_flags_text all share one order.
-  const flags = sortFlags(allFlags.filter((f) => f.issue !== 'explanation_on_addendum'
+  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => f.issue !== 'explanation_on_addendum'
     && f.issue !== 'duplicate_form_copy'
     && f.issue !== 'cited_attachment_unseen'));
   for (const f of unseenAttachment) {
@@ -3613,7 +3738,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold
