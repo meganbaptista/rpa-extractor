@@ -51,5 +51,18 @@ ok('"Section 3 not completed" with no 3B/3C claim is still chased', M.routeUncon
 const tagged = [scanned({ form: 'TDS', item: 'C1', issue: 'cited_attachment_unseen', reason: 'see attached' })];
 ok('an already-routed flag is not double-routed', M.routeUnconfirmedFlags(tagged).scanUnconfirmed.length, 0);
 
+// A blank WRITTEN field off a scan stays in the chase (1747 Haynes TDS date).
+{
+  const haynes = [
+    scanned({ form: 'TDS', item: 'disclosure date', issue: 'unanswered', reason: 'the disclosure date near the top of page 1 is left blank' }),
+    scanned({ form: 'SPQ', item: '7D', issue: 'yes_no_explanation', reason: '7D (painted within the past 12 months) is marked Yes but the item 7 explanation addresses only alterations and repairs, not painting' }),
+    scanned({ form: 'SPQ', item: '13B(1)', issue: 'unanswered', reason: 'sprinklers are marked Yes but neither automatic nor manually operated is checked' }),
+  ];
+  const hr = M.routeUnconfirmedFlags(haynes);
+  ok('haynes: the blank TDS date stays in the chase', hr.scanUnconfirmed.map(ref), ['SPQ 7D', 'SPQ 13B(1)']);
+  const blankBox = [scanned({ form: 'SPQ', item: '9A', issue: 'unanswered', reason: 'neither Yes nor No is checked, the box is left blank' })];
+  ok('a blank CHECKBOX on a scan still goes to VERIFY', M.routeUnconfirmedFlags(blankBox).scanUnconfirmed.length, 1);
+}
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall scan/FHDS routing checks pass');

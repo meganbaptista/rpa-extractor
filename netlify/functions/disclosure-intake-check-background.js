@@ -2499,7 +2499,25 @@ async function reviewAnswers(docs) {
     if (!passes.length) throw (settled[0] && settled[0].reason) || new Error('answer review returned nothing');
 
     const merged = unionReviewFlags(passes.map((x) => x.responseFlags));
-    if (batches[i].every((img) => img.scanned)) for (const f of merged) if (f) f.from_scan = true;
+    // HOW MANY PASSES RAISED EACH FLAG. Recorded, not acted on (2026-10-02): the
+    // idea is that a scan finding both passes agree on is a clear mark, and one
+    // only one pass saw is an ambiguous one. Megan wants evidence first, so this
+    // only shows up in the log and the VERIFY note until it is judged.
+    if (passes.length > 1) {
+      const keyOf = (f) => [f && f.form, f && f.item, f && f.issue].map((v) => String(v || '').trim().toLowerCase()).join('|');
+      for (const f of merged) {
+        if (!f) continue;
+        f.pass_count = passes.filter((x) => (x.responseFlags || []).some((g) => keyOf(g) === keyOf(f))).length;
+        f.pass_total = passes.length;
+      }
+    }
+    if (batches[i].every((img) => img.scanned)) {
+      for (const f of merged) if (f) f.from_scan = true;
+      if (passes.length > 1 && merged.length) {
+        console.log(`[disclosure-intake] scanned batch ${i + 1}: pass agreement `
+          + merged.map((f) => `${[f.form, f.item].filter(Boolean).join(' ')}=${f.pass_count}/${f.pass_total}`).join(', '));
+      }
+    }
     if (merged.length) responseFlags = responseFlags.concat(merged);
     for (const x of passes) mergeKeyAnswers(keyAnswers, x.keyAnswers);
     // Log per-pass counts AND what the union recovered. This is the telemetry that
@@ -2737,7 +2755,13 @@ function routeUnconfirmedFlags(allFlags) {
       fhdsDefault.push(f);
       continue;
     }
-    if (f.from_scan && f.issue !== 'detail_incomplete') {
+    // A BLANK WRITTEN FIELD is as legible on a scan as on a digital page: 1747
+    // Haynes's TDS "AS OF (DATE)" really was empty and was held back for nothing.
+    // Kept in the chase when the claim is about a blank and says nothing about
+    // which box a mark is in.
+    const blankWrittenField = /\b(left\s+)?blank\b|\bempty\b|not\s+filled|no\s+date\b/i.test(text)
+      && !/\bcheck(ed|box)?\b|\bmark(ed|s)?\b|\bbox(es)?\b|\byes\b|\bno\b(?!\s+date)|\bselect(ed)?\b/i.test(text);
+    if (f.from_scan && f.issue !== 'detail_incomplete' && !blankWrittenField) {
       f.original_issue = f.issue;
       f.issue = 'scan_unconfirmed';
       scanUnconfirmed.push(f);
@@ -3632,7 +3656,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
       item: [f.form, f.item].filter(Boolean).join(' ') || 'this item',
       note: 'read off a SCANNED page (no text layer), where checkmarks can sit across two rows or two '
         + 'boxes. Look at the page before requesting anything. The review reported: '
-        + `"${String(f.reason || '').trim()}"`,
+        + `"${String(f.reason || '').trim()}"`
+        + (f.pass_total ? ` (raised by ${f.pass_count} of ${f.pass_total} review passes)` : ''),
     });
   }
   if (fhdsDefault.length || scanUnconfirmed.length) {
