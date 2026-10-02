@@ -20,7 +20,7 @@
 //                  (the counter-chain check of 2026-09-30 is v2; the
 //                  Loadstone chain checks of 2026-10-01 are v3; their
 //                  live-run fixes the same day are v4; the acceptance
-//                  box read as "[X]" is v5).
+//                  box read as "[X]" is v5; S3 shared signatures v6).
 //   tenant         a firm's audit is served only to that firm (V2-ready;
 //                  "default" until Keeva has tenants).
 //   sha256         of the PDF's base64, which is the bytes.
@@ -31,7 +31,7 @@
 
 const crypto = require('crypto');
 
-const AUDIT_VERSION = 'v5';
+const AUDIT_VERSION = 'v6';
 const STORE_NAME = 'audit-cache';
 
 function auditCacheKey(pdfBase64, tenant) {
