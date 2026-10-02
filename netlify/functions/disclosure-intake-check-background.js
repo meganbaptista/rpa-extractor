@@ -2746,6 +2746,93 @@ function routeUnconfirmedFlags(allFlags) {
   return { fhdsDefault, scanUnconfirmed };
 }
 
+/**
+ * THE CHASE LINES, IN MEGAN'S VOICE (2026-10-02).
+ *
+ * A listing agent on 2781 Westshire replied "Is she putting this through AI or
+ * something?" to a list of seven lines that each read "Marked No; however, the
+ * property is in a homeowners association (Hollywoodland Homeowners
+ * Association). The response should be revised to Yes." Two things gave it
+ * away: the same robotic sentence on every line, and ONE fact repeated seven
+ * times. So each line now reads like a coordinator wrote it, and lines that rest
+ * on the same reason are folded into one (groupReviseLines).
+ */
+const dashless = (v) => String(v || '').replace(/\s*[—–]\s*/g, ', ').trim();
+/** The model's reason without its own trailing "please ..." (the line adds the ask). */
+const reasonOf = (f) => dashless(f && f.reason).replace(/[;.,]\s*please\b[\s\S]*$/i, '').replace(/[.;,\s]+$/, '');
+const refOf = (f) => [f && f.form, f && f.item].filter(Boolean).join(' ');
+const verbFor = (src) => (/(documents|instructions)\b/i.test(src) ? 'indicate' : 'indicates');
+
+function reviseLineFor(f) {
+  const ref = refOf(f);
+  const why = reasonOf(f);
+  const marked = f.marked || 'No';
+  if (f.issue === 'detail_incomplete') return `${ref}: ${why}. Could you fill that in, or mark it Unknown?`;
+  if (f.issue === 'verify_mismatch') return `${ref}: ${why}.`;
+  if (f.issue === 'entity_signer') return dashless(f.reason);
+  if (f.issue === 'seller_signature_missing') {
+    return `${f.form || 'This form'}: the seller's signature and date look to be missing. Could the seller sign and date it, or could you send the signed copy?`;
+  }
+  if (f.issue === 'yes_no_explanation') return `${ref}: ${why || 'marked Yes with no explanation'}. Could the seller add a short explanation?`;
+  if (f.issue === 'unanswered') return `${ref}: ${why || 'this one was left blank'}. Could the seller answer it?`;
+  if (f.issue === 'explanation_unclear') return `${ref}: ${why || 'the explanation is a little unclear'}. Could the seller clarify?`;
+  const t = f.discrepancy_type || (f.other_form ? 'inconsistent' : f.document ? 'document' : f.source ? 'transaction' : 'incorrect');
+  if (t === 'inconsistent' && f.other_form) {
+    return `${ref} is marked ${marked}, which does not match ${dashless(f.other_form)}${why ? ` (${why})` : ''}. Could you update it so the two agree?`;
+  }
+  if (t === 'document' && f.document) {
+    return `${ref} is marked ${marked}, but ${dashless(f.document)} is in the package. Could you update it to ${f.should_be || 'Yes'}?`;
+  }
+  if (t === 'transaction' && f.source) {
+    return `${ref} is marked ${marked}, but ${dashless(f.source)} ${verbFor(f.source)} otherwise. Could you update it to match?`;
+  }
+  return `${ref} is marked ${marked}, but ${why}. Could you update it to ${f.should_be || 'Yes'}?`;
+}
+
+/** "TDS C12, TDS C14, SPQ 6G" -> "TDS C12 and C14, and SPQ 6G". */
+function joinRefs(flags) {
+  const byForm = new Map();
+  for (const f of flags) {
+    const form = String(f.form || '').trim();
+    if (!byForm.has(form)) byForm.set(form, []);
+    byForm.get(form).push(String(f.item || '').trim());
+  }
+  const and = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+  const parts = [...byForm].map(([form, items]) => `${form ? `${form} ` : ''}${and(items.filter(Boolean))}`.trim());
+  return parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+}
+
+/**
+ * ONE FACT, ONE LINE. Marked-answer flags that rest on the same reason, the same
+ * marking and the same requested answer become a single line naming every item.
+ * Anything else (a blank, a missing explanation) keeps its own line, because each
+ * of those is its own ask. Order follows the first flag of each group.
+ */
+function groupReviseLines(flags) {
+  const lines = [];
+  const groups = new Map();
+  const groupable = (f) => !['detail_incomplete', 'verify_mismatch', 'entity_signer', 'seller_signature_missing',
+    'yes_no_explanation', 'unanswered', 'explanation_unclear'].includes(f.issue) && !f.other_form && !f.document;
+  for (const f of flags || []) {
+    if (!f) continue;
+    if (!groupable(f)) { lines.push({ one: f }); continue; }
+    const basis = (f.source ? `src:${dashless(f.source)}` : reasonOf(f)).toLowerCase().replace(/\s+/g, ' ');
+    const key = `${basis}|${f.marked || 'No'}|${f.should_be || ''}`;
+    if (!groups.has(key)) { groups.set(key, []); lines.push({ key }); }
+    groups.get(key).push(f);
+  }
+  return lines.map((x) => {
+    if (x.one) return reviseLineFor(x.one);
+    const g = groups.get(x.key);
+    if (g.length === 1) return reviseLineFor(g[0]);
+    const f = g[0];
+    const marked = f.marked || 'No';
+    const basis = f.source ? `${dashless(f.source)} ${verbFor(f.source)} otherwise` : reasonOf(f);
+    const to = f.should_be ? ` to ${f.should_be}` : '';
+    return `${joinRefs(g)} are marked ${marked}, but ${basis}. Could you update those${to}?`;
+  });
+}
+
 function sortFlags(list) {
   return (list || []).slice().sort((a, b) => {
     const [ra, ta] = formRank(a && a.form);
@@ -3679,51 +3766,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     || f.issue === 'yes_no_explanation' || f.issue === 'unanswered' || f.issue === 'explanation_unclear';
   const sourceVerb = (src) => (/(documents|instructions)\b/i.test(src) ? 'indicate' : 'indicates');
   // Type-specific wording so each correction reads like a TC, not a template.
-  const reviseLine = (f) => {
-    const ref = flagRef(f);
-    // TDS Section II item marked present but its required detail (type/age/location)
-    // is blank: ask the listing side to complete it rather than treating it as a Yes/No.
-    if (f.issue === 'detail_incomplete') {
-      return `${ref}: ${stripDashes(f.reason)}; please specify it or mark Unknown.`;
-    }
-    // A compliance-list "Confirm marked YES" item we read and found not as expected,
-    // or a seller who signed as an entity. The reason is already a complete request.
-    if (f.issue === 'verify_mismatch') {
-      return `${ref}: ${stripDashes(f.reason)}.`;
-    }
-    if (f.issue === 'entity_signer') {
-      return stripDashes(f.reason);
-    }
-    if (f.issue === 'seller_signature_missing') {
-      return `${f.form || 'This form'}: the seller's signature and date appear to be missing; please have the seller sign and date it, or send the signed copy.`;
-    }
-    // Response-completion issues: the seller needs to complete/clarify the answer, so
-    // these are revision requests (not "confirm") and never a Yes/No correction.
-    if (f.issue === 'yes_no_explanation') {
-      return `${ref}: ${stripDashes(f.reason) || 'marked Yes with no written explanation'}; please provide an explanation.`;
-    }
-    if (f.issue === 'unanswered') {
-      return `${ref}: ${stripDashes(f.reason) || 'left blank / unanswered'}; please answer this question.`;
-    }
-    if (f.issue === 'explanation_unclear') {
-      return `${ref}: ${stripDashes(f.reason) || 'the written explanation is unclear'}; please clarify it.`;
-    }
-    const marked = f.marked || 'No';
-    const t = f.discrepancy_type || (f.other_form ? 'inconsistent' : f.document ? 'document' : f.source ? 'transaction' : 'incorrect');
-    if (t === 'inconsistent' && f.other_form) {
-      const detail = stripDashes(f.reason);
-      return detail
-        ? `${ref}: Marked ${marked}; however, this is inconsistent with ${stripDashes(f.other_form)}, where ${detail}. The response should be revised for consistency.`
-        : `${ref}: Marked ${marked}; however, this response is inconsistent with ${stripDashes(f.other_form)}. The response should be revised for consistency.`;
-    }
-    if (t === 'document' && f.document) {
-      return `${ref}: Marked ${marked}; however, ${stripDashes(f.document)} is included in the disclosure package. The response should be revised to ${f.should_be || 'Yes'}.`;
-    }
-    if (t === 'transaction' && f.source) {
-      return `${ref}: Marked ${marked}; however, ${stripDashes(f.source)} ${sourceVerb(f.source)} otherwise. The response should be revised accordingly.`;
-    }
-    return `${ref}: Marked ${marked}; however, ${stripDashes(f.reason)}. The response should be revised to ${f.should_be || 'Yes'}.`;
-  };
+  const reviseLine = (f) => reviseLineFor(f);
   const ISSUE_TEXT = { unanswered: 'left blank / unanswered', yes_no_explanation: 'marked Yes with no written explanation', explanation_unclear: 'the written explanation is unclear' };
   const confirmLine = (f) => `${flagRef(f)}: ${stripDashes(f.reason) || ISSUE_TEXT[f.issue] || 'please confirm this item'}`;
   const flagLine = (f) => (isRevise(f) ? reviseLine(f) : confirmLine(f));
@@ -3778,7 +3821,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     // on 8 Willow Way), and buried under the reference lists it gets skimmed, which is exactly
     // how a genuinely unexplained answer would slip through.
     (outdated.length ? `OUTDATED VERSIONS (request current):\n${bullets(outdated, outdatedLine)}\n\n` : '') +
-    (reviseFlags.length ? `RESPONSES TO REVISE:\n${bullets(reviseFlags, reviseLine)}\n\n` : '') +
+    (reviseFlags.length ? `RESPONSES TO REVISE:\n${bullets(groupReviseLines(reviseFlags), (x) => x)}\n\n` : '') +
     (verify.length ? `VERIFY:\n${bullets(verify, (x) => `${x.item}: ${x.note}`)}\n\n` : '') +
     (confirmFlags.length ? `RESPONSES TO CONFIRM:\n${bullets(confirmFlags, confirmLine)}\n\n` : '') +
     `TO REQUEST FROM LISTING SIDE:\n${bullets(stillNeeded, (x) => x)}\n\n` +
@@ -3795,7 +3838,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   if (followupCount) {
     chaseEmailBody =
       'Hi,\n\n' +
-      'Thank you for sending the disclosures. After reviewing the package against our file, a few items still need attention.\n' +
+      'Thanks so much for sending these over! I went through the package, and here is what is still pending on my end:\n' +
       (stillNeeded.length
         ? '\nStill outstanding:\n' + stillNeeded.map((x) => `- ${x}`).join('\n') + '\n'
         : '') +
@@ -3807,13 +3850,13 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
           + 'those aside. Please send the current seller\'s versions of anything listed above.\n'
         : '') +
       (reviseFlags.length
-        ? '\nPlease revise or complete the following disclosures:\n' + reviseFlags.map((f) => `- ${reviseLine(f)}`).join('\n') + '\n'
+        ? '\nA few answers need a quick update:\n' + groupReviseLines(reviseFlags).map((l) => `- ${l}`).join('\n') + '\n'
         : '') +
       (confirmFlags.length
-        ? '\nPlease confirm the following:\n' + confirmFlags.map((f) => `- ${confirmLine(f)}`).join('\n') + '\n'
+        ? '\nAnd a couple of things to confirm:\n' + confirmFlags.map((f) => `- ${confirmLine(f)}`).join('\n') + '\n'
         : '') +
-      '\nWhen you have a moment, please send these over so we can wrap up our review. ' +
-      'If any have already been provided or do not apply, just let me know.\n\n' +
+      '\nWhenever you get a chance, send these my way and we will be all set. ' +
+      'If any of them are already on the way or do not apply, just let me know!\n\n' +
       `Thanks!\n${signer}`;
   } else {
     // Nothing to chase: no missing docs (TO REQUEST FROM LISTING SIDE is "(none)"), no responses
@@ -3915,7 +3958,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold
