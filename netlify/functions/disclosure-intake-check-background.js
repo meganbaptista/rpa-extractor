@@ -2162,8 +2162,20 @@ async function classifyQAPagesWindowed(buffer, pageCount, name) {
 //   status 'no_qa'  — document genuinely has no seller Q&A pages (an RPA, an NHD report): nothing to
 //                     audit, and critically NOT a reason to dump the whole PDF at the model
 //   status 'failed' — could not read/render the document at all (logged loud, never silent)
+/**
+ * A PAGE WITH NO TEXT LAYER IS A SCAN, and on a scan the review is reading pen
+ * marks. 20371 Bluffside (2026-10-02): a wet-signed SPQ/TDS/FHDS scanned to PDF.
+ * The review read 7A's Yes as 7B's (each item's boxes sit on its SECOND line),
+ * called 6H a plain Yes when both boxes carry a mark, and said TDS Section III
+ * was missing when the agent had completed and signed it. On digital pages the
+ * text layer backs the selection and the footer spans; on a scan nothing does.
+ * Pages under this many characters of text are treated as scanned.
+ */
+const SCAN_PAGE_TEXT_MIN = 150;
+
 async function renderQAPageImages(buffer, name, opts = {}) {
   const pageCount = await pdfPageCount(buffer);
+  let pageTexts = opts.texts || null;
   if (!pageCount) return { images: [], selection: `${name}: unreadable (0 pages)`, status: 'failed' };
 
   let qaNums = [];
@@ -2177,7 +2189,8 @@ async function renderQAPageImages(buffer, name, opts = {}) {
   } else {
     // PATH A — deterministic text-layer selection across the whole document. Preferred: no
     // classifier coin-flip, no per-page image cost just to decide, whole-document coverage.
-    const texts = opts.texts || await pdfPageTexts(buffer);
+    const texts = pageTexts || await pdfPageTexts(buffer);
+    pageTexts = texts;
     const a = selectQAPagesFromText(texts, pageCount, opts);
     if (a.usable) {
       qaNums = a.pages;
@@ -2225,9 +2238,21 @@ async function renderQAPageImages(buffer, name, opts = {}) {
     return { images: [], selection: `${selection} RENDER FAILED`, status: 'failed' };
   }
   console.log(`[disclosure-intake] ${name}: rendered ${hi.length} Q&A page(s) hi-res (pages ${hi.map((p) => p.pageNumber).join(', ')})`);
+  // Which rendered pages are scans. The short-file path never read the text, so
+  // read it now; it is cheap next to the render.
+  if (!pageTexts) {
+    try { pageTexts = await pdfPageTexts(buffer); } catch (e) { pageTexts = []; }
+  }
+  const textLen = new Map((pageTexts || []).map((p) => [p.num, String(p.text || '').replace(/\s+/g, '').length]));
+  const isScanned = (n) => (textLen.get(n) || 0) < SCAN_PAGE_TEXT_MIN;
+  const scannedPages = hi.filter((p) => isScanned(p.pageNumber)).map((p) => p.pageNumber);
+  if (scannedPages.length) {
+    console.log(`[disclosure-intake] ${name}: ${scannedPages.length} rendered page(s) are scans with no text layer `
+      + `(pages ${scannedPages.join(', ')}); their mark-reading findings go to VERIFY`);
+  }
   return {
-    images: hi.map((p) => ({ name: `${name} qa-p${p.pageNumber}`, base64: p.base64 })),
-    selection,
+    images: hi.map((p) => ({ name: `${name} qa-p${p.pageNumber}`, base64: p.base64, scanned: isScanned(p.pageNumber) })),
+    selection: scannedPages.length ? `${selection} [scanned: ${scannedPages.join(',')}]` : selection,
     status: 'ok',
   };
 }
@@ -2423,17 +2448,21 @@ async function reviewAnswers(docs) {
     return { responseFlags: [], keyAnswers: { ...EMPTY_KEY_ANSWERS }, dropped: [], incomplete: anyFailed };
   }
 
-  // Batch the images under the request size/count cap.
+  // Batch the images under the request size/count cap, SCANNED PAGES APART from
+  // digital ones, so every flag can be traced to whether it was read off a scan
+  // (flags carry a form and an item, never a page). See SCAN_PAGE_TEXT_MIN.
   const batches = [];
-  let cur = [], curSize = 0;
-  for (const img of qaImages) {
-    const sz = (img.base64 || '').length;
-    if (cur.length && (cur.length >= QA_MAX_BATCH_IMAGES || curSize + sz > QA_MAX_BATCH_B64)) {
-      batches.push(cur); cur = []; curSize = 0;
+  for (const group of [qaImages.filter((img) => !img.scanned), qaImages.filter((img) => img.scanned)]) {
+    let cur = [], curSize = 0;
+    for (const img of group) {
+      const sz = (img.base64 || '').length;
+      if (cur.length && (cur.length >= QA_MAX_BATCH_IMAGES || curSize + sz > QA_MAX_BATCH_B64)) {
+        batches.push(cur); cur = []; curSize = 0;
+      }
+      cur.push(img); curSize += sz;
     }
-    cur.push(img); curSize += sz;
+    if (cur.length) batches.push(cur);
   }
-  if (cur.length) batches.push(cur);
 
   let responseFlags = [];
   const keyAnswers = { ...EMPTY_KEY_ANSWERS };
@@ -2470,6 +2499,7 @@ async function reviewAnswers(docs) {
     if (!passes.length) throw (settled[0] && settled[0].reason) || new Error('answer review returned nothing');
 
     const merged = unionReviewFlags(passes.map((x) => x.responseFlags));
+    if (batches[i].every((img) => img.scanned)) for (const f of merged) if (f) f.from_scan = true;
     if (merged.length) responseFlags = responseFlags.concat(merged);
     for (const x of passes) mergeKeyAnswers(keyAnswers, x.keyAnswers);
     // Log per-pass counts AND what the union recovered. This is the telemetry that
@@ -2679,6 +2709,41 @@ function relabelEarthquakeFlags(list) {
   }
   if (n) console.log(`[disclosure-intake] ${n} flag(s) labelled ESD were earthquake-statement items, relabelled "${EQ_STATEMENT_NAME}"`);
   return list;
+}
+
+/**
+ * Two kinds of flag the review cannot stand behind, retagged in place for VERIFY.
+ * See the comments at the call site in reconcileAndCallback.
+ */
+function routeUnconfirmedFlags(allFlags) {
+  const fhdsDefault = [];
+  // Read off a SCAN: anything that depends on which box a pen mark sits in, or
+  // on whether a page was seen at all. A blank written field (detail_incomplete,
+  // "the location is left blank") is legible on a scan and is kept.
+  const scanUnconfirmed = [];
+  for (const f of allFlags) {
+    if (!f || f.issue === 'cited_attachment_unseen' || f.issue === 'explanation_on_addendum'
+      || f.issue === 'duplicate_form_copy') continue;
+    const text = `${f.item || ''} ${f.reason || ''}`;
+    // About 3B or 3C, saying nothing is chosen, and NOT claiming 3A is blank: an
+    // unmarked 3A (IS / IS NOT) is a real defect and keeps its chase.
+    const about3BC = /\b3\s*\(?[bc]\b/i.test(text);
+    const nothingChosen = /\b(no|not|none|nothing)\b[^.;]{0,50}\b(select|check|mark|chos|complet)/i.test(text);
+    const blank3A = /\b3\s*\(?a\b[^.;]{0,40}\b(not|no|un)\w*\s*(marked|checked|selected|answered|completed)/i.test(text)
+      || /\b3\s*\(?a\b[^.;]{0,20}\b(blank|empty)/i.test(text);
+    if (/fhds/i.test(String(f.form || '')) && about3BC && nothingChosen && !blank3A) {
+      f.original_issue = f.issue;
+      f.issue = 'fhds_default_option';
+      fhdsDefault.push(f);
+      continue;
+    }
+    if (f.from_scan && f.issue !== 'detail_incomplete') {
+      f.original_issue = f.issue;
+      f.issue = 'scan_unconfirmed';
+      scanUnconfirmed.push(f);
+    }
+  }
+  return { fhdsDefault, scanUnconfirmed };
 }
 
 function sortFlags(list) {
@@ -3461,6 +3526,34 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     unseenAttachment.push(f);
   }
 
+  // FHDS 3B(1) and 3C(1) HAVE NO CHECKBOX: they are what applies when no other
+  // box in 3B / 3C is checked. "No 3C option selected" therefore describes a
+  // valid form (20371 Bluffside: 3A "is NOT", nothing else checked = 3C(1), the
+  // correct pairing). The review does not know that, and telling it would mean
+  // more prompt text, which has displaced a real rule before. So: VERIFY.
+  const { fhdsDefault, scanUnconfirmed } = routeUnconfirmedFlags(allFlags);
+  for (const f of fhdsDefault) {
+    verify.push({
+      item: [f.form, f.item].filter(Boolean).join(' ') || 'FHDS Section 3',
+      note: 'on the FHDS, 3B(1) and 3C(1) have no checkbox and apply when nothing else in 3B / 3C is '
+        + 'checked, so this is usually a valid form (3A "is NOT" with nothing checked = 3C(1)). Check before '
+        + `requesting anything. The review reported: "${String(f.reason || '').trim()}"`,
+    });
+  }
+  for (const f of scanUnconfirmed) {
+    verify.push({
+      item: [f.form, f.item].filter(Boolean).join(' ') || 'this item',
+      note: 'read off a SCANNED page (no text layer), where checkmarks can sit across two rows or two '
+        + 'boxes. Look at the page before requesting anything. The review reported: '
+        + `"${String(f.reason || '').trim()}"`,
+    });
+  }
+  if (fhdsDefault.length || scanUnconfirmed.length) {
+    console.log(`[disclosure-intake] routed to VERIFY (NOT chased): ${fhdsDefault.length} FHDS default-option `
+      + `flag(s), ${scanUnconfirmed.length} flag(s) read off scanned pages: `
+      + `${[...fhdsDefault, ...scanUnconfirmed].map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
+  }
+
   const addendumFlags = allFlags.filter((f) => f.issue === 'explanation_on_addendum');
   // Same reasoning as the addendum flags, one step earlier in the pipeline: the
   // section really is blank on the copy that was reviewed, but a complete copy of
@@ -3475,7 +3568,9 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // response_flags_text all share one order.
   const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => f.issue !== 'explanation_on_addendum'
     && f.issue !== 'duplicate_form_copy'
-    && f.issue !== 'cited_attachment_unseen'));
+    && f.issue !== 'cited_attachment_unseen'
+    && f.issue !== 'fhds_default_option'
+    && f.issue !== 'scan_unconfirmed'));
   for (const f of unseenAttachment) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
     verify.push({
@@ -3820,7 +3915,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold
