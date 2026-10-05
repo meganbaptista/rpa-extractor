@@ -122,4 +122,28 @@ async function recent({ limit = 200 } = {}) {
   }
 }
 
-module.exports = { record, recordError, recent, _internal: { buildRecord, summarize } };
+/**
+ * Every record from the last `days` days, for the daily summary. Keys start with
+ * the UTC date, so the window is chosen from the key list alone (one extra day
+ * either side covers the Pacific offset) and only those bodies are fetched, in
+ * small batches. Never throws.
+ */
+async function since({ days = 7, nowMs = Date.now() } = {}) {
+  try {
+    const s = store();
+    const { blobs = [] } = await s.list();
+    const cutoff = new Date(nowMs - (days + 1) * 86400000).toISOString().slice(0, 10);
+    const keys = blobs.map((b) => b.key).filter((k) => k.slice(0, 10) >= cutoff);
+    const out = [];
+    for (let i = 0; i < keys.length; i += 50) {
+      const part = await Promise.all(keys.slice(i, i + 50).map((k) => s.get(k, { type: 'json' }).catch(() => null)));
+      out.push(...part.filter(Boolean));
+    }
+    return out.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  } catch (err) {
+    console.warn(`[shadow-log] since() read failed: ${err.message}`);
+    return [];
+  }
+}
+
+module.exports = { record, recordError, recent, since, _internal: { buildRecord, summarize } };

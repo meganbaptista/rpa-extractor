@@ -11,6 +11,7 @@
 //   HTML (default):  /.netlify/functions/email-router-log
 //   JSON:            /.netlify/functions/email-router-log?format=json
 //   More rows:       /.netlify/functions/email-router-log?limit=500
+//   More days:       /.netlify/functions/email-router-log?days=30  (daily summary, default 7)
 //
 // Columns: time, mode, branch, skip + which of the 14 rules fired, detected
 // side, the label routing planned, the classifier's would-be assignee +
@@ -24,7 +25,11 @@ const render = require('./lib/shadow-render');
 exports.handler = async function (event) {
   const q = (event && event.queryStringParameters) || {};
   const limit = Math.min(Math.max(parseInt(q.limit, 10) || 200, 1), 2000);
-  const records = await shadowLog.recent({ limit });
+  // Daily summary: the last N days (default 7, ?days=30 for more). The decision
+  // table is the newest `limit` of those, by real time rather than key order.
+  const days = Math.min(Math.max(parseInt(q.days, 10) || 7, 1), 60);
+  const windowed = await shadowLog.since({ days });
+  const records = windowed.length >= limit ? windowed.slice(0, limit) : await shadowLog.recent({ limit });
 
   if (q.format === 'json') {
     return { statusCode: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ count: records.length, records }, null, 2) };
@@ -32,6 +37,7 @@ exports.handler = async function (event) {
   const html = render.page(records, {
     title: 'Email Router — shadow log',
     empty: 'No decisions logged yet. Enable EMAIL_ROUTER_ENABLED=true and wait for the poller.',
+    dailyRecords: windowed,
   });
   return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: html };
 };
