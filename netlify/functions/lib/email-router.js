@@ -169,6 +169,18 @@ async function route(message, labelNames = [], deps = {}) {
     return decision;
   }
 
+  // BRANCH B — a completed DocuSign disclosure envelope, by side (deterministic,
+  // no model call). See personForCompletedDisclosure in routing-config.
+  const completed = config.personForCompletedDisclosure
+    ? config.personForCompletedDisclosure(h.subject, side) : null;
+  if (completed) {
+    decision.plannedLabel = completed.person;
+    decision.reason = `${decision.reason} | completed disclosure envelope (${completed.codes.join(', ')}), `
+      + `${side} side (${sideSource}) -> ${completed.person}`;
+    decision.actions = { addLabels: [completed.person], removeIntake: true, markRead: false };
+    return decision;
+  }
+
   // BRANCH B — the rulebook classifier. Pass strong priors from the thread's
   // labels: buyer/seller side (Edelyn/Ethan) and any label->person hints
   // (e.g. a "Request for Repairs" thread -> Jill).

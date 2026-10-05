@@ -501,6 +501,49 @@ function sideFromLabels(labelNames = []) {
 }
 
 // The person a present side sub-label usually implies (strong prior), or null.
+// ---------------------------------------------------------------------------
+// COMPLETED DISCLOSURE ENVELOPES — deterministic, by side (2026-10-05).
+// "Completed: 11922 Sunshine MCA, SBSA" from DocuSign, buyer side per the deal
+// list, went to Needs Attention: the classifier never read MCA/SBSA as
+// disclosures and guessed Jill @0.55. A DocuSign "Completed:" envelope that
+// names ONLY disclosure form codes is the signed disclosures coming back, so
+// it goes to the side's disclosure owner (SIDE_TAG_ROUTING: buyer -> Edelyn,
+// seller -> Ethan) with no model call. Any other code in the subject (RR, ADM,
+// ETA, CR, a counter, the RPA) or an unknown side leaves it to the classifier.
+// Advisories that ride with the RPA (BIA, BHIA, WFA, FHDA) and RFR (which can
+// mean Request for Repairs) are deliberately NOT in the set.
+// ---------------------------------------------------------------------------
+const DISCLOSURE_CODES = new Set([
+  'TDS', 'SPQ', 'ESD', 'AVID', 'FHDS', 'DSDT', 'LPD', 'WCMD', 'WHSD', 'SFLS', 'MCA', 'SBSA',
+  'WFDA', 'DIA', 'NHD', 'NHDS', 'ABA', 'BHAA', 'CWRA', 'PTR', 'EHA', 'SPT', 'RCSD',
+]);
+// Side qualifiers that may sit beside a code: "LA AVID", "AVID-BA", "RCSD-S".
+const CODE_QUALIFIERS = new Set(['LA', 'BA', 'S', 'B']);
+
+/** The disclosure codes a "Completed:" subject names, or null if it names anything else. */
+function completedDisclosureCodes(subject) {
+  const m = String(subject || '').match(/^(?:\s*(?:re|fwd|fw)\s*:\s*)*completed\s*:\s*(.+)$/i);
+  if (!m) return null;
+  const tokens = m[1].match(/\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*\b/g) || [];
+  const codes = [];
+  for (const t of tokens) {
+    if (!/[A-Z]{2}/.test(t)) continue; // a lone initial or a number-ish token
+    const parts = t.split('-');
+    const core = parts.filter((x) => !CODE_QUALIFIERS.has(x));
+    if (!core.length) continue; // "LA" / "BA" on their own
+    if (core.length !== 1 || !DISCLOSURE_CODES.has(core[0])) return null; // anything else -> classifier
+    codes.push(t);
+  }
+  return codes.length ? codes : null;
+}
+
+function personForCompletedDisclosure(subject, side) {
+  if (!side) return null;
+  const codes = completedDisclosureCodes(subject);
+  const person = codes ? (SIDE_TAG_ROUTING[side] || null) : null;
+  return person ? { person, codes } : null;
+}
+
 function personForSideTag(side) {
   return side ? (SIDE_TAG_ROUTING[side] || null) : null;
 }
@@ -536,6 +579,8 @@ module.exports = {
   matchedCategory,
   personForCategory,
   personForSender,
+  personForCompletedDisclosure,
+  completedDisclosureCodes,
   personForSubject,
   sideFromLabels,
   personForSideTag,
