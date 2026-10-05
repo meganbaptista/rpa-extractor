@@ -104,12 +104,24 @@ function labelsOf(r) {
   return String(r.plannedLabel || '').split('+').map((x) => x.trim()).filter(Boolean);
 }
 
+// Our OWN mail is not incoming: a reply of ours that lands back in the inbox, or
+// a notice sent from our account (AutoCrat). Megan counts incoming only.
+const OWN_DOMAINS = String(process.env.ROUTER_OWN_DOMAINS || 'mytcconcierge.com')
+  .split(',').map((d) => d.trim().toLowerCase()).filter(Boolean);
+function isOwnMail(r) {
+  const addr = String((r && r.from) || '').toLowerCase().split('<').pop().replace(/>.*$/, '').trim();
+  const dom = addr.split('@').pop();
+  return OWN_DOMAINS.includes(dom);
+}
+
 function daily(records, { nowIso = new Date().toISOString() } = {}) {
   const NA = 'Needs Attention';
+  let ownSkipped = 0;
   const days = new Map();
   const people = new Set();
   for (const r of records) {
     if (!r || r.mode === 'error') continue;
+    if (isOwnMail(r)) { ownSkipped++; continue; }
     const key = windowStart(r.at);
     if (!key) continue;
     if (!days.has(key)) days.set(key, { total: 0, cleared: 0, belleOrNa: 0, by: {} });
@@ -133,7 +145,7 @@ function daily(records, { nowIso = new Date().toISOString() } = {}) {
       + others.map((o) => cell(d.by[o])).join('') + cell(d.cleared) + '</tr>';
   }).join('\n');
   return `<h2 style="font-size:15px;margin:14px 0 2px">Daily summary</h2>
-<p class="note">Each day runs 5:30 PM to 5:30 PM Pacific. "Belle + NA" counts each email once, even if it carries both. "Cleared" = skipped or no tag needed. An email carrying two people's labels counts under each.</p>
+<p class="note">Incoming email only: ${ownSkipped} sent from our own address (${esc(OWN_DOMAINS.join(', '))}) not counted. Each day runs 5:30 PM to 5:30 PM Pacific. "Belle + NA" counts each email once, even if it carries both. "Cleared" = skipped or no tag needed. An email carrying two people's labels counts under each.</p>
 <table style="width:auto"><thead><tr>${head}</tr></thead><tbody>
 ${body}
 </tbody></table>`;

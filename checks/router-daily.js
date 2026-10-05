@@ -32,12 +32,14 @@ const recs = [
   { at: '2026-10-04T16:20:00Z', mode: 'live', plannedLabel: 'Edelyn' },
   { at: '2026-10-04T16:30:00Z', mode: 'live', plannedLabel: null, skip: true },
   { at: '2026-10-04T16:40:00Z', mode: 'error', plannedLabel: null },
+  { at: '2026-10-04T16:45:00Z', mode: 'live', plannedLabel: 'Ethan', from: 'Megan Baptista <megan@mytcconcierge.com>' },
 ];
 const html = R.daily(recs, { nowIso: '2026-10-04T17:00:00Z' });
 const row = html.split('<tr>').find((r) => r.includes('Sat Oct 3'));
 const cells = (row.match(/<td class="ctr">(?:<b>)?(\d+)/g) || []).map((c) => +c.replace(/\D+/g, ''));
 // Emails, Belle, NA, Belle+NA, Edelyn, Megan, Cleared
 ok('counts: 5 emails (error excluded), Belle 2, NA 1, Belle+NA 3, Edelyn 1, Megan 1, cleared 1', cells, [5, 2, 1, 3, 1, 1, 1]);
+ok('our own mail is not counted, and the note says so', html.includes('1 sent from our own address'), true);
 ok('current day marked', html.includes('(so far)'), true);
 
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
