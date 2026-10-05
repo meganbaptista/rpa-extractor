@@ -20,12 +20,24 @@ function clf(rec) {
   return `${c.assignee || '?'} @${conf}`;
 }
 
+// The decision time in Pacific, like the daily summary: "2026-10-03 5:06:13 PM".
+const PT_ROW = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+});
+function ptTime(iso) {
+  const ms = Date.parse(iso || '');
+  if (!Number.isFinite(ms)) return String(iso || '');
+  const p = Object.fromEntries(PT_ROW.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second} ${p.dayPeriod}`;
+}
+
 function rows(records) {
   return records.map((r) => {
     const skip = r.skip ? 'SKIP' : 'route';
     const applied = r.applied ? (r.applied.label || r.applied.action) : '';
     return `<tr>
-      <td class="mono">${esc((r.at || '').replace('T', ' ').slice(0, 19))}</td>
+      <td class="mono">${esc(ptTime(r.at))}</td>
       <td>${esc(r.mode)}</td>
       <td class="ctr">${esc(r.branch)}</td>
       <td class="${r.skip ? 'skip' : ''}">${skip}${r.gate_confidence ? `<br><span style="color:#999;font-size:11px">${esc(r.gate_confidence)}</span>` : ''}</td>
@@ -149,11 +161,11 @@ ${dailyRecords ? daily(dailyRecords) : ''}
 <h2 style="font-size:15px;margin:16px 0 2px">Latest ${records.length} decisions</h2>
 ${summary(records)}
 <table>
-<thead><tr><th>time</th><th>mode</th><th>br</th><th>skip</th><th>rule</th><th>side</th><th>planned</th><th>classifier</th><th>applied</th><th>from</th><th>subject</th><th>reason</th></tr></thead>
+<thead><tr><th>time (Pacific)</th><th>mode</th><th>br</th><th>skip</th><th>rule</th><th>side</th><th>planned</th><th>classifier</th><th>applied</th><th>from</th><th>subject</th><th>reason</th></tr></thead>
 <tbody>
 ${rows(records) || `<tr><td colspan="12">${esc(empty)}</td></tr>`}
 </tbody></table>
 </body></html>`;
 }
 
-module.exports = { page, rows, summary, daily, esc, clf, _internal: { windowStart, dayLabel } };
+module.exports = { page, rows, summary, daily, esc, clf, _internal: { windowStart, dayLabel, ptTime } };

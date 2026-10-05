@@ -4,7 +4,7 @@
 //   node checks/router-daily.js
 
 const R = require('../netlify/functions/lib/shadow-render.js');
-const { windowStart, dayLabel } = R._internal;
+const { windowStart, dayLabel, ptTime } = R._internal;
 
 let failed = 0;
 function ok(label, got, want) {
@@ -21,6 +21,8 @@ ok('9 AM Oct 4 PT is still the Oct 3 day', windowStart('2026-10-04T16:00:00Z'), 
 // December is standard time, UTC-8: 5:30 PM PST = 01:30 UTC.
 ok('winter: 5:29 PM PST', windowStart('2026-12-02T01:29:00Z'), '2026-11-30');
 ok('winter: 5:30 PM PST', windowStart('2026-12-02T01:30:00Z'), '2026-12-01');
+ok('row time in Pacific', ptTime('2026-10-04T00:06:13Z'), '2026-10-03 5:06:13 PM');
+ok('winter row time', ptTime('2026-12-02T01:30:00Z'), '2026-12-01 5:30:00 PM');
 ok('label', dayLabel('2026-10-03'), 'Sat Oct 3 5:30 PM to Sun Oct 4 5:30 PM');
 
 const recs = [
