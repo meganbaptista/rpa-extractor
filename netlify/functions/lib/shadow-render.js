@@ -120,30 +120,47 @@ function isOwnMail(r) {
  * under each label any of its messages got that day; a thread whose messages
  * were all skipped / no-tag that day is "cleared". A record with no threadId
  * stands alone (keyed by its messageId).
+ *
+ * Split in two so a CLOSED day can be cached (see shadow-log.dailyAggregates):
+ * aggregate() turns records into { day: { threads: {id: [labels]}, own } },
+ * and daily() renders those. 7 days at ~800 emails/day is ~6,000 records,
+ * which timed out the page (26 s cap) when every load re-read them all.
  */
-function daily(records, { nowIso = new Date().toISOString() } = {}) {
-  const NA = 'Needs Attention';
-  let ownSkipped = 0;
-  const days = new Map();
-  const people = new Set();
-  for (const r of records) {
+function aggregate(records) {
+  const out = {};
+  for (const r of records || []) {
     if (!r || r.mode === 'error') continue;
-    if (isOwnMail(r)) { ownSkipped++; continue; }
     const key = windowStart(r.at);
     if (!key) continue;
-    if (!days.has(key)) days.set(key, { threads: new Map() });
+    if (!out[key]) out[key] = { threads: {}, own: 0 };
+    if (isOwnMail(r)) { out[key].own++; continue; }
     const t = r.threadId || `msg:${r.messageId || r.at}`;
-    const threads = days.get(key).threads;
-    if (!threads.has(t)) threads.set(t, new Set());
-    for (const l of labelsOf(r)) { threads.get(t).add(l); if (l !== 'Belle' && l !== NA) people.add(l); }
+    const set = new Set(out[key].threads[t] || []);
+    for (const l of labelsOf(r)) set.add(l);
+    out[key].threads[t] = [...set];
   }
-  if (!days.size) return '';
+  return out;
+}
+
+function daily(aggs, { nowIso = new Date().toISOString() } = {}) {
+  const NA = 'Needs Attention';
+  const keys = Object.keys(aggs || {});
+  if (!keys.length) return '';
+  const people = new Set();
+  let ownSkipped = 0;
+  for (const k of keys) {
+    ownSkipped += aggs[k].own || 0;
+    for (const ls of Object.values(aggs[k].threads)) for (const l of ls) if (l !== 'Belle' && l !== NA) people.add(l);
+  }
   const others = [...people].sort();
   const current = windowStart(nowIso);
   const head = ['Day (Pacific)', 'Conversations', 'Belle', NA, 'Belle + NA', ...others, 'Cleared']
     .map((h) => `<th>${esc(h)}</th>`).join('');
-  const body = [...days.keys()].sort().reverse().map((k) => {
-    const threads = [...days.get(k).threads.values()];
+  const body = keys.sort().reverse().map((k) => {
+    if (aggs[k].pending) {
+      return `<tr><td>${esc(dayLabel(k))}</td><td colspan="${6 + others.length}" style="color:#999">still counting, refresh the page in a moment</td></tr>`;
+    }
+    const threads = Object.values(aggs[k].threads).map((ls) => new Set(ls));
     const n = (fn) => threads.filter(fn).length;
     const has = (l) => (ls) => ls.has(l);
     const cell = (v, bold) => `<td class="ctr">${bold ? '<b>' : ''}${v || 0}${bold ? '</b>' : ''}</td>`;
@@ -159,7 +176,7 @@ ${body}
 </tbody></table>`;
 }
 
-function page(records, { title = 'Email Router — decisions', note = '', empty = 'No decisions.', dailyRecords = null } = {}) {
+function page(records, { title = 'Email Router — decisions', note = '', empty = 'No decisions.', dailyAggs = null } = {}) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
 <style>
   body{font:13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;margin:20px;color:#111}
@@ -177,7 +194,7 @@ function page(records, { title = 'Email Router — decisions', note = '', empty 
 </style></head><body>
 <h1>${esc(title)}</h1>
 ${note ? `<p class="note">${esc(note)}</p>` : ''}
-${dailyRecords ? daily(dailyRecords) : ''}
+${dailyAggs ? daily(dailyAggs) : ''}
 <h2 style="font-size:15px;margin:16px 0 2px">Latest ${records.length} decisions</h2>
 ${summary(records)}
 <table>
@@ -188,4 +205,4 @@ ${rows(records) || `<tr><td colspan="12">${esc(empty)}</td></tr>`}
 </body></html>`;
 }
 
-module.exports = { page, rows, summary, daily, esc, clf, _internal: { windowStart, dayLabel, ptTime } };
+module.exports = { page, rows, summary, daily, aggregate, esc, clf, _internal: { windowStart, dayLabel, ptTime } };

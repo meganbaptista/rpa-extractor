@@ -122,28 +122,108 @@ async function recent({ limit = 200 } = {}) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// FAST READS for the log page (2026-10-05). The page has 26 seconds. Listing
+// the WHOLE store and reading ~6,000 records one by one timed it out, so:
+//   - keys are listed by DATE PREFIX ("2026-10-04/"), only for the dates needed;
+//   - bodies are fetched with wide concurrency;
+//   - a CLOSED day's summary is computed once and cached in its own store, so
+//     a normal load only reads today's records (plus any day not yet cached).
+// ---------------------------------------------------------------------------
+const DAILY_STORE = 'email-router-daily';
+const DAILY_VERSION = 'v1';
+
+function dailyStore() {
+  return getStore({
+    name: DAILY_STORE,
+    siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID,
+    token: process.env.NETLIFY_BLOBS_TOKEN,
+  });
+}
+
+async function keysForDates(s, dates) {
+  const lists = await Promise.all(dates.map((d) => s.list({ prefix: `${d}/` }).catch(() => ({ blobs: [] }))));
+  return lists.flatMap((l) => (l.blobs || []).map((b) => b.key));
+}
+
+async function getMany(s, keys, width = 150) {
+  const out = new Array(keys.length);
+  let next = 0;
+  async function worker() {
+    while (next < keys.length) {
+      const i = next++;
+      out[i] = await s.get(keys[i], { type: 'json' }).catch(() => null);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(width, keys.length) }, worker));
+  return out.filter(Boolean);
+}
+
+const utcDate = (ms) => new Date(ms).toISOString().slice(0, 10);
+const addDays = (date, n) => utcDate(Date.parse(`${date}T00:00:00Z`) + n * 86400000);
+
 /**
- * Every record from the last `days` days, for the daily summary. Keys start with
- * the UTC date, so the window is chosen from the key list alone (one extra day
- * either side covers the Pacific offset) and only those bodies are fetched, in
- * small batches. Never throws.
+ * The newest `limit` decisions by real time. Lists today's date prefix, then
+ * earlier ones, until there are enough keys; never the whole store.
  */
-async function since({ days = 7, nowMs = Date.now() } = {}) {
+async function recentFast({ limit = 200, nowMs = Date.now() } = {}) {
   try {
     const s = store();
-    const { blobs = [] } = await s.list();
-    const cutoff = new Date(nowMs - (days + 1) * 86400000).toISOString().slice(0, 10);
-    const keys = blobs.map((b) => b.key).filter((k) => k.slice(0, 10) >= cutoff);
-    const out = [];
-    for (let i = 0; i < keys.length; i += 50) {
-      const part = await Promise.all(keys.slice(i, i + 50).map((k) => s.get(k, { type: 'json' }).catch(() => null)));
-      out.push(...part.filter(Boolean));
+    let keys = [];
+    for (let i = 0; i < 14 && keys.length < limit; i++) {
+      keys = keys.concat(await keysForDates(s, [utcDate(nowMs - i * 86400000)]));
     }
-    return out.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    const recs = await getMany(s, keys);
+    return recs.sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))).slice(0, limit);
   } catch (err) {
-    console.warn(`[shadow-log] since() read failed: ${err.message}`);
+    console.warn(`[shadow-log] recentFast() read failed: ${err.message}`);
     return [];
   }
 }
 
-module.exports = { record, recordError, recent, since, _internal: { buildRecord, summarize } };
+/**
+ * Per-day conversation aggregates for the last `days` days (render.daily's
+ * input). A day is closed an hour after it ends; closed days come from the
+ * cache, and are written to it the first time they are computed.
+ */
+async function dailyAggregates({ days = 7, nowMs = Date.now(), render }) {
+  const { windowStart } = render._internal;
+  const today = windowStart(new Date(nowMs).toISOString());
+  const windows = Array.from({ length: days }, (_, i) => addDays(today, -i));
+  // A day that starts at 5:30 PM Pacific on date W ends at W+1 5:30 PM PT,
+  // which is W+2 00:30/01:30 UTC at the latest; one hour of slack for late writes.
+  const closed = (w) => Date.parse(`${addDays(w, 2)}T02:30:00Z`) + 3600000 < nowMs;
+  const aggs = {};
+  let cache = null;
+  try { cache = dailyStore(); } catch (_) { cache = null; }
+  if (cache) {
+    const hits = await Promise.all(windows.filter(closed).map((w) =>
+      cache.get(`${DAILY_VERSION}/${w}`, { type: 'json' }).then((v) => [w, v]).catch(() => [w, null])));
+    for (const [w, v] of hits) if (v) aggs[w] = v;
+  }
+  // Newest first, inside a time budget: the page has 26 s, and the first load
+  // after a deploy has nothing cached. A day not reached is marked pending and
+  // computed (then cached) on a later load. Each day's records span 3 UTC
+  // dates, shared with its neighbours, so each date is read once.
+  const missing = windows.filter((w) => !aggs[w]);
+  const deadline = Date.now() + 15000;
+  const byDate = new Map();
+  const s = missing.length ? store() : null;
+  for (const w of missing) {
+    if (Date.now() > deadline) { aggs[w] = { pending: true, threads: {}, own: 0 }; continue; }
+    const dates = [addDays(w, 0), addDays(w, 1), addDays(w, 2)].filter((d) => !byDate.has(d));
+    if (dates.length) {
+      const recs = await getMany(s, await keysForDates(s, dates));
+      for (const d of dates) byDate.set(d, []);
+      for (const r of recs) { const d = String(r.at || '').slice(0, 10); if (byDate.has(d)) byDate.get(d).push(r); }
+    }
+    const recs = [addDays(w, 0), addDays(w, 1), addDays(w, 2)].flatMap((d) => byDate.get(d) || []);
+    aggs[w] = render.aggregate(recs)[w] || { threads: {}, own: 0 };
+    if (cache && closed(w)) await cache.setJSON(`${DAILY_VERSION}/${w}`, aggs[w]).catch(() => {});
+  }
+  // Drop days with nothing at all (before the router existed).
+  for (const w of Object.keys(aggs)) if (!aggs[w].pending && !Object.keys(aggs[w].threads).length && !aggs[w].own) delete aggs[w];
+  return aggs;
+}
+
+module.exports = { record, recordError, recent, recentFast, dailyAggregates, _internal: { buildRecord, summarize } };

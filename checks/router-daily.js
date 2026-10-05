@@ -36,7 +36,7 @@ const recs = [
   { at: '2026-10-04T16:40:00Z', mode: 'error', threadId: 't6', plannedLabel: null },
   { at: '2026-10-04T16:45:00Z', mode: 'live', threadId: 't7', plannedLabel: 'Ethan', from: 'Megan Baptista <megan@mytcconcierge.com>' },
 ];
-const html = R.daily(recs, { nowIso: '2026-10-04T17:00:00Z' });
+const html = R.daily(R.aggregate(recs), { nowIso: '2026-10-04T17:00:00Z' });
 const row = html.split('<tr>').find((r) => r.includes('Sat Oct 3'));
 const cells = (row.match(/<td class="ctr">(?:<b>)?(\d+)/g) || []).map((c) => +c.replace(/\D+/g, ''));
 // Conversations, Belle, NA, Belle+NA, Edelyn, Megan, Cleared
