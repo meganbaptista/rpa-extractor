@@ -26,19 +26,21 @@ ok('winter row time', ptTime('2026-12-02T01:30:00Z'), '2026-12-01 5:30:00 PM');
 ok('label', dayLabel('2026-10-03'), 'Sat Oct 3 5:30 PM to Sun Oct 4 5:30 PM');
 
 const recs = [
-  { at: '2026-10-04T16:00:00Z', mode: 'live', plannedLabel: 'Belle' },
-  { at: '2026-10-04T16:05:00Z', mode: 'live', plannedLabel: 'Needs Attention' },
-  { at: '2026-10-04T16:10:00Z', mode: 'live', plannedLabel: 'Belle + Megan' },
-  { at: '2026-10-04T16:20:00Z', mode: 'live', plannedLabel: 'Edelyn' },
-  { at: '2026-10-04T16:30:00Z', mode: 'live', plannedLabel: null, skip: true },
-  { at: '2026-10-04T16:40:00Z', mode: 'error', plannedLabel: null },
-  { at: '2026-10-04T16:45:00Z', mode: 'live', plannedLabel: 'Ethan', from: 'Megan Baptista <megan@mytcconcierge.com>' },
+  { at: '2026-10-04T16:00:00Z', mode: 'live', threadId: 't1', plannedLabel: 'Belle' },
+  { at: '2026-10-04T16:02:00Z', mode: 'live', threadId: 't1', plannedLabel: 'Belle' },        // reply: same conversation
+  { at: '2026-10-04T16:05:00Z', mode: 'live', threadId: 't2', plannedLabel: 'Needs Attention' },
+  { at: '2026-10-04T16:10:00Z', mode: 'live', threadId: 't3', plannedLabel: 'Belle + Megan' },
+  { at: '2026-10-04T16:20:00Z', mode: 'live', threadId: 't4', plannedLabel: 'Edelyn' },
+  { at: '2026-10-04T16:25:00Z', mode: 'live', threadId: 't4', plannedLabel: null, skip: true }, // "thanks" on t4
+  { at: '2026-10-04T16:30:00Z', mode: 'live', threadId: 't5', plannedLabel: null, skip: true },
+  { at: '2026-10-04T16:40:00Z', mode: 'error', threadId: 't6', plannedLabel: null },
+  { at: '2026-10-04T16:45:00Z', mode: 'live', threadId: 't7', plannedLabel: 'Ethan', from: 'Megan Baptista <megan@mytcconcierge.com>' },
 ];
 const html = R.daily(recs, { nowIso: '2026-10-04T17:00:00Z' });
 const row = html.split('<tr>').find((r) => r.includes('Sat Oct 3'));
 const cells = (row.match(/<td class="ctr">(?:<b>)?(\d+)/g) || []).map((c) => +c.replace(/\D+/g, ''));
-// Emails, Belle, NA, Belle+NA, Edelyn, Megan, Cleared
-ok('counts: 5 emails (error excluded), Belle 2, NA 1, Belle+NA 3, Edelyn 1, Megan 1, cleared 1', cells, [5, 2, 1, 3, 1, 1, 1]);
+// Conversations, Belle, NA, Belle+NA, Edelyn, Megan, Cleared
+ok('counts conversations: 5 (a reply is not a new one), Belle 2, NA 1, Belle+NA 3, Edelyn 1, Megan 1, cleared 1', cells, [5, 2, 1, 3, 1, 1, 1]);
 ok('our own mail is not counted, and the note says so', html.includes('1 sent from our own address'), true);
 ok('current day marked', html.includes('(so far)'), true);
 

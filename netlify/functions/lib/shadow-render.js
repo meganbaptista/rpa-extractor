@@ -114,6 +114,13 @@ function isOwnMail(r) {
   return OWN_DOMAINS.includes(dom);
 }
 
+/**
+ * Counted in CONVERSATIONS, not emails (Megan, 2026-10-05: "we don't want to
+ * count how many emails are in the thread"). A thread is counted once per day
+ * under each label any of its messages got that day; a thread whose messages
+ * were all skipped / no-tag that day is "cleared". A record with no threadId
+ * stands alone (keyed by its messageId).
+ */
 function daily(records, { nowIso = new Date().toISOString() } = {}) {
   const NA = 'Needs Attention';
   let ownSkipped = 0;
@@ -124,28 +131,29 @@ function daily(records, { nowIso = new Date().toISOString() } = {}) {
     if (isOwnMail(r)) { ownSkipped++; continue; }
     const key = windowStart(r.at);
     if (!key) continue;
-    if (!days.has(key)) days.set(key, { total: 0, cleared: 0, belleOrNa: 0, by: {} });
-    const d = days.get(key);
-    d.total++;
-    const labels = labelsOf(r);
-    if (!labels.length) { d.cleared++; continue; }
-    for (const l of labels) { d.by[l] = (d.by[l] || 0) + 1; if (l !== 'Belle' && l !== NA) people.add(l); }
-    if (labels.includes('Belle') || labels.includes(NA)) d.belleOrNa++;
+    if (!days.has(key)) days.set(key, { threads: new Map() });
+    const t = r.threadId || `msg:${r.messageId || r.at}`;
+    const threads = days.get(key).threads;
+    if (!threads.has(t)) threads.set(t, new Set());
+    for (const l of labelsOf(r)) { threads.get(t).add(l); if (l !== 'Belle' && l !== NA) people.add(l); }
   }
   if (!days.size) return '';
   const others = [...people].sort();
   const current = windowStart(nowIso);
-  const head = ['Day (Pacific)', 'Emails', 'Belle', NA, 'Belle + NA', ...others, 'Cleared']
+  const head = ['Day (Pacific)', 'Conversations', 'Belle', NA, 'Belle + NA', ...others, 'Cleared']
     .map((h) => `<th>${esc(h)}</th>`).join('');
   const body = [...days.keys()].sort().reverse().map((k) => {
-    const d = days.get(k);
+    const threads = [...days.get(k).threads.values()];
+    const n = (fn) => threads.filter(fn).length;
+    const has = (l) => (ls) => ls.has(l);
     const cell = (v, bold) => `<td class="ctr">${bold ? '<b>' : ''}${v || 0}${bold ? '</b>' : ''}</td>`;
     return `<tr><td>${esc(dayLabel(k))}${k === current ? ' <span style="color:#999">(so far)</span>' : ''}</td>`
-      + cell(d.total) + cell(d.by.Belle, true) + cell(d.by[NA], true) + cell(d.belleOrNa, true)
-      + others.map((o) => cell(d.by[o])).join('') + cell(d.cleared) + '</tr>';
+      + cell(threads.length) + cell(n(has('Belle')), true) + cell(n(has(NA)), true)
+      + cell(n((ls) => ls.has('Belle') || ls.has(NA)), true)
+      + others.map((o) => cell(n(has(o)))).join('') + cell(n((ls) => !ls.size)) + '</tr>';
   }).join('\n');
   return `<h2 style="font-size:15px;margin:14px 0 2px">Daily summary</h2>
-<p class="note">Incoming email only: ${ownSkipped} sent from our own address (${esc(OWN_DOMAINS.join(', '))}) not counted. Each day runs 5:30 PM to 5:30 PM Pacific. "Belle + NA" counts each email once, even if it carries both. "Cleared" = skipped or no tag needed. An email carrying two people's labels counts under each.</p>
+<p class="note">Counted in conversations: an email thread counts once per day, however many replies it had. Incoming email only: ${ownSkipped} sent from our own address (${esc(OWN_DOMAINS.join(', '))}) not counted. Each day runs 5:30 PM to 5:30 PM Pacific. A conversation is counted under every label it got that day, so the person columns can add up to more than the total; "Belle + NA" counts it once. "Cleared" = every message that day was skipped or needed no tag.</p>
 <table style="width:auto"><thead><tr>${head}</tr></thead><tbody>
 ${body}
 </tbody></table>`;
