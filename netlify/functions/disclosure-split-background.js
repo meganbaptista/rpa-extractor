@@ -411,6 +411,27 @@ function uniqueName(base, taken) {
 // object refs that make pdf-lib copyPages emit blank pages). Used only as the
 // per-page / whole-form fallback for pages that can't be vector-copied.
 // Returns [{pageNumber, png}].
+/**
+ * Render just these 1-indexed pages, four per parser, destroying each parser
+ * before the next. Rendering a whole 73-page packet in one parser is the shape
+ * that ran the intake out of memory (1148 MB measured on 80 pages); four at a
+ * time stays near 670 MB. Same renderer and scale as renderAllPages.
+ */
+const RENDER_CHUNK_PAGES = 4;
+async function renderPages(buffer, pageNums) {
+  const out = [];
+  for (let i = 0; i < pageNums.length; i += RENDER_CHUNK_PAGES) {
+    const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
+    try {
+      const result = await parser.getScreenshot({ scale: RENDER_SCALE, partial: pageNums.slice(i, i + RENDER_CHUNK_PAGES) });
+      for (const p of (result.pages || [])) if (p.data) out.push({ pageNumber: p.pageNumber, png: Buffer.from(p.data) });
+    } finally {
+      await parser.destroy();
+    }
+  }
+  return out;
+}
+
 async function renderAllPages(buffer) {
   const parser = new PDFParse({ data: new Uint8Array(buffer), CanvasFactory });
   try {
@@ -527,18 +548,34 @@ exports.handler = async function (event) {
     for (let p = 1; p <= pageCount; p++) {
       if (sourceContentBytes(srcDoc, p - 1) < MIN_CONTENT_BYTES) blankPages.add(p);
     }
-    if (blankPages.size) {
+    /**
+     * AN ENCRYPTED PDF CANNOT BE VECTOR-COPIED (11507 Orum, 2026-10-05).
+     *
+     * "Seller Disclosures (SS)" was RC4 128-bit owner-password protected: it
+     * opens with no password, and pdfjs (strips, audit, raster) decrypts it on
+     * the fly, so identification worked. pdf-lib does NOT decrypt; loaded with
+     * ignoreEncryption it copied the still-encrypted streams into new,
+     * unencrypted files, and all 73 pages of every split file came out blank
+     * ("zlib: incorrect header check"). Every page of an encrypted source takes
+     * the raster path instead: the file is an image of the page, but it is the
+     * page.
+     */
+    if (srcDoc.isEncrypted) {
+      for (let p = 1; p <= pageCount; p++) blankPages.add(p);
+      console.warn(`[disclosure-split] source PDF is ENCRYPTED; pdf-lib cannot copy its pages, so all ${pageCount} page(s) are rendered as images`);
+    } else if (blankPages.size) {
       console.log(`[disclosure-split] ${blankPages.size} page(s) have unresolvable content -> raster fallback for those: ${[...blankPages].join(',')}`);
     }
 
-    // Memoized rasterizer: renders the whole packet once, on first need.
-    let _pageImages = null;
-    const getImages = async () => {
-      if (_pageImages) return _pageImages;
-      console.log(`[disclosure-split] rasterizing ${pageCount} page(s) for fallback...`);
-      _pageImages = await renderAllPages(buffer);
-      console.log(`[disclosure-split] rendered ${_pageImages.length} fallback image(s)`);
-      return _pageImages;
+    // Memoized rasterizer: renders only the pages a form needs, on first need,
+    // and keeps them for any later form that shares a page.
+    const rendered = new Map();
+    const getImages = async (pageNums) => {
+      const want = [...new Set(pageNums)].filter((n) => !rendered.has(n));
+      if (want.length) {
+        for (const img of await renderPages(buffer, want)) rendered.set(img.pageNumber, img);
+      }
+      return pageNums.map((n) => rendered.get(n)).filter(Boolean);
     };
 
     // Build one form's PDF from the given 1-indexed page numbers, in order.
@@ -550,7 +587,7 @@ exports.handler = async function (event) {
         const out = await PDFDocument.create();
         const vectorNums = pageNums.filter((n) => !blankPages.has(n));
         const needImage = pageNums.some((n) => blankPages.has(n));
-        const images = needImage ? await getImages() : [];
+        const images = needImage ? await getImages(pageNums.filter((n) => blankPages.has(n))) : [];
         const copied = vectorNums.length
           ? await out.copyPages(srcDoc, vectorNums.map((n) => n - 1))
           : [];
@@ -568,7 +605,7 @@ exports.handler = async function (event) {
         return Buffer.from(await out.save());
       } catch (err) {
         console.warn(`[disclosure-split] vector split failed (${err.message}); using image fallback`);
-        return buildImagePdf(await getImages(), pageNums);
+        return buildImagePdf(await getImages(pageNums), pageNums);
       }
     };
     const extract = (pages) => buildFormPdf(pages);
