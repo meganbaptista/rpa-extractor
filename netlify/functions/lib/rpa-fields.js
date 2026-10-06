@@ -85,6 +85,8 @@ const FIELDS = {
       buyer_agent_commission_amount: { type: "string", description: "Buyer's broker compensation from RPA paragraph 3G(3). Either percentage (e.g. '2.5%') or fixed amount (e.g. '$15,000')." },
       seller_credit_referenced: { type: "string", description: "Yes/No. 'Yes' if any Seller credit to Buyer is referenced in paragraph 3G(1) or 3G(2); 'No' otherwise." },
       is_all_cash: { type: "string", description: "Yes/No. 'Yes' if 'All Cash' box is checked in RPA paragraph 3A; 'No' if a loan amount is specified." },
+      // Megan, 2026-10-06: read it off the boxes so the wizard's "FHA/VA loan?" is filled and she only verifies.
+      fha_va_loan: { type: "string", description: "Yes/No. 'Yes' ONLY if the 'FHA' box or the 'VA' box is CHECKED in RPA paragraph 3E(1) (First loan) or 3E(2) (Additional financed amount), in the 'Conventional or, if checked' column; also 'Yes' if a counter offer or addendum changes the financing to FHA or VA. 'No' when those boxes are empty (conventional), and on an all-cash offer. TRAP: the row 'If FHA or VA checked, Deliver list of lender required repairs' is printed on EVERY RPA - it is a label, not a checked box, and never means Yes. Read the checkbox itself." },
 
       // ─── HOME WARRANTY ────────────────────────────────────────────────────
       home_warranty: { type: "string", description: "Yes/No. 'Yes' if home warranty is included per RPA paragraph 3Q(18); 'No' if 'Buyer waives home warranty plan' is checked." },
