@@ -464,9 +464,23 @@ function continuesDocument(current, r) {
     if (m === expected) return true;
   }
   // A branded form's counter doing the same, where neither prints a code.
+  //
+  // READ BOTH PLACES THE NUMBER CAN LAND. The strip reader files a footer's
+  // "Page 7 of 116" into page_m/page_n (r.m/r.n) as often as into `counter`,
+  // and this used to look at `counter` only. A 116-page home inspection report
+  // on 2026-10-06 numbered every page and still split into 31 "documents", one
+  // per section heading (Roof, Plumbing, Bathrooms...), each warned "starts
+  // inside ...'s declared span of 116 page(s)" and split anyway.
+  //
+  // A stated total that contradicts the document's own declared length is a
+  // different document that happens to be on the same page number, so it does
+  // not continue.
   if (!r.carCode && !current.carCode) {
     const ctr = parseCounter(r.counter);
-    if (ctr.m === expected && ctr.m > 1) return true;
+    const m = ctr.m || r.m || 0;
+    const n = ctr.n || r.n || 0;
+    if (n && current.declaredLength && n !== current.declaredLength) return false;
+    if (m === expected && m > 1) return true;
   }
   return false;
 }

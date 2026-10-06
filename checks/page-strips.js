@@ -257,5 +257,23 @@ ok('shuffled input gives the same spans',
          row(2, { carCode: 'TDS', m: 2, n: 3 })]),
   'pp1-3');
 
+// --- a long branded report numbered in page_m/page_n (2026-10-06) ------------
+// A 116-page home inspection report: a section heading on most pages, and
+// "Page m of 116" read into m/n rather than `counter`. Must be ONE document.
+{
+  const titles = { 1: 'THANK YOU!', 2: 'Table Of Contents', 4: 'ABOUT YOUR INSPECTION', 6: 'Report Summary',
+    11: 'Inspection Details', 14: 'Exterior Areas', 25: 'Roof', 33: 'Plumbing', 116: 'Glossary' };
+  const report = Array.from({ length: 116 }, (_, i) => row(i + 1, { title: titles[i + 1] || '', m: i + 1, n: 116 }));
+  ok('116-page report numbered in m/n stays one document', spans(report), 'pp1-116');
+  const packet = [
+    row(1, { title: 'WCMD', carCode: 'WCMD', m: 1, n: 1 }),
+    ...report.map((r) => ({ ...r, page: r.page + 1 })),
+    row(118, { title: 'BUYER MATERIAL ISSUES', m: 1, n: 1 }),
+  ];
+  ok('...and is still bounded on both sides', spans(packet), 'pp1 pp2-117 pp118');
+  ok('a page numbered "2 of 5" does not continue a "1 of 116" report',
+    spans([row(1, { title: 'REPORT', m: 1, n: 116 }), row(2, { title: 'OTHER FORM', m: 2, n: 5 })]), 'pp1 pp2');
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);
