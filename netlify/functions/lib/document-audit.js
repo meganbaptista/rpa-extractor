@@ -582,6 +582,23 @@ function applySplit(doc, splitAfter) {
 }
 
 /** Audit one group of documents in a single call. */
+/**
+ * A group whose answer is still too long is halved and each half audited,
+ * down to a single document, rather than sending the whole group to Unsorted.
+ */
+async function auditGroupSplitting(group, allDocuments, carve, note) {
+  try {
+    return await auditGroup(group, allDocuments, carve, note);
+  } catch (err) {
+    if (!/max_tokens/i.test(String(err && err.message)) || group.length < 2) throw err;
+    const mid = Math.ceil(group.length / 2);
+    console.warn(`[document-audit] ${note}: output limit hit on ${group.length} document(s), retrying as ${mid} + ${group.length - mid}`);
+    const a = await auditGroupSplitting(group.slice(0, mid), allDocuments, carve, `${note} (a)`);
+    const b = await auditGroupSplitting(group.slice(mid), allDocuments, carve, `${note} (b)`);
+    return [...a, ...b];
+  }
+}
+
 async function auditGroup(group, allDocuments, carve, note) {
   const content = [];
   const carved = [];
@@ -600,7 +617,10 @@ async function auditGroup(group, allDocuments, carve, note) {
   content.push({ type: 'text', text: `${packetContext(allDocuments)}\n\n${RULES}\n\n${SHAPE}` });
 
   const raw = await callClaude({
-    fn: 'disclosure-audit', model: MODEL, content, maxTokens: 8000,
+    // 8000 covered thinking AND the answer, and since every footer initials
+    // box became a line (Tourmaline) a 5-document group ran out: 3627 Cody,
+    // 2026-10-08, 13 pages to Unsorted. See auditGroupSplitting for the rest.
+    fn: 'disclosure-audit', model: MODEL, content, maxTokens: 32000,
     effort: 'high',        // the signature audit is the part that needs thinking
     note,
   });
@@ -637,7 +657,7 @@ async function auditDocuments(documents, carve, label = '', pass = 1) {
   const groups = groupForAudit(documents);
   const perGroup = await mapLimit(groups, AUDIT_CONCURRENCY, (group, g) => {
     const note = `${label} audit ${g + 1}/${groups.length}`;
-    return auditGroup(group, documents, carve, note).catch((err) => {
+    return auditGroupSplitting(group, documents, carve, note).catch((err) => {
       // One failed call loses its own documents, not the packet. They come
       // back unnamed with the reason attached, which routes them to review.
       console.warn(`[document-audit] ${note} failed: ${err.message}`);

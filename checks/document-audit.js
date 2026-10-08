@@ -568,5 +568,18 @@ ok('AAA with no side stays plain',
     'NeedSS');
 }
 
+// --- the DSDT folds into the FHDS (3627 Cody, 2026-10-08) --------------------
+{
+  const { mergeAddenda } = split._internal;
+  const forms = [
+    { code: 'FHDS', name: 'Fire Hardening and Defensible Space Disclosure and Addendum', pages: [10, 11] },
+    { code: 'DSDT', name: 'Defensible Space Decision Tree', pages: [12, 13] },
+    { code: 'SPQ', name: 'Seller Property Questionnaire', pages: [14, 15] },
+  ];
+  ok('DSDT merges into the FHDS', mergeAddenda(forms).map((f) => `${f.code}:${f.pages.join(',')}`), ['FHDS:10,11,12,13', 'SPQ:14,15']);
+  const alone = mergeAddenda([{ code: 'DSDT', name: 'Defensible Space Decision Tree', pages: [3, 4] }, { code: 'SPQ', pages: [5] }]);
+  ok('with no FHDS, the DSDT files alone as FX', statusSuffix(alone.find((f) => f.code === 'DSDT')), 'FX');
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

@@ -173,6 +173,7 @@ function isUnidentified(form) {
 // Suffix style is Megan's own filing shorthand (NB, NS, NBA, NLA, NB+S), set
 // 2026-09-04 to match how she hand-names these in the escrow folders.
 function statusSuffix(form) {
+  if (form.statusOverride) return form.statusOverride;
   if (isMarkOnlyDoc(form)) {
     return normSigners(form.present_signers).length ? 'FX' : 'NB';
   }
@@ -238,7 +239,36 @@ function isTOA(f) {
 // absent, the form whose pages end immediately before the TOA (it physically
 // follows the form it continues). A TOA with no locatable parent is left as its
 // own form. Returns the surviving (non-merged) forms, page ranges re-sorted.
+/**
+ * THE DSDT IS THE FHDS'S INSTRUCTIONS, NOT A DOCUMENT OF ITS OWN (3627 Cody,
+ * 2026-10-08). The Defensible Space Decision Tree (C.A.R. Form DSDT) is a
+ * two-page guide to completing FHDS paragraph 3, with no signature lines, so
+ * filed alone it came out "NeedReview" and asked a human to check a signature
+ * that cannot exist. Megan: ignore it, or it goes in with the FHDS. It goes in
+ * with the FHDS whenever one is in the delivery; with no FHDS it files alone as
+ * FX, since there is nothing on it to sign.
+ */
+const isDSDT = (f) => clean(f.code).toUpperCase() === 'DSDT' || /defensible\s+space\s+decision\s+tree/i.test(clean(f.name));
+const isFHDS = (f) => clean(f.code).toUpperCase() === 'FHDS' || /fire\s+hardening\s+and\s+defensible\s+space/i.test(clean(f.name));
+
+function mergeDecisionTrees(allForms) {
+  const fhds = allForms.find(isFHDS);
+  for (const f of allForms) {
+    if (!isDSDT(f)) continue;
+    if (fhds) {
+      fhds.pages = [...new Set([...fhds.pages, ...f.pages])].sort((a, b) => a - b);
+      f._merged = true;
+      console.log(`[disclosure-split] merged DSDT (pages ${f.pages.join(',')}) into the FHDS`);
+    } else {
+      f.required_signers = []; f.present_signers = []; f.signerAmbiguity = 0;
+      f.statusOverride = 'FX';
+    }
+  }
+  return allForms.filter((f) => !f._merged);
+}
+
 function mergeAddenda(allForms) {
+  allForms = mergeDecisionTrees(allForms);
   const parents = allForms.filter((f) => !isTOA(f));
   const toas = allForms.filter((f) => isTOA(f));
   if (!toas.length || !parents.length) return allForms;
@@ -947,4 +977,4 @@ exports.handler = async function (event) {
 // Exposed for checks/disclosure-split-naming.js, following lib/skip-gate.js's
 // _internal convention. The filename a document lands under is what Megan
 // actually sees, so it is worth asserting without a Drive upload.
-module.exports._internal = { statusSuffix, formLabel, isUnidentified, mergeAddenda, clean, normSigners, brokerageName, nameCarriesBrokerage };
+module.exports._internal = { mergeAddenda, statusSuffix, formLabel, isUnidentified, mergeAddenda, clean, normSigners, brokerageName, nameCarriesBrokerage };
