@@ -169,7 +169,15 @@ function check(message) {
       const shownBase = baseDomain(shown[1].toLowerCase().replace(/^www\./, ''));
       // One company, two of its own domains (DocuSign shows "Docusign.com" and
       // links docusign.net) is not a disguise.
-      const sameBrand = BRANDS.some((b) => b.domains.test(shownBase) && b.domains.test(base));
+      // A company linking its OWN site through its own tracking domain: loanDepot
+      // mail from loandepot.com shows "www.loanDepot.com" and goes to
+      // click.email-loandepot.com (2026-10-09 sweep). Shown site = the verified
+      // sender's domain, and the real host carries the same company name.
+      const label = (d) => String(d || '').split('.')[0];
+      const ownSite = shownBase === fromDomain && label(fromDomain).length >= 4
+        && host.replace(/[^a-z0-9]/g, '').includes(label(fromDomain).replace(/[^a-z0-9]/g, ''))
+        && !/\bdmarc=fail\b/i.test(String(h['authentication-results'] || ''));
+      const sameBrand = ownSite || BRANDS.some((b) => b.domains.test(shownBase) && b.domains.test(base));
       if (shownBase && base && shownBase !== base && !sameBrand && !CLICK_TRACKERS.test(host)) {
         strong.push(`a link shows "${shown[1]}" but actually goes to ${host}`);
       }

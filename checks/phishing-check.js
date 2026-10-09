@@ -131,6 +131,16 @@ ok('sweep: escrow amendment through a link-protection service, mentions wiring',
   from: 'Dawn Dolan <dawn@pacificcescrow.com>', text: 'Attached is the amendment. Please wire funds for closing per the instructions.',
   html: '<a href="https://url.emailprotection.link/?x">www.pacificcescrow.com</a>' })).suspicious, false);
 
+ok('sweep: loanDepot linking its own site through its own tracking domain', check(msg({
+  from: 'Brian Border <bborder@loandepot.com>', text: 'Underwriting submitted.',
+  html: '<a href="https://click.email-loandepot.com/x">www.loanDepot.com</a>' })).suspicious, false);
+ok('but a look-alike sender doing the same IS caught', check(msg({
+  from: 'Brian Border <bborder@loandepot.com>', auth: 'mx.google.com; dmarc=fail',
+  text: 'Underwriting submitted.', html: '<a href="https://click.email-loandepot.com/x">www.loanDepot.com</a>' })).suspicious, true);
+ok('and showing loandepot.com but going to an unrelated site is caught', check(msg({
+  from: 'Brian Border <bborder@loandepot.com>', text: 'Underwriting submitted.',
+  html: '<a href="https://secure-login-portal.top/x">www.loanDepot.com</a>' })).suspicious, true);
+
 ok('a plain escrow email with no links', check(msg({ text: 'Attached are the escrow instructions for 123 Main St.' })).suspicious, false);
 
 ok('an escrow email linking to its own site', check(msg({
