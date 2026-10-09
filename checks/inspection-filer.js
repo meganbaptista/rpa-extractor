@@ -39,49 +39,53 @@ function fakeDrive(existing = {}) {
     uploadMultipart: async ({ name, parents }) => { uploads.push(`${parents[0]}:${name}`); return { id: 'x' }; },
   };
 }
-const gmail = { getAttachment: async () => Buffer.from('%PDF') };
+const TEXT = {};   // attachmentId -> first-page text
+const gmail = { getAttachment: async (mid, aid) => Buffer.from(`%PDF ${aid}`) };
+const pdfHeadText = async (bytes) => TEXT[String(bytes).slice(5)] || '';
 const pdf = (filename) => ({ filename, mimeType: 'application/pdf', attachmentId: `a-${filename}` });
 const msg = (subject, files, text = '') => ({ id: 'm1', headers: { subject }, attachments: files.map(pdf), newestText: text });
-const run = async (m, drive, decision = {}) => F.fileInspectionReports(m, decision, { drive, gmail });
+const run = async (m, drive, decision = {}) => F.fileInspectionReports(m, decision, { drive, gmail, pdfHeadText });
+const up = (d) => d.uploads.map((u) => u.replace(/ \(was .*\)$/, ''));
 
 (async () => {
   // ---- files when certain ---------------------------------------------------
   let d = fakeDrive();
   let r = await run(msg('Inspection Reports | 410 N Crescent Heights', ['Home Inspection.pdf', 'Sewer Scope.pdf']), d);
-  ok('subject address -> its escrow folder, both reports', d.uploads, ['p1:Home Inspection.pdf', 'p1:Sewer Scope.pdf']);
+  ok('subject address -> its escrow folder, named the team way', up(d), ['p1:Buyer Report - General.pdf', 'p1:Buyer Report - Sewer.pdf']);
 
   d = fakeDrive();
   r = await run(msg('RE: 5340 Calvin Termite Report', ['WDO 5340 Calvin.pdf']), d);
-  ok('termite report filed', d.uploads, ['p2:WDO 5340 Calvin.pdf']);
+  ok('termite report filed', up(d), ['p2:Buyer Report - Termite.pdf']);
 
   d = fakeDrive();
   r = await run(msg('Home inspection reports', ['Report.pdf', 'Sewerline.pdf'], 'Hi! Attached are the reports for 1459 N Avenue 57.'), d);
-  ok('no address in the subject: found in the email text', d.uploads, ['p3:Report.pdf', 'p3:Sewerline.pdf']);
+  ok('no address in the subject: found in the email text', up(d), ['p3:Buyer Report - General.pdf', 'p3:Buyer Report - Sewer.pdf']);
 
   d = fakeDrive();
   r = await run(msg('Fwd: Your Report', ['304 W Juanita Ave - Termite.pdf']), d);
-  ok('address only in the PDF name', d.uploads, ['p4:304 W Juanita Ave - Termite.pdf']);
+  ok('address only in the PDF name', up(d), ['p4:Buyer Report - Termite.pdf']);
 
   d = fakeDrive();
   r = await run(msg('Re: NEW DEAL - 1707 S STANLEY', ['Roof Inspection.pdf']), d);
-  ok('same house number on two deals: the street word picks Stanley', d.uploads, ['p5:Roof Inspection.pdf']);
+  ok('same house number on two deals: the street word picks Stanley', up(d), ['p5:Buyer Report - Roof.pdf']);
 
-  d = fakeDrive({ p2: ['WDO 5340 Calvin.pdf'] });
+  d = fakeDrive();
+  d.listChildren = async () => [{ name: 'Buyer Report - Termite.pdf', size: String(Buffer.from('%PDF a-WDO 5340 Calvin.pdf').length) }];
   r = await run(msg('RE: 5340 Calvin Termite Report', ['WDO 5340 Calvin.pdf']), d);
-  ok('already in the folder: not filed twice', [d.uploads, F.summary(r)], [[], 'INSPECTION already in "5340 Calvin Ave": WDO 5340 Calvin.pdf']);
+  ok('the same report forwarded again: not filed twice', [d.uploads, F.summary(r)], [[], 'INSPECTION already in "5340 Calvin Ave": Buyer Report - Termite.pdf']);
 
   // Same name, different file -> "(2)"; same name and size -> already there.
   d = fakeDrive();
-  d.listChildren = async () => [{ name: 'Report.pdf', size: '5000' }];
+  d.listChildren = async () => [{ name: 'Buyer Report - Termite.pdf', size: '1' }];
+  TEXT.t2 = 'WOOD DESTROYING PESTS AND ORGANISMS INSPECTION REPORT Branch 3';
   r = await run({ id: 'm', headers: { subject: 'Inspection Reports | 410 N Crescent Heights' }, newestText: '',
-    attachments: [{ filename: 'Report.pdf', size: 9000, attachmentId: 'a1' }, { filename: 'Report.pdf', size: 5000, attachmentId: 'a2' }] }, d);
-  ok('a different "Report.pdf" is saved as "Report (2).pdf"; the identical one is skipped',
-    [d.uploads, r.skipped], [['p1:Report (2).pdf'], ['Report.pdf']]);
+    attachments: [{ filename: 'WHKDNAKJFNCSk.PDF', attachmentId: 't2' }] }, d);
+  ok('a second, different termite report becomes "(2)"', up(d), ['p1:Buyer Report - Termite (2).pdf']);
 
   d = fakeDrive();
   r = await run(msg('Termite clearance I 304 W Juanita Ave', ['Section 1 clearance.pdf', 'Invoice 3321.pdf', 'Receipt for Funds Received in Escrow.pdf', 'RR signed.pdf']), d);
   ok('invoice + clearance filed; an escrow funds receipt and the RR are not',
-    d.uploads, ['p4:Section 1 clearance.pdf', 'p4:Invoice 3321.pdf']);
+    up(d), ['p4:Buyer Report - Termite.pdf', 'p4:Buyer Report - Termite Invoice.pdf']);
 
   // ---- does NOT file when unsure --------------------------------------------
   d = fakeDrive();
@@ -108,6 +112,19 @@ const run = async (m, drive, decision = {}) => F.fileInspectionReports(m, decisi
   r = await run({ id: 'm', headers: { subject: 'Inspection Report | 410 N Crescent Heights' }, attachments: [], newestText: 'Here is the Spectora link' }, d,
     { classifier: { reason: 'Inspection report linked via Spectora routes to Belle' } });
   ok('a link with no PDF: logged, nothing filed', [d.uploads, /no PDF attached/.test(F.summary(r))], [[], true]);
+
+  // ---- naming from the PDF's own text (the "WHKDNAKJFNCSk.PDF" case) -------
+  const T = F._internal.teamName;
+  ok('gibberish name, termite report inside', T({ filename: 'WHKDNAKJFNCSk.PDF', subject: 'reports',
+    text: 'WOOD DESTROYING PESTS AND ORGANISMS INSPECTION REPORT ... Section 1 ... Section 2' }), 'Buyer Report - Termite.pdf');
+  ok('gibberish name, home inspection inside', T({ filename: 'A8F2.pdf', subject: '',
+    text: 'Inspection Report 123 Main St. Roof, Exterior, Plumbing, Electrical, Heating, Attic, Kitchen, Garage' }), 'Buyer Report - General.pdf');
+  ok('a home inspection that mentions the roof is still General', T({ filename: 'Report.pdf', subject: 'Home inspection',
+    text: 'HOME INSPECTION REPORT. Roof: composition shingle. Plumbing: copper. Electrical: 200 amp.' }), 'Buyer Report - General.pdf');
+  ok('sewer from the text', T({ filename: 'x.pdf', subject: '', text: 'Sewer Lateral Video Inspection' }), 'Buyer Report - Sewer.pdf');
+  ok('roof invoice', T({ filename: 'Invoice 4471.pdf', subject: 'roof', text: 'INVOICE Roof inspection and certification' }), 'Buyer Report - Roof Invoice.pdf');
+  ok('a scan with no text and no clue', T({ filename: 'scan0001.pdf', subject: 'see attached', text: '' }), 'Buyer Report - Inspection.pdf');
+  ok("our seller's own report", T({ filename: 'termite.pdf', subject: '', text: '', sellerSent: true }), 'Seller Report - Termite.pdf');
 
   process.env.INSPECTION_FILING = 'off';
   d = fakeDrive();

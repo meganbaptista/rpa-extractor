@@ -117,6 +117,75 @@ async function findPropertyFolder(message, pdfs, deps) {
   return { folder: null, why: 'no address that matches a deal folder' };
 }
 
+// ---------------------------------------------------------------------------
+// NAMING, the team's way. Megan, 2026-10-09: reports arrive as
+// "WHKDNAKJFNCSk.PDF" and get saved as "Buyer Report - Termite" or "Buyer
+// Report - General". The TYPE comes from the PDF's own first pages (free: the
+// text layer, no model call), then its file name and the email subject.
+// ---------------------------------------------------------------------------
+
+// Checked in order: the first that names the report wins. Specific trades
+// come before "General", because a termite report says "inspection report" too.
+const REPORT_TYPES = [
+  ['Termite', /termite|wood[\s-]*destroying|\bwdo\b|\bpest\s+(control|report|inspection)|branch\s*3|section\s+[12]\b/i],
+  ['Sewer', /sewer|\blateral\b|camera\s+inspection|video\s+inspection\s+of\s+the\s+(main|line)/i],
+  ['Chimney', /chimney|fireplace\s+inspection/i],
+  ['Roof', /\broof(ing)?\s+(inspection|report|certification|estimate|evaluation)|roof\s+cert/i],
+  ['Mold', /\bmold\b|mould|microbial|air\s+quality/i],
+  ['Foundation', /foundation|structural\s+(engineer|inspection|evaluation)|engineering\s+report/i],
+  ['Geology', /geolog|\bsoils?\s+(report|engineer)|geotechnical/i],
+  ['HVAC', /\bhvac\b|heating\s+and\s+(air|cooling)|furnace\s+inspection/i],
+  ['Plumbing', /plumbing\s+(inspection|report)|hydrostatic|leak\s+detection/i],
+  ['Electrical', /electrical\s+(inspection|report|evaluation)|\belectrician\b/i],
+  ['Pool', /\bpool\b.{0,20}(inspection|report)|\bspa\s+inspection/i],
+  ['Septic', /septic/i],
+  ['Asbestos', /asbestos/i],
+  ['Radon', /radon/i],
+  ['Lead', /lead[\s-]*based\s+paint\s+(inspection|test)/i],
+  ['Arborist', /arborist|tree\s+(report|inspection)/i],
+  ['Survey', /\bsurvey\b/i],
+  ['General', /home\s+inspection|property\s+inspection|general\s+inspection|residential\s+inspection|inspection\s+report|summary\s+report|inspection\s+agreement/i],
+];
+// A broad report names every system; four or more of these is a general one.
+const SYSTEMS = [/\broof/i, /plumbing/i, /electrical/i, /\bhvac\b|heating/i, /foundation/i, /attic/i, /water\s+heater/i, /kitchen/i, /garage/i, /exterior/i];
+
+/** "Termite", "General", ... or '' when nothing says. */
+function reportType(head, body) {
+  for (const [name, rx] of REPORT_TYPES) if (name !== 'General' && rx.test(head)) return name;
+  if (REPORT_TYPES.find(([n]) => n === 'General')[1].test(head)) return 'General';
+  if (SYSTEMS.filter((rx) => rx.test(body)).length >= 4) return 'General';
+  for (const [name, rx] of REPORT_TYPES) if (rx.test(body)) return name;
+  return '';
+}
+
+/** First two pages of a PDF as text; '' for a scan or anything unreadable. */
+async function pdfHeadText(bytes) {
+  let parser;
+  try {
+    const { PDFParse } = require('pdf-parse');
+    parser = new PDFParse({ data: new Uint8Array(bytes) });
+    const r = await parser.getText({ first: 2 });
+    return String((r && r.text) || '').replace(/\s+/g, ' ').slice(0, 12000);
+  } catch (e) {
+    return '';
+  } finally {
+    if (parser) { try { await parser.destroy(); } catch (e) { /* ignore */ } }
+  }
+}
+
+/**
+ * "Buyer Report - Termite", "Seller Report - Roof", "Buyer Report - Sewer Invoice".
+ * Buyer unless the email went to Ethan as our seller client's own records.
+ */
+function teamName({ text, filename, subject, sellerSent }) {
+  const head = `${filename || ''} ${subject || ''} ${String(text || '').slice(0, 800)}`;
+  const type = reportType(head, text || '') || 'Inspection';
+  const doc = /\binvoice\b/i.test(`${filename} ${String(text || '').slice(0, 400)}`) ? ' Invoice'
+    : /\b(estimate|proposal|bid)\b/i.test(`${filename} ${String(text || '').slice(0, 400)}`) ? ' Estimate'
+      : /\breceipt\b/i.test(`${filename}`) ? ' Receipt' : '';
+  return `${sellerSent ? 'Seller' : 'Buyer'} Report - ${type}${doc}.pdf`;
+}
+
 /** Drive file names: no slashes, no fi/fl ligatures (they break Drive search). */
 function cleanName(name) {
   return String(name || 'report.pdf').replace(/ﬁ/g, 'fi').replace(/ﬂ/g, 'fl').replace(/[\\/:]/g, '-').trim();
@@ -142,19 +211,23 @@ async function fileInspectionReports(message, decision, deps = {}) {
     const existing = new Map(children.map((f) => [f.name, Number(f.size) || 0]));
     const filed = [];
     const skipped = [];
+    const sellerSent = ((decision && decision.actions && decision.actions.addLabels) || []).includes('Ethan')
+      || /our seller client/i.test(String((decision && decision.reason) || ''));
+    const subject = (message.headers || {}).subject || '';
     for (const p of pdfs) {
-      const base = cleanName(p.filename);
-      if (existing.has(base) && (!p.size || !existing.get(base) || existing.get(base) === Number(p.size))) {
-        skipped.push(base); continue;
-      }
-      let name = base;
-      for (let n = 2; existing.has(name); n++) name = base.replace(/(\.pdf)?$/i, ` (${n})$1`);
       // eslint-disable-next-line no-await-in-loop
       const bytes = await d.gmail.getAttachment(message.id, p.attachmentId);
       // eslint-disable-next-line no-await-in-loop
+      const text = await (deps.pdfHeadText || pdfHeadText)(bytes);
+      const base = cleanName(teamName({ text, filename: p.filename, subject, sellerSent }));
+      // The same report forwarded again: same name AND same size.
+      if (existing.has(base) && existing.get(base) === bytes.length) { skipped.push(base); continue; }
+      let name = base;
+      for (let n = 2; existing.has(name); n++) name = base.replace(/(\.pdf)?$/i, ` (${n})$1`);
+      // eslint-disable-next-line no-await-in-loop
       await d.drive.uploadMultipart({ name, parents: [folder.id], mimeType: 'application/pdf', bytes });
-      existing.set(name, Number(p.size) || 0);
-      filed.push(name);
+      existing.set(name, bytes.length);
+      filed.push(name === cleanName(p.filename) ? name : `${name} (was ${cleanName(p.filename)})`);
     }
     return { filed, skipped, folder: folder.name, why: '' };
   } catch (e) {
@@ -172,4 +245,4 @@ function summary(r) {
   return `INSPECTION ${r.why}`;
 }
 
-module.exports = { fileInspectionReports, summary, _internal: { pickFiles, addressCandidates, findPropertyFolder, cleanName } };
+module.exports = { fileInspectionReports, summary, _internal: { pickFiles, addressCandidates, findPropertyFolder, cleanName, teamName, reportType } };
