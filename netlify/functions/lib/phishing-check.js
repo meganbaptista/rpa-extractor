@@ -73,7 +73,7 @@ function linksOf(html) {
 
 // Click-tracking services legitimate newsletters route every link through. A
 // visible "zillow.com" that really goes to one of these is normal, not a trick.
-const CLICK_TRACKERS = /(^|\.)(list-manage\.com|sendgrid\.net|mandrillapp\.com|hubspotlinks\.com|hs-sites\.com|hubspotemail\.net|rs6\.net|mailgun\.org|mailchimp\.com|mcusercontent\.com|exacttarget\.com|klaviyo\.com|sparkpostmail\.com|cmail\d*\.com|createsend\d*\.com|mjt\.lu|awstrack\.me|ct\.sendgrid\.net|lnks?\.gd|e2ma\.net|constantcontact\.com|mailjet\.com|postmarkapp\.com|salesforce\.com|pardot\.com|marketo\.com|mktoweb\.com|bombbomb\.com|follow-up-boss\.com|followupboss\.com|kvcore\.com|boomtownroi\.com|wisestamp\.com|emailprotection\.link|mimecast\.com|cudasvc\.com|barracuda\.com|trendmicro\.com|sophos\.com|zixcorp\.com|zix\.com|appriver\.com|messagelabs\.com|forcepoint\.com|cisco\.com|iphmx\.com|fireeye\.com|egress\.com|newoldstamp\.com|mysignature\.io|exclaimer\.net|hubspot\.com|ctctcdn\.com|getresponse\.com)$/i;
+const CLICK_TRACKERS = /(^|\.)(list-manage\.com|sendgrid\.net|mandrillapp\.com|hubspotlinks\.com|hs-sites\.com|hubspotemail\.net|rs6\.net|mailgun\.org|mailchimp\.com|mcusercontent\.com|exacttarget\.com|klaviyo\.com|sparkpostmail\.com|cmail\d*\.com|createsend\d*\.com|mjt\.lu|awstrack\.me|ct\.sendgrid\.net|lnks?\.gd|e2ma\.net|constantcontact\.com|mailjet\.com|postmarkapp\.com|salesforce\.com|pardot\.com|marketo\.com|mktoweb\.com|bombbomb\.com|follow-up-boss\.com|followupboss\.com|kvcore\.com|boomtownroi\.com|wisestamp\.com|emailprotection\.link|mimecast\.com|cudasvc\.com|barracuda\.com|trendmicro\.com|sophos\.com|zixcorp\.com|zix\.com|appriver\.com|messagelabs\.com|forcepoint\.com|cisco\.com|iphmx\.com|fireeye\.com|egress\.com|newoldstamp\.com|mysignature\.io|mysig\.io|htmlsig\.com|gimmio\.com|signature\.email|sigstr\.net|terminus\.com|letsignit\.com|si\.gnatu\.re|codetwo\.com|exclaimer\.net|hubspot\.com|ctctcdn\.com|getresponse\.com)$/i;
 
 // Endings a shown web address actually uses. Anything else ("My.TC.Concierge")
 // is a name with dots in it, not a site.
@@ -122,7 +122,15 @@ function addrDomain(header) {
  * old message in the thread cannot flag the new one. */
 function newestHtml(html) {
   let s = String(html || '');
-  const cuts = [/<div[^>]+class="[^"]*gmail_quote/i, /<blockquote\b/i, /<div[^>]+id="(divRplyFwdMsg|appendonsend)"/i, /<hr[^>]*>\s*<div[^>]*>\s*<font[^>]*>\s*<b>From:/i];
+  // Gmail, Apple Mail, Outlook web and Outlook desktop each quote differently.
+  // 1120 Monument (2026-10-09): Jay's Outlook reply quoted Kristin's whole
+  // email, signature links and all, under a "From:" header block.
+  const cuts = [/<div[^>]+class="[^"]*gmail_quote/i, /<blockquote\b/i,
+    /<div[^>]+id="(divRplyFwdMsg|appendonsend|mail-editor-reference-message-container|x_divRplyFwdMsg)"/i,
+    /<hr[^>]*>\s*<div[^>]*>\s*<font[^>]*>\s*<b>From:/i,
+    /border-top:\s*solid\s*#(B5C4DF|E1E1E1)/i,
+    /<(b|strong)[^>]*>\s*(<span[^>]*>\s*)?From:\s*(<\/span>\s*)?<\/(b|strong)>/i,
+    /-{2,}\s*Original Message\s*-{2,}/i];
   let cut = s.length;
   for (const re of cuts) { const m = s.match(re); if (m && m.index < cut) cut = m.index; }
   return s.slice(0, cut);

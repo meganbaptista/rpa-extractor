@@ -149,6 +149,15 @@ ok('"our bank details have changed" still counts', check(msg({
   replyTo: 'escrow.team@gmail.com', text: 'Please note our bank details have changed. Use the attached.',
   html: '<a href="https://firstam.com/x">details</a>' })).suspicious, true);
 
+ok('Kristin Alexander: website link through her MySignature signature (mysig.io)', check(msg({
+  from: 'Kristin Alexander <k@kristinlalexander.com>', auth: 'mx.google.com; spf=fail; dmarc=fail (p=NONE)',
+  text: 'I wanted to check in again to see where you are at with Red Door.',
+  html: '<p>I wanted to check in again.</p><a href="https://mysig.io/x7Qa">KRISTINLALEXANDER.COM</a>' })).suspicious, false);
+ok("Jay's Outlook reply quoting an email with a bad link is judged on Jay's words only", check(msg({
+  from: 'Jay Rappaport <jay@legacyinvesting.com>', text: 'Red Door will not come into play on this.',
+  html: '<p>Red Door will not come into play.</p><div style="border:none;border-top:solid #B5C4DF 1.0pt"><p><b>From:</b> Kristin</p>'
+    + '<a href="https://evil.top/x">www.kristinlalexander.com</a></div>' })).suspicious, false);
+
 ok('a plain escrow email with no links', check(msg({ text: 'Attached are the escrow instructions for 123 Main St.' })).suspicious, false);
 
 ok('an escrow email linking to its own site', check(msg({
