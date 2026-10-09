@@ -1337,6 +1337,9 @@ const ANSWER_REVIEW_PROMPT =
   'replaced", "water heater strapped"). Do NOT flag it for leaving out when it happened, who did it, which company, ' +
   'the cost, or other detail the form line does not ask for. Use "explanation_unclear" only when a reader cannot ' +
   'tell what the seller is disclosing (illegible, contradictory, or a fragment with no meaning);\n' +
+  '(b5) SPQ 7E (built before 1978): a Yes needs an explanation ONLY when 7E(1) or 7E(2) is also Yes. If both are ' +
+  'No (or the house is simply pre-1978), do not raise yes_no_explanation for 7E. If you do raise it, say in "reason" ' +
+  'which of 7E(1) / 7E(2) is Yes;\n' +
   'ALSO return "addendum_entries": list EVERY entry you can see on any separate explanations sheet in this package, ' +
   'as {"form":"SPQ|TDS","item":"<entry number exactly as printed, e.g. 7 or C>","text":"<verbatim text>"}. List ' +
   'them all, even ones no Yes sub-item needs. Return [] if there is no such sheet in this package. Every ' +
@@ -3008,6 +3011,18 @@ function hoaQuestion(flags) {
  */
 const RX_ONLY_WANTS_MORE = /\b(does\s+not|doesn['\u2019]?t|did\s+not|fails?\s+to)\s+(state|say|specify|indicate|include|mention|identify|name|list|give|provide)\b[^.;]*\b(when|date|year|who|which|whom|company|vendor|contractor|exterminator|plumber|roofer|cost|amount|how\s+much|permit)/i;
 const RX_NO_DETAIL = /\b(no|without\s+(a|the|any))\s+(date|year|vendor|company|contractor|details?|timeframe|cost)\b/i;
+/**
+ * SPQ 7E (BUILT BEFORE 1978) NEEDS AN EXPLANATION ONLY WHEN 7E(1) OR 7E(2) IS
+ * YES, i.e. renovations disturbed lead paint. Megan, 2026-10-09: "we dont need
+ * an explanation if the following are No". 1747 Haynes chased a plain Yes. The
+ * prompt says so (b5); this drops a 7E flag whose reason does not say (1) or
+ * (2) is Yes.
+ */
+const RX_7E_SUB_YES = /7E\s*\(?\s*[12]\s*\)?[^.;]*\byes\b|\(\s*[12]\s*\)[^.;]*\b(is|are|marked|checked)\s+yes\b|renovat[^.;]*\b(marked|checked|is)\s+yes\b/i;
+const isFactOnlyYes = (f) => !!f && f.issue === 'yes_no_explanation'
+  && /^spq$/i.test(String(f.form || '').trim()) && /^7E$/i.test(String(f.item || '').trim())
+  && !RX_7E_SUB_YES.test(String(f.reason || ''));
+
 function wantsDetailOnly(f) {
   if (!f || f.issue !== 'explanation_unclear') return false;
   const r = String(f.reason || '');
@@ -3971,7 +3986,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     console.log(`[disclosure-intake] dropped ${detailOnly.length} "explanation could say more" flag(s), the `
       + `explanation answers the question: ${detailOnly.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
   }
-  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f)
+  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f) && !isFactOnlyYes(f)
     && f.issue !== 'explanation_on_addendum'
     && f.issue !== 'duplicate_form_copy'
     && f.issue !== 'cited_attachment_unseen'
@@ -4288,7 +4303,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold

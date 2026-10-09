@@ -113,5 +113,13 @@ ok('never an email address', M.greetName('amy@x.com'), '');
   ok('and a signature when it is unsigned', /sign and date it\?$/.test(M.reviseLineFor({ ...f, reason: 'no box checked and the agent signature is blank' })), true);
 }
 
+// --- SPQ 7E (built before 1978) Yes is never chased for an explanation ------
+ok('SPQ 7E Yes needs no explanation (Haynes wording)', M.isFactOnlyYes({ form: 'SPQ', item: '7E', issue: 'yes_no_explanation',
+  reason: '7E (built before 1978) is marked Yes but no explanation is provided for it' }), true);
+ok('SPQ 7E with 7E(1) Yes is still asked', M.isFactOnlyYes({ form: 'SPQ', item: '7E', issue: 'yes_no_explanation',
+  reason: '7E is Yes and 7E(1) renovations is marked Yes, but no explanation is given' }), false);
+ok('SPQ 7D still does', M.isFactOnlyYes({ form: 'SPQ', item: '7D', issue: 'yes_no_explanation' }), false);
+ok('a blank 7E(1) is still asked', M.isFactOnlyYes({ form: 'SPQ', item: '7E(1)', issue: 'unanswered' }), false);
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall chase-voice checks pass');
