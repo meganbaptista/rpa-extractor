@@ -178,8 +178,12 @@ async function pdfHeadText(bytes) {
  * Buyer unless the email went to Ethan as our seller client's own records.
  */
 function teamName({ text, filename, subject, sellerSent }) {
-  const head = `${filename || ''} ${subject || ''} ${String(text || '').slice(0, 800)}`;
-  const type = reportType(head, text || '') || 'Inspection';
+  // EACH FILE BY ITS OWN NAME AND TEXT FIRST. 33852 Del Obispo (2026-10-09):
+  // the subject said "Mold Del Obispo.pdf", and the second attachment,
+  // "PROPERTY_INSPECTION_REPORT.pdf", was named "Mold (2)". The subject is the
+  // last resort, for a file whose own name and text say nothing.
+  const own = `${String(filename || '').replace(/[_-]+/g, ' ')} ${String(text || '').slice(0, 800)}`;
+  const type = reportType(own, text || '') || reportType(String(subject || ''), '') || 'Inspection';
   const doc = /\binvoice\b/i.test(`${filename} ${String(text || '').slice(0, 400)}`) ? ' Invoice'
     : /\b(estimate|proposal|bid)\b/i.test(`${filename} ${String(text || '').slice(0, 400)}`) ? ' Estimate'
       : /\breceipt\b/i.test(`${filename}`) ? ' Receipt' : '';
@@ -195,8 +199,18 @@ function cleanName(name) {
  * File this email's inspection PDFs. Never throws; returns a summary for the
  * log: { filed: [names], skipped: [names already there], folder, why }.
  */
+// Our own outgoing mail is never filed: a "Seller Disclosure Package" we send
+// carries reports that are ALREADY in the folder (17942 Karen Dr, 2026-10-09).
+const OWN_DOMAINS = String(process.env.ROUTER_OWN_DOMAINS || 'mytcconcierge.com')
+  .split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+const fromOurselves = (message) => {
+  const m = String(((message && message.headers) || {}).from || '').match(/@([A-Za-z0-9.-]+)/);
+  return !!m && OWN_DOMAINS.some((d) => m[1].toLowerCase() === d || m[1].toLowerCase().endsWith(`.${d}`));
+};
+
 async function fileInspectionReports(message, decision, deps = {}) {
   if (String(process.env.INSPECTION_FILING || '').toLowerCase() === 'off') return null;
+  if (fromOurselves(message)) return null;
   const d = { drive: deps.drive || require('./drive'), gmail: deps.gmail || require('./gmail') };
   try {
     const { pdfs, why } = pickFiles(message, decision);
@@ -217,9 +231,19 @@ async function fileInspectionReports(message, decision, deps = {}) {
     const existing = new Map(children.map((f) => [f.name, Number(f.size) || 0]));
     const filed = [];
     const skipped = [];
-    const sellerSent = ((decision && decision.actions && decision.actions.addLabels) || []).includes('Ethan')
-      || /our seller client/i.test(String((decision && decision.reason) || ''));
+    // SELLER REPORT when it is the seller's: the router sent it to Ethan as our
+    // seller client, the thread is a "Seller Disclosure Package" (17942 Karen
+    // Dr), or the sender is a proven seller client (lib/seller-client.js; asked
+    // here too so the preview page, which does not route, gets it right).
     const subject = (message.headers || {}).subject || '';
+    let sellerSent = ((decision && decision.actions && decision.actions.addLabels) || []).includes('Ethan')
+      || /our seller client/i.test(String((decision && decision.reason) || ''))
+      || /seller\s+disclosure\s+package/i.test(subject);
+    if (!sellerSent) {
+      const proof = await (deps.sellerClientFor || require('./seller-client').sellerClientFor)((message.headers || {}).from)
+        .catch(() => ({ seller: false }));
+      sellerSent = !!(proof && proof.seller);
+    }
     for (const p of pdfs) {
       // eslint-disable-next-line no-await-in-loop
       const bytes = await d.gmail.getAttachment(message.id, p.attachmentId);

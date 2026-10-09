@@ -44,7 +44,8 @@ const gmail = { getAttachment: async (mid, aid) => Buffer.from(`%PDF ${aid}`) };
 const pdfHeadText = async (bytes) => TEXT[String(bytes).slice(5)] || '';
 const pdf = (filename) => ({ filename, mimeType: 'application/pdf', attachmentId: `a-${filename}` });
 const msg = (subject, files, text = '') => ({ id: 'm1', headers: { subject }, attachments: files.map(pdf), newestText: text });
-const run = async (m, drive, decision = {}) => F.fileInspectionReports(m, decision, { drive, gmail, pdfHeadText });
+const notSeller = async () => ({ seller: false });
+const run = async (m, drive, decision = {}, extra = {}) => F.fileInspectionReports(m, decision, { drive, gmail, pdfHeadText, sellerClientFor: notSeller, ...extra });
 const up = (d) => d.uploads.map((u) => u.replace(/ \(was .*\)$/, ''));
 
 (async () => {
@@ -132,8 +133,27 @@ const up = (d) => d.uploads.map((u) => u.replace(/ \(was .*\)$/, ''));
 
   // Preview (the backfill page) decides everything and saves nothing.
   d = fakeDrive();
-  r = await F.fileInspectionReports(msg('Inspection Reports | 410 N Crescent Heights', ['Home Inspection.pdf']), {}, { drive: d, gmail, pdfHeadText, preview: true });
+  r = await F.fileInspectionReports(msg('Inspection Reports | 410 N Crescent Heights', ['Home Inspection.pdf']), {}, { drive: d, gmail, pdfHeadText, sellerClientFor: notSeller, preview: true });
   ok('preview: names the file, uploads nothing', [d.uploads, r.filed.map((x) => x.replace(/ \(was .*\)$/, ''))], [[], ['Buyer Report - General.pdf']]);
+
+  // ---- from the 2026-10-09 preview ----------------------------------------
+  ok('Del Obispo: the inspection report is General even when the subject says Mold', T({
+    filename: '33852_Del_Obispo_St_Unit_71___PROPERTY_INSPECTION_REPORT.pdf', subject: 'Fwd: Completed: 33852 Del Obispo #71 - Subsequent docs - Mold Del Obispo.pdf',
+    text: '' }), 'Buyer Report - General.pdf');
+  ok('...and the mold one is Mold', T({ filename: 'Mold-Del-Obispo.pdf', subject: 'Fwd: Completed: 33852 Del Obispo #71', text: '' }), 'Buyer Report - Mold.pdf');
+  ok('the subject still names a file that says nothing', T({ filename: 'scan0001.pdf', subject: 'Termite report 304 W Juanita', text: '' }), 'Buyer Report - Termite.pdf');
+  d = fakeDrive();
+  r = await run({ ...msg('Re: Seller Disclosure Package | 304 W Juanita Ave', ['Previous Buyer Sewer.pdf']),
+    headers: { subject: 'Re: Seller Disclosure Package | 304 W Juanita Ave', from: 'Megan Baptista <megan@mytcconcierge.com>' } }, d);
+  ok('our own outgoing email is never filed (Karen Dr)', [d.uploads, r], [[], null]);
+
+  d = fakeDrive();
+  await run({ ...msg('Re: Seller Disclosure Package | 304 W Juanita Ave', ['Termite.pdf']),
+    headers: { subject: 'Re: Seller Disclosure Package | 304 W Juanita Ave', from: 'Larry <larry@hotmail.com>' } }, d);
+  ok('a reply on the Seller Disclosure Package thread is a Seller Report', up(d), ['p4:Seller Report - Termite.pdf']);
+  d = fakeDrive();
+  await run(msg('Termite report 304 W Juanita Ave', ['Termite.pdf']), d, {}, { sellerClientFor: async () => ({ seller: true }) });
+  ok('a proven seller client is a Seller Report even without routing (the preview page)', up(d), ['p4:Seller Report - Termite.pdf']);
 
   process.env.INSPECTION_FILING = 'off';
   d = fakeDrive();
