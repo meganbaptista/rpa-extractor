@@ -127,6 +127,14 @@ async function findFoldersByName(name) {
   );
 }
 
+// Folders whose name contains `text` (Drive matches word prefixes), with parents.
+async function findFoldersNameContains(text) {
+  return queryFiles(
+    `name contains '${qEscape(text)}' and mimeType='${FOLDER_MIME}' and trashed=false`,
+    'files(id,name,parents),nextPageToken'
+  );
+}
+
 // Files directly inside a folder. Pass mimeType to filter (or excludeFolders to
 // drop subfolders, e.g. the _processed/ folder).
 async function listChildren(folderId, { mimeType, excludeFolders = false } = {}) {
@@ -213,6 +221,7 @@ async function ensureFolder(name, parentId) {
 module.exports = {
   getAccessToken,
   findFoldersByName,
+  findFoldersNameContains,
   listChildren,
   getFileMeta,
   download,

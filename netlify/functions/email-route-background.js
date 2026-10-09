@@ -22,6 +22,7 @@
 const gmail = require('./lib/gmail');
 const cfg = require('./lib/routing-config');
 const router = require('./lib/email-router');
+const inspectionFiler = require('./lib/inspection-filer');
 const shadowLog = require('./lib/shadow-log');
 
 // Resolve the message's label ids to display names, so the router can match
@@ -91,6 +92,19 @@ exports.handler = async function (event) {
     let applied = null;
     if (mode === 'live') {
       applied = await applyDecision(message, decision);
+      // Inspection reports file themselves into the deal's escrow folder
+      // (lib/inspection-filer.js). Never blocks routing; the result, or the
+      // reason it did not file, goes into the log's reason column.
+      const filing = await inspectionFiler.fileInspectionReports(message, decision);
+      const note = inspectionFiler.summary(filing);
+      if (note) {
+        decision.reason = `${note} | ${decision.reason || ''}`;
+        applied.inspection = filing;
+        if (filing.filed && filing.filed.length) {
+          await gmail.modifyMessage(message.id, { add: [await gmail.ensureLabel(cfg.LABELS.inspectionFiled)], remove: [] })
+            .catch(() => {});
+        }
+      }
     }
 
     await shadowLog.record({ message, decision, mode, applied, nowIso: nowIso() });

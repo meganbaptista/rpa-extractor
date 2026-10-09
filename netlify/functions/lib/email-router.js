@@ -32,6 +32,7 @@ const skipGate = require('./skip-gate');
 const personClassifier = require('./person-classifier');
 const dealSideLookup = require('./deal-side');
 const phishingCheck = require('./phishing-check');
+const sellerClient = require('./seller-client');
 
 // The concrete "clear from the queue" action shared by skip + NO_TAG.
 function clearActions(config) {
@@ -214,6 +215,29 @@ async function routeCore(message, labelNames = [], deps = {}) {
     decision.actions = { addLabels: [completed.person], removeIntake: true, markRead: false };
     return decision;
   }
+
+  // BRANCH B — OUR SELLER CLIENT SENDING FILES -> Ethan. Proof, not a guess:
+  // we sent this address our "Seller Disclosure Package" email (lib/seller-
+  // client.js). Their reports, invoices, permits and photos feed the seller
+  // disclosures and Receipt for Reports; in Belle's queue Ethan never saw them
+  // (2402 Alto Cerro, Oct 2026). Only when files are attached: a seller's plain
+  // question still goes through the classifier, now told the side is seller.
+  let sellerProof = null;
+  if (message.hasAttachment || /dropbox\.com|drive\.google\.com|photos\.app\.goo\.gl|icloud\.com\/photos/i.test(String(message.newestText || ''))) {
+    sellerProof = await (deps.sellerClientFor || sellerClient.sellerClientFor)(h.from);
+    if (sellerProof && sellerProof.seller) {
+      const ethan = config.ROSTER.find((p) => p.name === 'Ethan');
+      if (ethan) {
+        decision.plannedLabel = ethan.personLabel;
+        decision.side = decision.side || 'seller';
+        decision.reason = `${decision.reason} | our seller client (we sent them the Seller Disclosure Package`
+          + `${sellerProof.property ? ` for ${sellerProof.property}` : ''}) sent files -> Ethan`;
+        decision.actions = { addLabels: [ethan.personLabel], removeIntake: true, markRead: false };
+        return decision;
+      }
+    }
+  }
+  if (!side && sellerProof && sellerProof.seller) side = 'seller';
 
   // BRANCH B — the rulebook classifier. Pass strong priors from the thread's
   // labels: buyer/seller side (Edelyn/Ethan) and any label->person hints

@@ -238,7 +238,8 @@ function collectAttachments(payload, acc = []) {
   const disp = ((payload.headers || []).find((h) => h.name && h.name.toLowerCase() === 'content-disposition') || {}).value || '';
   const isInline = /inline/i.test(disp);
   if (filename && body.attachmentId && !isInline) {
-    acc.push({ filename, mimeType: payload.mimeType || '', size: body.size || 0 });
+    // attachmentId kept so lib/inspection-filer.js can download the bytes.
+    acc.push({ filename, mimeType: payload.mimeType || '', size: body.size || 0, attachmentId: body.attachmentId });
   }
   for (const part of payload.parts || []) collectAttachments(part, acc);
   return acc;
@@ -318,6 +319,12 @@ async function getMessage(id) {
     hasAttachment: attachments.length > 0,
     isUnread: (data.labelIds || []).includes('UNREAD'),
   };
+}
+
+// One attachment's bytes (Gmail returns base64url). For lib/inspection-filer.js.
+async function getAttachment(messageId, attachmentId) {
+  const data = await apiGet(`/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`);
+  return Buffer.from(String(data.data || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64');
 }
 
 // Union of label ids across ALL messages in a thread. Gmail labels are
@@ -556,6 +563,7 @@ module.exports = {
   // messages
   listMessages,
   getMessage,
+  getAttachment,
   // threads + drafts
   addressSearchTerm,
   findLabelledThread,

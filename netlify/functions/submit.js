@@ -77,6 +77,7 @@
 
 const { getStore } = require('@netlify/blobs');
 const crypto = require('crypto');
+const { RLA_PROMPT } = require('./lib/rla-prompt');
 
 // Get the extraction-jobs blob store using explicit credentials. The
 // auto-config / connectLambda path doesn't work reliably across all function
@@ -226,7 +227,8 @@ exports.handler = async function(event) {
     // this unchanged.
     await payloadStore.setJSON(jobId, {
       documents: documents,
-      prompt_override: body.prompt_override || null
+      // An RLA run names itself (kind: 'rla') and the prompt is attached here (lib/rla-prompt.js).
+      prompt_override: body.prompt_override || (body.kind === 'rla' ? RLA_PROMPT : null)
     });
 
     // Best-effort cleanup of the temp chunk keys now that the payload is
@@ -292,9 +294,9 @@ exports.handler = async function(event) {
     // SKIP for listing-agreement (RLA) runs: the signature audit is built for the
     // purchase-agreement packet (RPA signatures/initials/counter chain/escrow). A
     // listing agreement has none of that, so the audit gets confused and fails. The
-    // RLA path is the only one that sends a prompt_override; RPA runs send null and
-    // are still audited.
-    if (body.prompt_override) {
+    // RLA path is the only one that sends a prompt_override (or, since 2026-10-09,
+    // kind: 'rla'); RPA runs send neither and are still audited.
+    if (body.prompt_override || body.kind === 'rla') {
       console.log('submit: skipping signature-audit fan-out for listing-agreement (prompt_override) run, jobId=' + jobId);
     } else {
       try {

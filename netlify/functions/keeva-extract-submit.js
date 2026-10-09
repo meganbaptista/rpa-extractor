@@ -27,12 +27,13 @@
 // every Zapier flow are untouched; this adds a path beside them.
 //
 // Body (chunked, via audit-chunk.js — same convention submit.js uses):
-//   { files: [{ uploadId, totalChunks, label }] }
+//   { files: [{ uploadId, totalChunks, label }], kind?: 'rla' }
 // Response: 202 { jobId } — then poll /result?jobId=...
 // ============================================================================
 
 const { getStore } = require('@netlify/blobs');
 const crypto = require('crypto');
+const { RLA_PROMPT } = require('./lib/rla-prompt');
 
 console.log('[keeva-extract-submit] module loading');
 
@@ -136,7 +137,8 @@ exports.handler = async function (event) {
     );
 
     // Same shape submit.js writes; extract-background reads this by jobId.
-    await payloadStore.setJSON(jobId, { documents });
+    // Keeva's listing wizard sends kind: 'rla' for a Listing Agreement (lib/rla-prompt.js).
+    await payloadStore.setJSON(jobId, { documents, prompt_override: body.kind === 'rla' ? RLA_PROMPT : null });
 
     // Best-effort chunk cleanup.
     for (const ref of cleanup) {

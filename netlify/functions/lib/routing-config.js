@@ -34,6 +34,9 @@ const LABELS = {
   // Added ON TOP of normal routing when an email's links look like phishing
   // (lib/phishing-check.js). Never deletes or moves the email.
   phishing: '\u26A0\uFE0F Possible phishing - do not click',
+  // Added when lib/inspection-filer.js saved the email's report PDFs into the
+  // deal's escrow folder, so Belle can see it is already done.
+  inspectionFiled: 'Inspection filed to Drive',
 };
 
 // ---------------------------------------------------------------------------
@@ -209,7 +212,8 @@ const ROSTER = [
       + 'stage. Being handed the seller contacts means the package still needs sending; it does '
       + 'NOT make it Ethan\'s. Belle sets up the file and sends the initial package. '
       + 'Rejected offers. Inspection REPORTS/receipts when a PDF is '
-      + 'attached or LINKED (general, termite, HVAC, roof, mold, plumbing, geo, etc.).',
+      + 'attached or LINKED (general, termite, HVAC, roof, mold, plumbing, geo, etc.) — '
+      + 'EXCEPT when our own SELLER client is the one sending them (that is Ethan, see his lane).',
   },
   {
     name: 'Jill',
@@ -232,7 +236,14 @@ const ROSTER = [
   {
     name: 'Ethan',
     personLabel: 'Ethan',
-    handles: 'SELLER-SIDE disclosure and signature work, including the seller\'s Receipt for '
+    handles: 'OUR SELLER CLIENT SENDING REPORTS OR RECORDS FOR THE DISCLOSURES: the homeowner '
+      + 'themself (usually a personal gmail/hotmail/yahoo address, signing as the owner, often '
+      + 'forwarding from their own inbox) sending inspection or remediation reports, repair '
+      + 'invoices and receipts, permits / sign-offs, warranties, or photos of completed work. '
+      + 'Ethan needs these for the seller\'s disclosures and Receipt for Reports, and would '
+      + 'never see them in Belle\'s queue (2402 Alto Cerro, Oct 2026: the seller sent 15 '
+      + '"remediation" emails). Applies even when the subject has no address. '
+      + 'SELLER-SIDE disclosure and signature work, including the seller\'s Receipt for '
       + 'Reports (RFR) — signing/acknowledging receipt of the completed reports (this is the '
       + 'disclosure-flow "Receipt for Reports", NOT a "Request for Repairs", which is Jill). '
       + 'Home-warranty emails. VP / VOP / '
@@ -371,6 +382,7 @@ const NO_TAG_RULES = [
 // are the "read the whole doc, not just keywords" rules.
 // ---------------------------------------------------------------------------
 const ROUTING_NOTES = [
+  'WHO SENT THE REPORT decides inspection-report routing. From the buyer\'s agent, an inspector, a vendor or escrow -> Belle. From OUR SELLER CLIENT (the homeowner, typically a personal email address, often forwarding to us from their own inbox with phone-signature lines like "Sent via the Samsung Galaxy") sending reports, remediation or repair records, invoices, permits/sign-offs or photos of work -> Ethan, for the seller disclosures. A subject like "2402ACC remediation 7" with no full address is still the seller\'s.',
   'SENDER TYPE matters. The same words route differently from an Escrow Officer, an Agent, a DocuSign notification, or a Client (buyer/seller). Use the sender to disambiguate.',
   'ATTACHMENTS: when the body is uninformative (e.g. "please see the attached"), use the ATTACHMENT FILENAME to identify the document and route by it — e.g. a filename naming a "Cancellation of Contract" / cancellation -> Jill, "Request for Repairs"/RR -> Jill, an addendum -> Jill, an AVID -> Ethan/Edelyn by side. You only have the FILENAME, not the PDF contents. If the body is uninformative AND neither the subject nor the attachment filename reveals the document type (e.g. the file is named only by the property address), route to BELLE for human triage — she opens the document and decides. Prefer Belle-triage over UNSURE for an undeterminable-attachment email.',
   'DOCUMENT-COPY REQUESTS are ACTIONABLE, never NO_TAG: a request to SEND / PROVIDE a copy of a document we may have on file (an inspection report, work order, receipt, disclosure, etc.) needs someone to check the file and send it. Route it — an inspection-report copy -> Belle; a disclosure -> Edelyn/Ethan by side. If the email is a jumble of asks or has no property address to identify the deal/owner, default to Needs Attention (a human triages). Do NOT mark it NO_TAG just because it also mentions inspection scheduling.',
