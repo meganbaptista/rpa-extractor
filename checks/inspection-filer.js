@@ -70,6 +70,14 @@ const run = async (m, drive, decision = {}) => F.fileInspectionReports(m, decisi
   r = await run(msg('RE: 5340 Calvin Termite Report', ['WDO 5340 Calvin.pdf']), d);
   ok('already in the folder: not filed twice', [d.uploads, F.summary(r)], [[], 'INSPECTION already in "5340 Calvin Ave": WDO 5340 Calvin.pdf']);
 
+  // Same name, different file -> "(2)"; same name and size -> already there.
+  d = fakeDrive();
+  d.listChildren = async () => [{ name: 'Report.pdf', size: '5000' }];
+  r = await run({ id: 'm', headers: { subject: 'Inspection Reports | 410 N Crescent Heights' }, newestText: '',
+    attachments: [{ filename: 'Report.pdf', size: 9000, attachmentId: 'a1' }, { filename: 'Report.pdf', size: 5000, attachmentId: 'a2' }] }, d);
+  ok('a different "Report.pdf" is saved as "Report (2).pdf"; the identical one is skipped',
+    [d.uploads, r.skipped], [['p1:Report (2).pdf'], ['Report.pdf']]);
+
   d = fakeDrive();
   r = await run(msg('Termite clearance I 304 W Juanita Ave', ['Section 1 clearance.pdf', 'Invoice 3321.pdf', 'Receipt for Funds Received in Escrow.pdf', 'RR signed.pdf']), d);
   ok('invoice + clearance filed; an escrow funds receipt and the RR are not',

@@ -135,17 +135,25 @@ async function fileInspectionReports(message, decision, deps = {}) {
       ? { filed: [], why: 'inspection email with no PDF attached (a link?), not filed' } : null;
     const { folder, why: noFolder } = await findPropertyFolder(message, pdfs, d);
     if (!folder) return { filed: [], why: `not filed: ${noFolder}` };
-    const existing = new Set((await d.drive.listChildren(folder.id, { excludeFolders: true })).map((f) => f.name));
+    // SAME NAME IS NOT SAME FILE. Agents send "Report.pdf" for everything; a
+    // second, different "Report.pdf" is saved as "Report (2).pdf". Only a file
+    // with the same name AND the same size counts as already filed.
+    const children = await d.drive.listChildren(folder.id, { excludeFolders: true });
+    const existing = new Map(children.map((f) => [f.name, Number(f.size) || 0]));
     const filed = [];
     const skipped = [];
     for (const p of pdfs) {
-      const name = cleanName(p.filename);
-      if (existing.has(name)) { skipped.push(name); continue; }
+      const base = cleanName(p.filename);
+      if (existing.has(base) && (!p.size || !existing.get(base) || existing.get(base) === Number(p.size))) {
+        skipped.push(base); continue;
+      }
+      let name = base;
+      for (let n = 2; existing.has(name); n++) name = base.replace(/(\.pdf)?$/i, ` (${n})$1`);
       // eslint-disable-next-line no-await-in-loop
       const bytes = await d.gmail.getAttachment(message.id, p.attachmentId);
       // eslint-disable-next-line no-await-in-loop
       await d.drive.uploadMultipart({ name, parents: [folder.id], mimeType: 'application/pdf', bytes });
-      existing.add(name);
+      existing.set(name, Number(p.size) || 0);
       filed.push(name);
     }
     return { filed, skipped, folder: folder.name, why: '' };
