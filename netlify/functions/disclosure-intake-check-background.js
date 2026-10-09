@@ -2144,11 +2144,12 @@ async function classifyQAPages(thumbs, label = '') {
 // classifies each window, drops the thumbnails, and accumulates the Q&A page numbers — so a big
 // scanned packet is covered end to end instead of only its first 60 pages, with memory bounded to
 // one window at a time (the OOM lever is thumbnail working-set, see RENDER_CHUNK_PAGES).
-async function classifyQAPagesWindowed(buffer, pageCount, name) {
+async function classifyQAPagesWindowed(buffer, pageCount, name, only = null) {
   const qa = new Set();
-  for (let start = 1; start <= pageCount; start += QA_MAX_RENDER_PAGES) {
-    const windowPages = [];
-    for (let p = start; p < start + QA_MAX_RENDER_PAGES && p <= pageCount; p++) windowPages.push(p);
+  // `only`: classify just these pages (the scanned pages of a mixed document).
+  const all = only || Array.from({ length: pageCount }, (_, i) => i + 1);
+  for (let w = 0; w < all.length; w += QA_MAX_RENDER_PAGES) {
+    const windowPages = all.slice(w, w + QA_MAX_RENDER_PAGES);
     let thumbs = await renderPagesAsImages(buffer, windowPages, QA_THUMB_SCALE);
     if (!thumbs.length) continue;
     const label = `${name} pp${windowPages[0]}-${windowPages[windowPages.length - 1]}`;
@@ -2197,6 +2198,24 @@ async function renderQAPageImages(buffer, name, opts = {}) {
     if (a.usable) {
       qaNums = a.pages;
       selection = `${name}: ${a.selection}`;
+      /**
+       * A MIXED DOCUMENT: MOSTLY DIGITAL, PART SCANNED. 20371 Bluffside re-run
+       * (2026-10-09) arrived as one 51-page PDF: a 36-page digital package plus
+       * the 14-page wet-signed SPQ/TDS/FHDS scan. 70% of pages had text, so the
+       * text layer was "usable" and the text selector picked 2 pages; the
+       * scanned forms have no text, so it never saw them, and the review that
+       * had found 7 items on 2026-10-02 found 0. The scanned pages now go
+       * through the image classifier, as a wholly scanned file would.
+       */
+      const scanned = texts
+        .filter((t) => String(t.text || '').replace(/\s+/g, '').length < SCAN_PAGE_TEXT_MIN)
+        .map((t) => t.num)
+        .filter((n) => n >= 1 && n <= pageCount && !qaNums.includes(n));
+      if (scanned.length) {
+        const picked = await classifyQAPagesWindowed(buffer, pageCount, name, scanned);
+        if (picked.length) qaNums = [...new Set([...qaNums, ...picked])].sort((x, y) => x - y);
+        selection += ` +scan-classified ${picked.length}/${scanned.length} scanned pp [${picked.join(',') || 'none'}]`;
+      }
     } else {
       // PATH B — the text layer is a scan or font-broken, so classify from images instead, but in
       // windows across EVERY page rather than only the first 60 (which was blind to 87% of a
