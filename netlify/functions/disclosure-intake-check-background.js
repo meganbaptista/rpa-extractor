@@ -2774,7 +2774,10 @@ function compareNatural(a, b) {
  * signed copy clears it, so a blank template bundled in a vendor report or the
  * earthquake guide booklet cannot raise it on its own.
  */
-const SELLER_SIGNED_CODES = new Set(['TDS', 'SPQ', 'ESD', 'FHDS', 'LPD', 'AVID', 'WCMD', 'WHSD', 'SBSA', 'SFLS', 'MCA', 'NHD']);
+// NOT the AVID: it is the agent's form, and its own text says the seller's
+// initials "are not required but can be used as evidence" of receipt. 10323
+// Dunkirk (2026-10-09) listed it as unsigned with the initials right there.
+const SELLER_SIGNED_CODES = new Set(['TDS', 'SPQ', 'ESD', 'FHDS', 'LPD', 'WCMD', 'WHSD', 'SBSA', 'SFLS', 'MCA', 'NHD']);
 const SELLER_SIGNED_NAMES = [/earthquake\s+risk\s+disclosure\s+statement/i];
 const sellerSignatureChase = () => String(process.env.SELLER_SIGNATURE_CHASE || '').toLowerCase() === 'true';
 

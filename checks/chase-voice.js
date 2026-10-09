@@ -134,5 +134,7 @@ ok('a blank 7E(1) is still asked', M.isFactOnlyYes({ form: 'SPQ', item: '7E(1)',
   ok('a person still is', M.greetName('Jennifer Lee'), ' Jennifer');
 }
 
+ok('the AVID never needs a seller signature', M.requiresSellerSignature({ code: 'AVID', name: 'Agent Visual Inspection Disclosure' }), false);
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall chase-voice checks pass');
