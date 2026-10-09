@@ -53,7 +53,7 @@ const text = (html) => html
     /Thanks so much for these! After my audit, here is what is still pending from the file:/.test(body[1]), true);
   ok('carries every line exactly as the Doc has it',
     body.filter((l) => l.startsWith('- ')),
-    ['- LA AVID', '- BA AVID - NeedSS (I will get this)', '- VP - once completed']);
+    ['- LA AVID', '- BA AVID - Pending Seller (I will get this)', '- VP - once completed']);
   // Her own trailing notes survive, so "VP - once completed" needs no special
   // handling: it lives in the Doc and the reply passes it on.
   ok('a note she keeps on a line is not stripped',
@@ -192,10 +192,10 @@ ok('and the sections that belong in the email are kept',
   const { listItem } = require('../netlify/functions/lib/disclosure-reply.js');
   ok('a note is bold italic', listItem('VP - once completed'), 'VP - <b><i>once completed</i></b>');
   ok('our signature says we will get it', listItem('BA AVID - NeedSS'),
-    'BA AVID - <b><i>NeedSS (I will get this)</i></b>');
+    'BA AVID - <b><i>Pending Seller (I will get this)</i></b>');
   ok('so does seller plus listing agent', listItem('TDS - NeedSS+LA'),
-    'TDS - <b><i>NeedSS+LA (I will get this)</i></b>');
-  ok('their signature does not', listItem('LA AVID - NEEDB'), 'LA AVID - <b><i>NEEDB</i></b>');
+    'TDS - <b><i>Pending Seller and Listing Agent (I will get this)</i></b>');
+  ok('their signature does not', listItem('LA AVID - NEEDB'), 'LA AVID - <b><i>Pending Buyer</i></b>');
   ok('a mixed status does not', listItem('SPQ - NEEDB+S'), 'SPQ - <b><i>NEEDB+S</i></b>');
   ok('a review does not', listItem('ABA - NeedReview'), 'ABA - <b><i>NeedReview</i></b>');
   ok('a line with no note stays plain', listItem('Contingency Release full'), 'Contingency Release full');
@@ -203,6 +203,18 @@ ok('and the sections that belong in the email are kept',
   ok('only the FIRST dash splits', listItem('SFLS - 1,309 sqft - per agent'),
     'SFLS - <b><i>1,309 sqft - per agent</i></b>');
   ok('a hyphen inside a word does not split', listItem('AVID-BA'), 'AVID-BA');
+}
+
+// --- codes become words in the email (83558 Tourmaline, 2026-10-09) --------
+{
+  const { statusWords, listItem } = require('../netlify/functions/lib/disclosure-reply.js');
+  ok('NEEDB in words', statusWords('NEEDB'), 'Pending Buyer');
+  ok('NeedSS+LA in words', statusWords('NeedSS+LA'), 'Pending Seller and Listing Agent');
+  ok('NeedBroker(s) in words', statusWords('NeedBroker(s)'), 'Pending Broker');
+  ok('LPD line reads in words', listItem('LPD - NEEDB'), 'LPD - <b><i>Pending Buyer</i></b>');
+  ok('ours still says I will get this', listItem('Coachella Valley Local Area Disclosure Form - NeedSS'),
+    'Coachella Valley Local Area Disclosure Form - <b><i>Pending Seller (I will get this)</i></b>');
+  ok('a free-text note is untouched', listItem('VP - once completed'), 'VP - <b><i>once completed</i></b>');
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');

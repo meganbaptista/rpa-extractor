@@ -165,8 +165,32 @@ function listItem(line) {
   const item = (cut > 0 ? line.slice(0, cut) : line).replace(/\s*[-\u2013]\s*$/, '').trim();
   const note = cut > 0 ? line.slice(cut + 3).replace(/\s*[-\u2013]\s*$/, '').trim() : '';
   if (!note) return esc(item);
-  const mine = STATUS_NOTE.test(note) && owedBy(note) === 'us';
-  return `${esc(item)} - <b><i>${esc(note)}${mine ? ' (I will get this)' : ''}</i></b>`;
+  const isStatus = STATUS_NOTE.test(note);
+  const mine = isStatus && owedBy(note) === 'us';
+  const said = isStatus ? (statusWords(note) || note) : note;
+  return `${esc(item)} - <b><i>${esc(said)}${mine ? ' (I will get this)' : ''}</i></b>`;
+}
+
+/**
+ * THE EMAIL SAYS IT IN WORDS, NOT CODES. "NEEDB" and "NeedSS" are her file
+ * shorthand; the other coordinator reads "Pending Buyer". Megan, 2026-10-09
+ * (83558 Tourmaline draft): "something more friendly? Like 'Pending Buyer'
+ * and 'Pending Seller' -- just for the email reply." The Doc keeps the codes.
+ *   NEEDB      -> Pending Buyer
+ *   NeedSS+LA  -> Pending Seller and Listing Agent
+ * An unknown code returns '' so the caller falls back to the code itself.
+ */
+const SHORT_PARTY = {
+  needb: 'Buyer', needss: 'Seller', needba: "Buyer's Agent",
+  needla: 'Listing Agent', 'needbroker(s)': 'Broker',
+};
+function statusWords(status) {
+  const parts = String(status || '').split('+').map((p, i) => (i === 0 ? p : `Need${p}`).toLowerCase());
+  const who = [...new Set(parts.map((p) => SHORT_PARTY[p]))];
+  if (!who.length || who.some((w) => !w)) return '';
+  const list = who.length === 1 ? who[0]
+    : `${who.slice(0, -1).join(', ')} and ${who[who.length - 1]}`;
+  return `Pending ${list}`;
 }
 
 function esc(t) {
@@ -244,4 +268,4 @@ function buildReply({ address, outstanding = [], senderName = '',
   };
 }
 
-module.exports = { buildReply, listItem, groupForReply, owedBy, missingWords, partyWords, docName, isInternalOnly, INTERNAL_ONLY, isExcludedSection, EXCLUDED_SECTIONS };
+module.exports = { buildReply, listItem, statusWords, groupForReply, owedBy, missingWords, partyWords, docName, isInternalOnly, INTERNAL_ONLY, isExcludedSection, EXCLUDED_SECTIONS };
