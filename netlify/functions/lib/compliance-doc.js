@@ -63,6 +63,12 @@ const ALIASES = [
    */
   { key: 'eq-booklet', match: [/^(car\s+)?(earthquake|eq)\s+booklet\s+receipt/i] },
   { key: 'mls', match: [/^mls\b/i] },
+  /**
+   * WFDA, the Wildfire Disaster Advisory. Megan's 83558 Tourmaline list reads
+   * "WDFA" (letters swapped), which matched nothing, so a received WFDA went
+   * on being asked for. Both spellings answer the form.
+   */
+  { key: 'wfda', match: [/^wfda\b/i, /^wdfa\b/i, /^wildfire\s+disaster\s+advisory/i] },
   { key: 'nhd', match: [/^nhd\b/i] },
   { key: 'prelim', match: [/^prelim\b/i] },
   { key: 'home-insp', match: [/^property\s+inspections?\b/i, /^home\s+insp/i] },
@@ -76,7 +82,11 @@ const ALIASES = [
    * "...Affiliated Business Arrangement Disclosure Statement..." and the Doc
    * went on asking for a form sitting in the folder.
    */
-  { key: 'aba', match: [/^aba\b/i, /^affiliated\s+business\b/i, /^brokerage\s+affiliate/i] },
+  // The fourth pattern is "<Firm> Affiliated Business ...": Christie's names
+  // itself again inside the title, so stripping the leading firm still left
+  // "Christie's Affiliated Business Arrangement ..." (83558 Tourmaline).
+  { key: 'aba', match: [/^aba\b/i, /^affiliated\s+business\b/i, /^brokerage\s+affiliate/i,
+    /^[a-z'\u2019]+(?:\s+[a-z'\u2019]+){0,3}\s+affiliated\s+business\s+arrangement\b/i] },
 ];
 
 /**
@@ -269,7 +279,26 @@ function planLine(line, files) {
    * that names one.
    */
   const wantsAddendum = isAddendum(text);
-  const eligible = wantsAddendum ? files : files.filter((f) => !isAddendum(f.filename));
+  let eligible = wantsAddendum ? files : files.filter((f) => !isAddendum(f.filename));
+  /**
+   * ONE FIRM'S AFFILIATE DISCLOSURE DOES NOT ANSWER ANOTHER'S. Every ABA keys
+   * to 'aba', so once the alias widened, a Compass ABA could have cleared a
+   * line asking for Christie's. When the line names a firm, the file has to
+   * carry one of that firm's distinctive words.
+   */
+  if (key === 'aba') {
+    const firmPart = (text.split(/\s+[-\u2013]\s+/)[1] || '').toLowerCase();
+    const GENERIC = new Set(['international', 'real', 'estate', 'realty', 'southern', 'northern', 'california',
+      'group', 'properties', 'homes', 'inc', 'the', 'and', 'other', 'any', 'brokerage']);
+    const words = firmPart.replace(/[\u2019']s\b/g, '').split(/[^a-z]+/).filter((w) => w.length >= 4 && !GENERIC.has(w));
+    if (words.length) {
+      eligible = eligible.filter((f) => {
+        if (f.key !== 'aba') return true;
+        const label = String(f.label || f.filename).toLowerCase().replace(/[\u2019']s\b/g, '');
+        return words.some((w) => label.includes(w));
+      });
+    }
+  }
   /**
    * IN ORDER OF CONFIDENCE, and it stops at the first that lands: an exact
    * key, then a prefix, then a shared form code, then a unique strong word

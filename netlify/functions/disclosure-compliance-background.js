@@ -33,7 +33,7 @@ const { parseRequestBody } = require('./lib/parse-body');
 const { alert } = require('./lib/alert');
 const docs = require('./lib/docs');
 const { EVENTS, makeEvent, publish } = require('./lib/events');
-const { planDoc, findComplianceDocUrl } = require('./lib/compliance-doc');
+const { planDoc, findComplianceDocUrl, fileKey, OUTSTANDING } = require('./lib/compliance-doc');
 
 const DONE_STORE = 'disclosure-compliance-done';
 
@@ -180,6 +180,18 @@ exports.handler = async function (event) {
       if (l.action === 'heading') { section = String(l.text || '').trim(); continue; }
       if (l.action !== 'keep' && l.action !== 'annotate' && l.action !== 'review') continue;
       outstanding.push({ text: l.action === 'annotate' ? l.to : l.text, action: l.action, section });
+    }
+    /**
+     * ARRIVED, NOT ON THE LIST, STILL NEEDS A SIGNATURE. 83558 Tourmaline sent
+     * a Coachella Valley local disclosure the seller had not signed; nothing on
+     * the list asked for it, so it never reached the reply. It goes in the reply
+     * so the other side knows, but it is still NOT written to the Doc (her list;
+     * see compliance-doc's unmatched note). An FX file needs nothing from anyone.
+     */
+    for (const f of plan.unmatched) {
+      const k = fileKey(f);
+      if (!k.status || k.status === 'FX' || !OUTSTANDING.test(k.status)) continue;
+      outstanding.push({ text: `${k.label} - ${k.status}`, action: 'unlisted', section: '' });
     }
     const changes = plan.lines.filter((l) => l.action === 'delete' || l.action === 'annotate');
 

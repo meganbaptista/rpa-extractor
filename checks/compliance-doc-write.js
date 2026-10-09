@@ -232,5 +232,18 @@ ok('a normalised status still reads as outstanding', OUTSTANDING.test(status('BA
   ok('and a NEEDB one annotates it', q.lines.find((l) => /LPD/.test(l.text || '')).to, 'LPD 1978 - NEEDB');
 }
 
+// --- 83558 Tourmaline reply (2026-10-09) ------------------------------------
+// "WDFA" (her typo) must clear the WFDA; Christie's ABA names the firm twice;
+// another firm's ABA must not clear a line naming Christie's.
+{
+  const files = ["FX - Christie's International Real Estate - Christie's Affiliated Business Arrangement Disclosure Statement.pdf",
+    'FX - WFDA - Wildfire Disaster Advisory.pdf'];
+  const p = planDoc("DISCLOSURES\n- WDFA - \n- Brokerage Affiliate Disclosures (If any) - Christie's International Real Estate Southern California\n", files);
+  ok('WDFA typo clears the WFDA', p.lines.find((l) => /WDFA/.test(l.text || '')).action, 'delete');
+  ok("Christie's ABA (firm printed twice) clears its line", p.lines.find((l) => /Affiliate/.test(l.text || '')).action, 'delete');
+  const q = planDoc('DISCLOSURES\n- Brokerage Affiliate Disclosures (If any) - Douglas Elliman\n', [files[0]]);
+  ok("a Christie's ABA does not clear a Douglas Elliman line", q.lines.find((l) => /Affiliate/.test(l.text || '')).action, 'keep');
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);
