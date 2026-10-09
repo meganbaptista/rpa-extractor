@@ -3389,6 +3389,13 @@ function greetName(name) {
   if (!raw || /@|\d/.test(raw)) return '';
   const first = raw.includes(',') ? raw.split(',')[1].trim().split(/\s+/)[0] : raw.split(/\s+/)[0];
   if (!/^[A-Za-z][A-Za-z'\u2019-]{1,}$/.test(first || '')) return '';
+  // OUR OWN NAME IS NOT THE RECIPIENT. The trigger reads the thread's newest
+  // message, and on 2781 Westshire that was Megan's own reply, so the draft
+  // would have opened "Hi Megan,". Signer + DISCLOSURE_OWN_NAMES (comma list of
+  // first names, e.g. "megan,belle") are never greeted.
+  const own = [process.env.DISCLOSURE_SIGNER_NAME || 'Megan', ...(process.env.DISCLOSURE_OWN_NAMES || '').split(',')]
+    .map((x) => String(x || '').trim().split(/\s+/)[0].toLowerCase()).filter(Boolean);
+  if (own.includes(first.toLowerCase())) return '';
   const OFFICE = /^(the|team|escrow|compass|coldwell|keller|sotheby|christie|redfin|realty|re\/max|remax|office|info|admin|transaction|tc)$/i;
   if (OFFICE.test(first)) return '';
   return ` ${first[0].toUpperCase()}${first.slice(1).toLowerCase()}`;
