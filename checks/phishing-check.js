@@ -98,6 +98,20 @@ ok('an escrow signature: site, secure upload, wire-fraud warning, no-reply Reply
     + '<a href="https://www.linkedin.com/company/pce"><img src="x"></a>',
 })).suspicious, false);
 
+ok('a real DocuSign "Completed" notice (Docusign.com text, docusign.net link)', check(msg({
+  from: 'Docusign via Docusign <dse_NA3@docusign.net>', subject: 'Completed: Please Docusign: Amended Escrow Instructions',
+  text: 'Your document has been completed. View Completed Document. Visit Docusign.com, click Access Documents.',
+  html: '<a href="https://na3.docusign.net/Signing/EmailStart.aspx?a=1">View Completed Document</a> '
+    + 'Visit <a href="https://www.docusign.net/signing">Docusign.com</a> '
+    + '<a href="https://apps.apple.com/app/docusign/id474990205">Download the Docusign App</a>',
+})).suspicious, false);
+
+ok('a FAKE DocuSign that fails DMARC is still caught', check(msg({
+  from: 'Docusign <dse@docusign.net>', auth: 'mx.google.com; spf=fail; dkim=none; dmarc=fail',
+  text: 'Your document has been completed. View Completed Document',
+  html: '<a href="https://docusign-view.web.app/x">View Completed Document</a>',
+})).suspicious, true);
+
 ok('a plain escrow email with no links', check(msg({ text: 'Attached are the escrow instructions for 123 Main St.' })).suspicious, false);
 
 ok('an escrow email linking to its own site', check(msg({
@@ -117,6 +131,11 @@ ok('a Proofpoint-wrapped DocuSign link stays clean', unwrap(
     config: { ...cfg, GATE: { trustedSkipConfidence: ['high'] } },
   };
   const bad = msg({ attachments: [{ filename: 'invoice.htm' }] });
+  delete process.env.PHISHING_LABEL;
+  const off = await route(bad, [], deps);
+  ok('router: label is OFF by default (log only)', (off.actions.addLabels || []).includes(cfg.LABELS.phishing), false);
+  ok('router: but the reason is logged', /log only/.test(off.reason), true);
+  process.env.PHISHING_LABEL = 'on';
   const d = await route(bad, [], deps);
   ok('router: warning label added even on a would-be skip', d.actions.addLabels[0], cfg.LABELS.phishing);
   ok('router: never marked read', d.actions.markRead, false);

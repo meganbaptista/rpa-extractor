@@ -55,6 +55,15 @@ async function route(message, labelNames = [], deps = {}) {
   try { phish = (deps.phishingCheck || phishingCheck.check)(message); } catch (e) { /* never block routing */ }
   const decision = await routeCore(message, labelNames, deps);
   if (!phish.suspicious || !config.LABELS.phishing) return decision;
+  // LOG-ONLY until Megan switches it on (PHISHING_LABEL=on in Netlify). Two real
+  // emails were flagged on day one (her own reminder, her own DocuSign envelope),
+  // so the warning is recorded in the router log and the sweep page first, and
+  // only labelled once real mail shows it is quiet.
+  if (String(process.env.PHISHING_LABEL || '').toLowerCase() !== 'on') {
+    decision.phishing = phish.reasons;
+    decision.reason = `(phishing check, log only) ${phish.reasons.join('; ')} | ${decision.reason || ''}`;
+    return decision;
+  }
   const actions = decision.actions || { addLabels: [], removeIntake: false, markRead: false };
   decision.actions = {
     ...actions,

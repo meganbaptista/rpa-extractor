@@ -131,7 +131,15 @@ const OWN_DOMAINS = String(process.env.ROUTER_OWN_DOMAINS || 'mytcconcierge.com'
 
 function check(message) {
   const h = (message && message.headers) || {};
-  if (OWN_DOMAINS.includes(addrDomain(h.from))) return { suspicious: false, reasons: [], strong: [], weak: [] };
+  const CLEAN = { suspicious: false, reasons: [], strong: [], weak: [] };
+  if (OWN_DOMAINS.includes(addrDomain(h.from))) return CLEAN;
+  // GENUINELY FROM THE SERVICE. Mail whose From is DocuSign's / Dropbox's own
+  // domain AND that Gmail verified (DMARC pass) cannot be a fake of that
+  // service: a phisher cannot pass DMARC for docusign.net. 14100 Dickens
+  // (2026-10-09), a real "Completed" envelope, was flagged before this.
+  const fromDom = addrDomain(h.from);
+  const verified = /\bdmarc=pass\b/i.test(String(h['authentication-results'] || ''));
+  if (verified && BRANDS.some((b) => b.domains.test(fromDom))) return CLEAN;
   const html = newestHtml((message && message.bodyHtml) || '');
   const text = `${h.subject || ''}\n${(message && message.newestText) || (message && message.bodyText) || ''}`;
   const strong = [];
@@ -159,7 +167,10 @@ function check(message) {
     const looksLikeAddress = shown && (/^(https?:\/\/|www\.)/i.test(l.text.trim()) || REAL_TLD.test(shown[1]));
     if (looksLikeAddress && !/@/.test(l.text)) {
       const shownBase = baseDomain(shown[1].toLowerCase().replace(/^www\./, ''));
-      if (shownBase && base && shownBase !== base && !CLICK_TRACKERS.test(host)) {
+      // One company, two of its own domains (DocuSign shows "Docusign.com" and
+      // links docusign.net) is not a disguise.
+      const sameBrand = BRANDS.some((b) => b.domains.test(shownBase) && b.domains.test(base));
+      if (shownBase && base && shownBase !== base && !sameBrand && !CLICK_TRACKERS.test(host)) {
         strong.push(`a link shows "${shown[1]}" but actually goes to ${host}`);
       }
     }
