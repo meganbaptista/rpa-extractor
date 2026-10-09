@@ -105,7 +105,10 @@ const CTA = /\b(view|review|open|access|download|sign|see|get|retrieve|read)\b.{
 // "You have a document waiting, click to view" style wording.
 const LURE = /\b(view|open|access|review)\s+(the\s+)?(secure\s+)?(document|file|message|attachment|pdf|invoice|statement)s?\b|\bshared\s+(a\s+)?(file|document|folder)\s+with\s+you\b|\bsecure(d)?\s+(message|document|file|portal)\b|\b(new\s+)?voice\s*-?\s*mail\b|\bclick\s+(here|below)\s+to\s+(view|open|access|download|sign|review)\b|\bdocument\s+(is\s+)?(ready|waiting|pending)\s+(for\s+)?(your\s+)?(review|signature)\b|\bverify\s+your\s+(account|email|identity|mailbox)\b|\bpassword\s+(expires?|expired|reset)\b|\bmailbox\s+(is\s+)?(full|storage)\b/i;
 
-const MONEY = /\bwir(e|ing)\s+(instructions?|transfer|funds|details)\b|\b(updated|new|changed|revised)\s+(bank(ing)?|wire|account)\s+(details|info(rmation)?|instructions)\b/i;
+// CHANGED banking details, the actual scam ("our bank details have changed,
+// wire to this new account"). Not "wire instructions" on its own: every escrow
+// status sheet says "Wire Instructions Issued" (PHEG Escrow, 2026-10-09).
+const MONEY = /\b(updated|new|changed|revised|different|corrected|alternate)\s+(wire|wiring|bank(ing)?|account|payment)\s+(instructions?|details|info(rmation)?|account)\b|\b(bank(ing)?|account|wire)\s+(details|information|instructions)\s+(have|has)\s+(been\s+)?(changed|updated)\b|\bwire\s+(the\s+)?(funds|deposit|emd|payment)\s+to\s+(a|the|our)\s+(new|different|updated)\b/i;
 
 const DANGEROUS_ATTACHMENT = /\.(html?|shtml|svg|xhtml|hta|js|vbs|wsf|exe|scr|bat|cmd|iso|img|lnk|one)$/i;
 
@@ -238,7 +241,10 @@ function check(message) {
   }
 
   const reasons = [...new Set(strong)].concat([...new Set(weak)]);
-  const suspicious = strong.length > 0 || new Set(weak).size >= 2;
+  // Two DIFFERENT kinds of weak sign, not two links of the same kind (two
+  // shortened links are one sign).
+  const weakKinds = new Set(weak.map((w) => w.replace(/\s*\([^)]*\)/g, '').replace(/a personal \S+ address/, 'a personal address')));
+  const suspicious = strong.length > 0 || weakKinds.size >= 2;
   return { suspicious, reasons: suspicious ? reasons : [], strong: [...new Set(strong)], weak: [...new Set(weak)] };
 }
 

@@ -141,6 +141,14 @@ ok('and showing loandepot.com but going to an unrelated site is caught', check(m
   from: 'Brian Border <bborder@loandepot.com>', text: 'Underwriting submitted.',
   html: '<a href="https://secure-login-portal.top/x">www.loanDepot.com</a>' })).suspicious, true);
 
+ok('an escrow status sheet saying "Wire Instructions Issued" is not wire wording', check(msg({
+  from: 'Harman, Geoff <Geoff.Harman@phegescrow.com>', auth: 'mx.google.com; spf=fail; dmarc=fail (p=NONE)',
+  text: 'Buyer Contact Information Received/Wire Instructions Issued. EMD to be transferred from Portfolio Escrow.',
+  html: '<a href="https://www.phegescrow.com">phegescrow.com</a>' })).suspicious, false);
+ok('"our bank details have changed" still counts', check(msg({
+  replyTo: 'escrow.team@gmail.com', text: 'Please note our bank details have changed. Use the attached.',
+  html: '<a href="https://firstam.com/x">details</a>' })).suspicious, true);
+
 ok('a plain escrow email with no links', check(msg({ text: 'Attached are the escrow instructions for 123 Main St.' })).suspicious, false);
 
 ok('an escrow email linking to its own site', check(msg({
