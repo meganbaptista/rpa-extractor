@@ -1326,6 +1326,12 @@ const ANSWER_REVIEW_PROMPT =
   'cover a sub-item it does not address. If in doubt, use "yes_no_explanation": asking a seller to explain ' +
   'something they already explained is recoverable, but silently treating an unanswered question as answered is ' +
   'not;\n' +
+  '(b3) EXPLANATION ON THE WRONG LINE OR UNDER THE WRONG LETTER. If a Yes sub-item\'s explanation IS written on ' +
+  'the form but on ANOTHER item\'s explanation line (e.g. the item 7 alterations written on the item 8 line), or ' +
+  'labeled with the wrong letter (e.g. labeled "D" while D is No and E is the Yes), do NOT use "yes_no_explanation" ' +
+  'or "explanation_unclear": the seller did explain it. Raise "issue":"explanation_misplaced", set "found_on" to ' +
+  'where it actually is, in a few words ("the item 8 explanation line", "labeled 15D"), and "reason" to a short ' +
+  'quote of it;\n' +
   'ALSO return "addendum_entries": list EVERY entry you can see on any separate explanations sheet in this package, ' +
   'as {"form":"SPQ|TDS","item":"<entry number exactly as printed, e.g. 7 or C>","text":"<verbatim text>"}. List ' +
   'them all, even ones no Yes sub-item needs. Return [] if there is no such sheet in this package. Every ' +
@@ -1470,7 +1476,7 @@ const ANSWER_REVIEW_PROMPT =
   'shows the property was built in 2010 or later, a blank 2B/2C is CORRECT and the form still counts as "yes" ' +
   'provided Section 3 is done. Never return "no" solely because Section 2 is blank on a 2010-or-later property.\n\n' +
   'Respond with ONLY this JSON (no prose, no fences): ' +
-  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_on_addendum|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect; for explanation_on_addendum, a short quote of the addendum entry>","other_form":"<for inconsistent>","document":"<for document; for explanation_on_addendum, the sheet it was found on>","source":"<for transaction>"}],' +
+  '{"response_flags":[{"form":"SPQ","item":"6K","issue":"unanswered|yes_no_explanation|explanation_on_addendum|explanation_misplaced|explanation_unclear|answer_contradicts_package|detail_incomplete|verify_mismatch","discrepancy_type":"incorrect|inconsistent|document|transaction","marked":"Yes|No|blank","should_be":"Yes|No","reason":"<for incorrect; for explanation_on_addendum, a short quote of the addendum entry>","other_form":"<for inconsistent>","document":"<for document; for explanation_on_addendum, the sheet it was found on>","source":"<for transaction>","found_on":"<for explanation_misplaced>"}],' +
   '"addendum_entries":[{"form":"SPQ","item":"7","text":"<verbatim text of that entry>"}],' +
   '"key_answers":{"spq_7e":"yes|no|blank|na","hoa_any_no":"yes|no|na","fire_clearance":"yes|no|blank|na","fire_clearance_item":"17F","fhds":"yes|no|na"}}';
 
@@ -2821,6 +2827,21 @@ function reviseLineFor(f) {
   if (f.issue === 'yes_no_explanation') return `${ref}: ${why || 'marked Yes with no explanation'}. Could the seller add a short explanation?`;
   if (f.issue === 'unanswered') return `${ref}: ${why || 'this one was left blank'}. Could the seller answer it?`;
   if (f.issue === 'explanation_unclear') return `${ref}: ${why || 'the explanation is a little unclear'}. Could the seller clarify?`;
+  /**
+   * THE SELLER DID EXPLAIN IT, ON THE WRONG LINE. 2781 Westshire (2026-10-09):
+   * the 7A alterations sat on the item 8 line, and 15E's explanation was
+   * labeled D. Asking for "a short explanation" of something already explained
+   * reads as a machine; saying where it is and suggesting the fix does not.
+   * Megan: "address its on the wrong line and suggest updating".
+   */
+  if (f.issue === 'explanation_misplaced') {
+    const where = dashless(f.found_on);
+    const place = !where ? 'written on a different line'
+      : /^label/i.test(where) ? where
+      : /^(on|under|in)\b/i.test(where) ? `written ${where}` : `written on ${where}`;
+    return `${ref}: the explanation is there, but it is ${place}. `
+      + `Could the seller update it so it sits with ${f.item ? f.item : 'the right item'}?`;
+  }
   const t = f.discrepancy_type || (f.other_form ? 'inconsistent' : f.document ? 'document' : f.source ? 'transaction' : 'incorrect');
   if (t === 'inconsistent' && f.other_form) {
     return `${ref} is marked ${marked}, which does not match ${dashless(f.other_form)}${why ? ` (${why})` : ''}. Could you update it so the two agree?`;
@@ -2853,11 +2874,38 @@ function joinRefs(flags) {
  * Anything else (a blank, a missing explanation) keeps its own line, because each
  * of those is its own ask. Order follows the first flag of each group.
  */
+/**
+ * EVERY "IT IS IN AN HOA" LINE IS ONE QUESTION. 2781 Westshire: the seller names
+ * Hollywoodland Homeowners Association, and TDS C12/C14, SPQ 6G/14A/14C and
+ * SPQ 14D/14F each came out as its own "is in an HOA, so mark Yes" line. That
+ * one fact, repeated, is what the agent read as AI, and it may not even hold:
+ * Hollywoodland looks like a voluntary neighborhood group, and Megan's sheet
+ * says no HOA. So it is asked once, as a question, naming every item.
+ */
+const RX_HOA = /\bHOA\b|home\s*owners?['\u2019]?\s+association|owners?['\u2019]?\s+association/i;
+const isHoaFlag = (f) => !!f && String(f.should_be || '').toLowerCase() === 'yes'
+  && RX_HOA.test(`${f.reason || ''} ${f.source || ''}`)
+  && !['detail_incomplete', 'verify_mismatch', 'entity_signer', 'seller_signature_missing', 'yes_no_explanation',
+    'unanswered', 'explanation_unclear', 'explanation_misplaced'].includes(f.issue);
+function hoaName(flags) {
+  for (const f of flags) {
+    const m = `${f.reason || ''} ${f.source || ''}`.match(/((?:[A-Z][\w'\u2019&.-]*\s+){1,5}(?:Home\s*Owners?|Homeowners?)['\u2019]?\s+Association)/);
+    if (m) return m[1].trim();
+  }
+  return '';
+}
+function hoaQuestion(flags) {
+  const name = hoaName(flags);
+  return `Is ${name ? `the ${name}` : 'the association the seller lists'} a mandatory HOA? If so, ${joinRefs(flags)} should be marked Yes.`;
+}
+
 function groupReviseLines(flags) {
   const lines = [];
   const groups = new Map();
+  const hoa = (flags || []).filter(isHoaFlag);
+  if (hoa.length >= 2) flags = (flags || []).filter((f) => !hoa.includes(f));
   const groupable = (f) => !['detail_incomplete', 'verify_mismatch', 'entity_signer', 'seller_signature_missing',
-    'yes_no_explanation', 'unanswered', 'explanation_unclear'].includes(f.issue) && !f.other_form && !f.document;
+    'yes_no_explanation', 'unanswered', 'explanation_unclear', 'explanation_misplaced'].includes(f.issue) && !f.other_form && !f.document;
   for (const f of flags || []) {
     if (!f) continue;
     if (!groupable(f)) { lines.push({ one: f }); continue; }
@@ -2866,7 +2914,7 @@ function groupReviseLines(flags) {
     if (!groups.has(key)) { groups.set(key, []); lines.push({ key }); }
     groups.get(key).push(f);
   }
-  return lines.map((x) => {
+  const out = lines.map((x) => {
     if (x.one) return reviseLineFor(x.one);
     const g = groups.get(x.key);
     if (g.length === 1) return reviseLineFor(g[0]);
@@ -2876,6 +2924,8 @@ function groupReviseLines(flags) {
     const to = f.should_be ? ` to ${f.should_be}` : '';
     return `${joinRefs(g)} are marked ${marked}, but ${basis}. Could you update those${to}?`;
   });
+  if (hoa.length >= 2) out.unshift(hoaQuestion(sortFlags(hoa)));
+  return out;
 }
 
 function sortFlags(list) {
@@ -3812,7 +3862,15 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const preparedByUs = Array.from(new Set(
     stillNeededAll.filter(isPreparedByUs).concat(affiliateClaimed)
   ));
-  const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x));
+  /**
+   * "NEED B" IS OURS. This check runs for the BUYER side, so a checklist line
+   * waiting on the buyer's signature (2781 Westshire: "NHD Receipt Signed -
+   * NEED B") is ours to get, not the listing side's. It stays on our list and
+   * out of the email. "NEED BA" (buyer's agent) is ours too.
+   */
+  const ownSignature = (x) => /\bNEED\s*(B|BA)\b/i.test(String(x || ''));
+  for (const x of stillNeededAll) if (ownSignature(x) && !preparedByUs.includes(x)) preparedByUs.push(x);
+  const stillNeeded = stillNeededAll.filter((x) => !isPreparedByUs(x) && !ownSignature(x));
   // Anything to follow up on with the listing side = missing docs OR response flags
   // OR outdated form versions.
   const followupCount = stillNeeded.length + flags.length + outdated.length;
@@ -3825,7 +3883,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const isRevise = (f) => !!f.should_be || !!f.other_form || !!f.document || !!f.source
     || f.issue === 'answer_contradicts_package' || f.issue === 'detail_incomplete'
     || f.issue === 'verify_mismatch' || f.issue === 'entity_signer' || f.issue === 'seller_signature_missing'
-    || f.issue === 'yes_no_explanation' || f.issue === 'unanswered' || f.issue === 'explanation_unclear';
+    || f.issue === 'yes_no_explanation' || f.issue === 'unanswered' || f.issue === 'explanation_unclear'
+    || f.issue === 'explanation_misplaced';
   const sourceVerb = (src) => (/(documents|instructions)\b/i.test(src) ? 'indicate' : 'indicates');
   // Type-specific wording so each correction reads like a TC, not a template.
   const reviseLine = (f) => reviseLineFor(f);

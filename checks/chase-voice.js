@@ -26,12 +26,19 @@ const flags = [
   mk('SPQ', '14D', auth), mk('SPQ', '14F', auth),
 ];
 const lines = M.groupReviseLines(flags);
-ok('seven HOA lines become two, the blank keeps its own', lines.length, 3);
-ok('the grouped line names every item, by form',
-  lines[1].startsWith('TDS C12 and C14, and SPQ 6G, 14A and 14C are marked No, but the property is in a homeowners association'), true);
-ok('it asks, in one sentence', lines[1].endsWith('Could you update those to Yes?'), true);
+// 2026-10-09 (Westshire re-run): all seven now fold into ONE question, first.
+ok('seven HOA lines become one question, the blank keeps its own', lines.length, 2);
+ok('the HOA question names every item, by form', lines[0],
+  'Is the Example Hills Homeowners Association a mandatory HOA? If so, TDS C12 and C14, and SPQ 6G, 14A, 14C, 14D and 14F should be marked Yes.');
 ok("the model's own trailing \"please ...\" is not doubled",
-  lines[0], 'TDS II A 220 Volt Wiring: the location is left blank. Could you fill that in, or mark it Unknown?');
+  lines[1], 'TDS II A 220 Volt Wiring: the location is left blank. Could you fill that in, or mark it Unknown?');
+ok('a single HOA line stays a normal line', M.groupReviseLines([mk('SPQ', '6G', hoa)]).length, 1);
+ok('explanation on the wrong line says where, and suggests the fix',
+  M.reviseLineFor({ form: 'SPQ', item: '7A', issue: 'explanation_misplaced', found_on: 'the item 8 explanation line' }),
+  'SPQ 7A: the explanation is there, but it is written on the item 8 explanation line. Could the seller update it so it sits with 7A?');
+ok('explanation under the wrong letter',
+  M.reviseLineFor({ form: 'SPQ', item: '15E', issue: 'explanation_misplaced', found_on: 'labeled 15D' }),
+  'SPQ 15E: the explanation is there, but it is labeled 15D. Could the seller update it so it sits with 15E?');
 ok('no robotic boilerplate anywhere', lines.some((l) => /however|should be revised/i.test(l)), false);
 ok('a lone mismatch reads naturally',
   M.reviseLineFor(mk('SPQ', '6G', 'the property is a condominium')),
