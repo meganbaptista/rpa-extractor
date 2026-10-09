@@ -121,5 +121,18 @@ ok('SPQ 7E with 7E(1) Yes is still asked', M.isFactOnlyYes({ form: 'SPQ', item: 
 ok('SPQ 7D still does', M.isFactOnlyYes({ form: 'SPQ', item: '7D', issue: 'yes_no_explanation' }), false);
 ok('a blank 7E(1) is still asked', M.isFactOnlyYes({ form: 'SPQ', item: '7E(1)', issue: 'unanswered' }), false);
 
+// --- Dunkirk: one earthquake statement, no company greeting ----------------
+{
+  const forms = [
+    { code: '', name: "Residential Earthquake Risk Disclosure Statement (Homeowner's Guide to Earthquake Safety)", signed: '' },
+    { code: 'ERD', name: "Residential Earthquake Risk Disclosure Statement (Homeowner's Guide to Earthquake Safety) with Addendum", signed: '' },
+    { code: 'HGES', name: "Homeowner's Guide to Earthquake Safety (2020 Edition) including Residential Earthquake Risk Disclosure Statement", signed: '' },
+  ];
+  ok('three names, one unsigned earthquake statement', M.unsignedSellerForms(forms).length, 1);
+  ok('a company is not greeted', M.greetName('Truline Disclosures'), '');
+  ok('nor a realty', M.greetName('ABC Realty Group'), '');
+  ok('a person still is', M.greetName('Jennifer Lee'), ' Jennifer');
+}
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall chase-voice checks pass');

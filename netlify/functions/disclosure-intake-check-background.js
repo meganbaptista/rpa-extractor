@@ -2781,6 +2781,12 @@ const sellerSignatureChase = () => String(process.env.SELLER_SIGNATURE_CHASE || 
 /** "Residential Earthquake Risk Disclosure Statement (..., 2020 Edition)" -> one family. */
 function formFamily(f) {
   const code = String((f && f.code) || '').trim().toUpperCase().replace(/[\s-]+(LA|BA)$/, '');
+  // ONE EARTHQUAKE STATEMENT, MANY NAMES. 10323 Dunkirk (2026-10-09) listed the
+  // same unsigned statement three times: by its full name, as "ERD" and as
+  // "HGES" (the guide it ships inside).
+  if (/^(ERD|HGES|RERDS|HGES-?ERD)$/.test(code) || /earthquake\s+risk\s+disclosure\s+statement/i.test(String((f && f.name) || ''))) {
+    return 'EQ-STATEMENT';
+  }
   if (code) return code;
   return String((f && f.name) || '').toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
 }
@@ -3591,7 +3597,10 @@ function greetName(name) {
   const own = [process.env.DISCLOSURE_SIGNER_NAME || 'Megan', ...roster, ...(process.env.DISCLOSURE_OWN_NAMES || '').split(',')]
     .map((x) => String(x || '').trim().split(/\s+/)[0].toLowerCase()).filter(Boolean);
   if (own.includes(first.toLowerCase())) return '';
-  const OFFICE = /^(the|team|escrow|compass|coldwell|keller|sotheby|christie|redfin|realty|re\/max|remax|office|info|admin|transaction|tc)$/i;
+  // A company in the display name ("Truline Disclosures", "ABC Realty") is not
+  // a person to greet (10323 Dunkirk, 2026-10-09: "Hi Truline,").
+  if (/\b(realty|real\s+estate|properties|property|group|team|escrow|title|disclosures?|inc|llc|corp|company|homes|services|transactions?|coordinat\w*|office|admin|brokerage|associates|partners)\b\.?/i.test(raw)) return '';
+  const OFFICE = /^(the|team|truline|escrow|compass|coldwell|keller|sotheby|christie|redfin|realty|re\/max|remax|office|info|admin|transaction|tc)$/i;
   if (OFFICE.test(first)) return '';
   return ` ${first[0].toUpperCase()}${first.slice(1).toLowerCase()}`;
 }
@@ -4023,7 +4032,12 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   }
   // Seller-signed forms with no seller signature date on any copy. See
   // unsignedSellerForms: VERIFY by default, the chase email only by choice.
-  const unsigned = unsignedSellerForms(currentForms);
+  // A family whose missing seller signature the review already raised is in the
+  // email; listing it again in the check section says the same thing twice.
+  const chasedSignature = new Set(flags
+    .filter((f) => /signature/i.test(`${f.item || ''} ${f.issue || ''}`))
+    .map((f) => formFamily({ code: f.form, name: f.form })));
+  const unsigned = unsignedSellerForms(currentForms).filter((f) => !chasedSignature.has(formFamily(f)));
   for (const f of unsigned) {
     const label = f.code ? `${f.code}${f.name ? ` (${f.name})` : ''}` : (f.name || 'a seller form');
     if (sellerSignatureChase()) {
