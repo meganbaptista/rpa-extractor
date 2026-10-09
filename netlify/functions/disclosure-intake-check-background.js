@@ -1358,7 +1358,9 @@ const ANSWER_REVIEW_PROMPT =
   'blank, do not stop after the first. The items are SPQ 6G; SPQ 14A (is a condo/PUD/common interest subdivision), ' +
   '14B (HOA has authority), 14C (common area), 14D (CC&R\'s or other deed restrictions/obligations), and 14F ' +
   '(CC&R\'s or HOA committee with authority over improvements); and TDS Section C common-interest/HOA items (e.g. ' +
-  'C12, C13, C14). An HOA that has authority necessarily has governing documents, so a No on 14D or 14F while 14B ' +
+  'C12, C13, C14). When the property is NOT in an HOA or common interest development, Section 14 is "(IF ' +
+  'APPLICABLE)" and leaving all of 14A-14F blank is CORRECT: never flag them unanswered (Megan, 1747 Haynes). ' +
+  'An HOA that has authority necessarily has governing documents, so a No on 14D or 14F while 14B ' +
   'or 14C is Yes is contradictory. Name the exact sub-item in each flag and state it should be YES because the ' +
   'property is in an HOA. Being correctly marked Yes does NOT exempt these section-14 / HOA items from the ' +
   'explanation requirement: every one marked Yes still needs its own written explanation, so also flag under rule ' +
