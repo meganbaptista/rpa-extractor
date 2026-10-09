@@ -3328,7 +3328,23 @@ async function sendCallback(callbackUrl, payload) {
 // Reconcile the accumulated received set for a deal against its audit list and
 // POST the result to the callback. Shared by single-delivery mode and finalize.
 // ----------------------------------------------------------------------------
-async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}, threadId = '', droppedDocs = [], reviewIncomplete = false) {
+/**
+ * " Amy" for "Hi Amy,", from the sender's display name; '' when it is not a
+ * person's first name we can trust (an address, an office, empty), so the
+ * draft falls back to "Hi," for Megan to finish. Megan, 2026-10-09: her sent
+ * Bluffside reply opened "Hi Amy,"; the draft opened "Hi,".
+ */
+function greetName(name) {
+  const raw = String(name || '').replace(/["<].*$/, '').trim();
+  if (!raw || /@|\d/.test(raw)) return '';
+  const first = raw.includes(',') ? raw.split(',')[1].trim().split(/\s+/)[0] : raw.split(/\s+/)[0];
+  if (!/^[A-Za-z][A-Za-z'\u2019-]{1,}$/.test(first || '')) return '';
+  const OFFICE = /^(the|team|escrow|compass|coldwell|keller|sotheby|christie|redfin|realty|re\/max|remax|office|info|admin|transaction|tc)$/i;
+  if (OFFICE.test(first)) return '';
+  return ` ${first[0].toUpperCase()}${first.slice(1).toLowerCase()}`;
+}
+
+async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}, threadId = '', droppedDocs = [], reviewIncomplete = false, senderName = '') {
   // One email, one draft. Before spending anything, hold briefly and see whether
   // another source on this same email is going to call back with more than we
   // have. See claimCallbackSlot.
@@ -3883,7 +3899,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   let chaseEmailBody;
   if (followupCount) {
     chaseEmailBody =
-      'Hi,\n\n' +
+      `Hi${greetName(senderName)},\n\n` +
       'Thanks so much for sending these over! I went through the package, and here is what is still pending on my end:\n' +
       (stillNeeded.length
         ? '\nStill outstanding:\n' + stillNeeded.map((x) => `- ${x}`).join('\n') + '\n'
@@ -4036,6 +4052,8 @@ exports.handler = async function (event) {
     auditList, documents, propertyAddress = '', callbackUrl, threadId = '',
     accumulate_only: accumulateOnly = false, finalize = false, batchId = '',
   } = body;
+  // Who sent the disclosures, for "Hi Amy," (Zapier maps the Gmail From Name).
+  const senderName = body.senderName || body.sender_name || '';
   const callback = callbackUrl || CALLBACK_URL_ENV;
   // Gmail thread of the triggering email, passed straight through to the callback so
   // Zap B can draft the chase as a reply in that thread. Accept threadId or thread_id.
@@ -4087,7 +4105,7 @@ exports.handler = async function (event) {
       await store.setJSON(key, { address, received, updatedAt: Date.now() });
       console.log(`[disclosure-intake] finalize ${address}: merged ${batchForms.length} from ${slotKeys.length} slot(s) -> ${received.length} total`);
       for (const k of slotKeys) { try { await store.delete(k); } catch (e) { /* cleanup best-effort */ } }
-      await reconcileAndCallback(address, received, auditList, callback, batchFlags, batchKeyAnswers, gmailThreadId);
+      await reconcileAndCallback(address, received, auditList, callback, batchFlags, batchKeyAnswers, gmailThreadId, [], false, senderName);
       return { statusCode: 200 };
     }
 
@@ -4123,7 +4141,7 @@ exports.handler = async function (event) {
     const received = mergeForms(prior.received, newForms);
     await store.setJSON(key, { address, received, updatedAt: Date.now() });
     console.log(`[disclosure-intake] ${address}: ${received.length} form(s) received so far (was ${prior.received.length})`);
-    await reconcileAndCallback(address, received, auditList, callback, newFlags, newKeyAnswers, gmailThreadId, dropped, reviewIncomplete);
+    await reconcileAndCallback(address, received, auditList, callback, newFlags, newKeyAnswers, gmailThreadId, dropped, reviewIncomplete, senderName);
     return { statusCode: 200 };
   } catch (err) {
     console.error('[disclosure-intake] ERROR:', err.message);
