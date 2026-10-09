@@ -2871,7 +2871,14 @@ function routeUnconfirmedFlags(allFlags) {
     // to have a checkbox at the very least"). Still only when every pass agreed:
     // on 20371 Bluffside a one-off reading called a completed Section III blank.
     const agreedSectionIII = isTdsSectionIII(f) && Number(f.pass_total) >= 2 && f.pass_count === f.pass_total;
-    if (f.from_scan && f.issue !== 'detail_incomplete' && !blankWrittenField && !agreedBlank && !agreedSectionIII) {
+    // A YES WITH NO EXPLANATION ANYWHERE, every pass agreeing. 931 Chautauqua
+    // TDS C9 (major damage, marked Yes; the seller's sheet explains Lines 1,
+    // 4 & 5 and 11 only) sat in the check list; Bluffside SPQ 6G was the same
+    // and Megan sent it. Reliable now that scanned pages are read WITH the
+    // typed sheet: what is left is a Yes nothing explains.
+    const agreedUnexplained = f.issue === 'yes_no_explanation' && Number(f.pass_total) >= 2 && f.pass_count === f.pass_total;
+    if (f.from_scan && f.issue !== 'detail_incomplete' && !blankWrittenField && !agreedBlank && !agreedSectionIII
+      && !agreedUnexplained) {
       f.original_issue = f.issue;
       f.issue = 'scan_unconfirmed';
       scanUnconfirmed.push(f);
