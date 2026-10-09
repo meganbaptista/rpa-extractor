@@ -3401,6 +3401,35 @@ async function reconcile(auditList, received) {
 // Handles both bullet styles: the PS comment uses "•", the chase email uses "- ".
 const BULLET = /^[•\-]\s+/;
 
+/**
+ * "CHECK BEFORE SENDING", AT THE TOP OF THE DRAFT. Megan, 2026-10-09: she does
+ * not read the VERIFY section of the report, so everything routed there was
+ * effectively dropped (Bluffside SPQ 6G, Chautauqua SPQ 6A/6B/6K before that
+ * fix). The VERIFY items now open the draft itself, in a red box she deletes
+ * before sending, so they are in front of her every time and still never reach
+ * the agent unless she chooses to keep one. One line per item: the item and the
+ * first sentence of why.
+ */
+function checkBeforeSending(verify, clean = (x) => x) {
+  const firstSentence = (t) => {
+    const one = String(t || '').trim().split(/(?<=[.!?])\s+(?=[A-Z])/)[0] || '';
+    return one.length > 220 ? `${one.slice(0, 217).trim()}...` : one;
+  };
+  const lines = (verify || []).filter(Boolean)
+    .map((v) => clean(`${String(v.item || 'Item').trim()}: ${v.short || firstSentence(v.note)}`.replace(/:\s*$/, '')));
+  if (!lines.length) return { text: '', html: '' };
+  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return {
+    text: '*** CHECK BEFORE SENDING (delete this section before you send) ***\n'
+      + lines.map((l) => `- ${l}`).join('\n') + '\n*** END OF CHECK ***\n\n',
+    html: '<div style="border:2px solid #c62828;background:#fdecea;color:#b71c1c;padding:10px 14px;margin:0 0 16px 0">'
+      + '<p style="margin:0 0 6px 0"><strong>CHECK BEFORE SENDING (delete this box before you send)</strong></p>'
+      + '<ul style="margin:0;padding-left:22px">'
+      + lines.map((l) => `<li style="margin:0 0 4px 0">${esc(l)}</li>`).join('')
+      + '</ul></div>\n',
+  };
+}
+
 function commentToHtml(text) {
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const out = [];
@@ -3828,6 +3857,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   for (const f of fhdsDefault) {
     verify.push({
       item: [f.form, f.item].filter(Boolean).join(' ') || 'FHDS Section 3',
+      short: `${String(f.reason || '').trim()} (often valid: 3B(1) and 3C(1) apply when nothing is checked)`,
       note: 'on the FHDS, 3B(1) and 3C(1) have no checkbox and apply when nothing else in 3B / 3C is '
         + 'checked, so this is usually a valid form (3A "is NOT" with nothing checked = 3C(1)). Check before '
         + `requesting anything. The review reported: "${String(f.reason || '').trim()}"`,
@@ -3836,6 +3866,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   for (const f of scanUnconfirmed) {
     verify.push({
       item: [f.form, f.item].filter(Boolean).join(' ') || 'this item',
+      short: `${String(f.reason || '').trim() || 'flagged'} (scanned page, look at the mark`
+        + `${f.pass_total ? `; ${f.pass_count} of ${f.pass_total} reads saw it` : ''})`,
       note: 'read off a SCANNED page (no text layer), where checkmarks can sit across two rows or two '
         + 'boxes. Look at the page before requesting anything. The review reported: '
         + `"${String(f.reason || '').trim()}"`
@@ -4088,6 +4120,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   }
   // Backstop for Megan's no-em-dash rule across the whole email body.
   chaseEmailBody = stripDashes(chaseEmailBody);
+  const checkBox = checkBeforeSending(verify, stripDashes);
 
   // A dropped document is SILENT data loss: the 413 backstop discards the biggest doc to
   // make the request fit, and that is almost always the disclosure package itself. Every
@@ -4162,12 +4195,12 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     // Same report as Markdown, for Process Street: bold section headings, newlines preserved.
     ps_comment_md: commentToMarkdown(stripDashes(psComment)),
     chase_email_subject: chaseEmailSubject,
-    chase_email_body: chaseEmailBody,
+    chase_email_body: checkBox.text + chaseEmailBody,
     // The draft goes out as an HTML email, where a newline is only whitespace, so the plain body
     // arrives as one unbroken paragraph. Map THIS into the Gmail draft with Body Type = html.
     // Empty (not an empty <p>) when there is nothing to chase, so the Zap's followup_count check
     // still behaves.
-    chase_email_body_html: chaseEmailBody ? commentToHtml(chaseEmailBody) : '',
+    chase_email_body_html: chaseEmailBody ? checkBox.html + commentToHtml(chaseEmailBody) : '',
     result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, confirmed: confirmedReadings, verify, not_applicable: na, response_flags: flags, outdated_versions: outdated, historical: historical.map(vintageLabel) },
   };
 
@@ -4180,7 +4213,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold
