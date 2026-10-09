@@ -225,8 +225,35 @@ function parseRequestBody(event) {
     }
     return { ok: true, body, note: notes.join('; ') };
   } catch (err) {
+    // A free-text name field carrying its own quotes is not a reason to drop
+    // the whole delivery. Repair it and try once more; report the original
+    // error if that does not parse either.
+    const repaired = repairFreeTextFields(raw);
+    if (repaired !== raw) {
+      try {
+        const body = JSON.parse(repaired);
+        if (body && typeof body === 'object') {
+          notes.push('repaired quotes inside a free-text name field');
+          return { ok: true, body, note: notes.join('; ') };
+        }
+      } catch (e) { /* fall through to the original diagnosis */ }
+    }
     return { ok: false, diagnostic: diagnose(raw, err, event, contentType) };
   }
 }
 
-module.exports = { parseRequestBody };
+/**
+ * GMAIL DISPLAY NAMES CAN CARRY THEIR OWN QUOTES. 2026-10-09: Zapier's From Name
+ * for Edelyn Bi\u00f1as arrived as "Edelyn Bi\u00f1as" WITH the quotes, so the
+ * template's "senderName": "{{From Name}}" became ""Edelyn Bi\u00f1as"" and the
+ * run was rejected before anything was read. The name only sets the draft's
+ * greeting, so on a parse failure its line is rebuilt with the quotes stripped.
+ * Only these keys, only on their own line, never the documents or ids.
+ */
+const FREE_TEXT_LINE = /^(\s*"(?:senderName|sender_name)"\s*:\s*)(.*?)(,?)\s*$/gm;
+function repairFreeTextFields(raw) {
+  return raw.replace(FREE_TEXT_LINE, (_, head, value, comma) =>
+    `${head}${JSON.stringify(String(value).replace(/["\\]/g, '').trim())}${comma}`);
+}
+
+module.exports = { parseRequestBody, repairFreeTextFields };

@@ -3409,12 +3409,17 @@ function greetName(name) {
   const raw = String(name || '').replace(/["<].*$/, '').trim();
   if (!raw || /@|\d/.test(raw)) return '';
   const first = raw.includes(',') ? raw.split(',')[1].trim().split(/\s+/)[0] : raw.split(/\s+/)[0];
-  if (!/^[A-Za-z][A-Za-z'\u2019-]{1,}$/.test(first || '')) return '';
+  // Letters in any alphabet: "Edelyn Bi\u00f1as", "Jos\u00e9".
+  if (!/^\p{L}[\p{L}'\u2019-]{1,}$/u.test(first || '')) return '';
   // OUR OWN NAME IS NOT THE RECIPIENT. The trigger reads the thread's newest
   // message, and on 2781 Westshire that was Megan's own reply, so the draft
   // would have opened "Hi Megan,". Signer + DISCLOSURE_OWN_NAMES (comma list of
   // first names, e.g. "megan,belle") are never greeted.
-  const own = [process.env.DISCLOSURE_SIGNER_NAME || 'Megan', ...(process.env.DISCLOSURE_OWN_NAMES || '').split(',')]
+  // The router's ROSTER is the team (Edelyn, who handles buyer disclosures,
+  // labelled a thread whose newest message was hers, 2026-10-09).
+  let roster = [];
+  try { roster = (require('./lib/routing-config.js').ROSTER || []).map((r) => r && r.name); } catch (e) { roster = []; }
+  const own = [process.env.DISCLOSURE_SIGNER_NAME || 'Megan', ...roster, ...(process.env.DISCLOSURE_OWN_NAMES || '').split(',')]
     .map((x) => String(x || '').trim().split(/\s+/)[0].toLowerCase()).filter(Boolean);
   if (own.includes(first.toLowerCase())) return '';
   const OFFICE = /^(the|team|escrow|compass|coldwell|keller|sotheby|christie|redfin|realty|re\/max|remax|office|info|admin|transaction|tc)$/i;
@@ -4113,7 +4118,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold

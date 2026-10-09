@@ -56,5 +56,12 @@ ok('a contradiction stays', u('the explanation says no leaks, which contradicts 
 ok('only explanation_unclear is ever dropped',
   M.wantsDetailOnly({ issue: 'detail_incomplete', reason: 'does not state when' }), false);
 
+// --- greeting: the sender's first name, never our own team ------------------
+ok('greets the agent', M.greetName('Amy Ross'), ' Amy');
+ok('accented names', M.greetName('José Ruiz'), ' José');
+ok('never Megan', M.greetName('Megan Baptista'), '');
+ok('never a router teammate (Edelyn)', M.greetName('Edelyn Biñas'), '');
+ok('never an email address', M.greetName('amy@x.com'), '');
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall chase-voice checks pass');
