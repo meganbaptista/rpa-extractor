@@ -73,7 +73,7 @@ function linksOf(html) {
 
 // Click-tracking services legitimate newsletters route every link through. A
 // visible "zillow.com" that really goes to one of these is normal, not a trick.
-const CLICK_TRACKERS = /(^|\.)(list-manage\.com|sendgrid\.net|mandrillapp\.com|hubspotlinks\.com|hs-sites\.com|hubspotemail\.net|rs6\.net|mailgun\.org|mailchimp\.com|mcusercontent\.com|exacttarget\.com|klaviyo\.com|sparkpostmail\.com|cmail\d*\.com|createsend\d*\.com|mjt\.lu|awstrack\.me|ct\.sendgrid\.net|lnks?\.gd|e2ma\.net|constantcontact\.com|mailjet\.com|postmarkapp\.com|salesforce\.com|pardot\.com|marketo\.com|mktoweb\.com|bombbomb\.com|follow-up-boss\.com|followupboss\.com|kvcore\.com|boomtownroi\.com)$/i;
+const CLICK_TRACKERS = /(^|\.)(list-manage\.com|sendgrid\.net|mandrillapp\.com|hubspotlinks\.com|hs-sites\.com|hubspotemail\.net|rs6\.net|mailgun\.org|mailchimp\.com|mcusercontent\.com|exacttarget\.com|klaviyo\.com|sparkpostmail\.com|cmail\d*\.com|createsend\d*\.com|mjt\.lu|awstrack\.me|ct\.sendgrid\.net|lnks?\.gd|e2ma\.net|constantcontact\.com|mailjet\.com|postmarkapp\.com|salesforce\.com|pardot\.com|marketo\.com|mktoweb\.com|bombbomb\.com|follow-up-boss\.com|followupboss\.com|kvcore\.com|boomtownroi\.com|wisestamp\.com|emailprotection\.link|mimecast\.com|cudasvc\.com|barracuda\.com|trendmicro\.com|sophos\.com|zixcorp\.com|zix\.com|appriver\.com|messagelabs\.com|forcepoint\.com|cisco\.com|iphmx\.com|fireeye\.com|egress\.com|newoldstamp\.com|mysignature\.io|exclaimer\.net|hubspot\.com|ctctcdn\.com|getresponse\.com)$/i;
 
 // Endings a shown web address actually uses. Anything else ("My.TC.Concierge")
 // is a name with dots in it, not a site.
@@ -213,12 +213,20 @@ function check(message) {
 
   // Gmail's own sender checks.
   const auth = String(h['authentication-results'] || '');
-  if (/\bdmarc=fail\b/i.test(auth)) strong.push('Gmail could not verify the sender (DMARC failed), so the From address may be faked');
-  else if (/\bspf=fail\b/i.test(auth) && !/\bdkim=pass\b/i.test(auth)) weak.push('Gmail could not fully verify the sender');
+  // Weak, not strong: small-business domains fail DMARC routinely (forwarding,
+  // half-set-up records). The 2026-10-09 inbox sweep flagged Cristie St. James
+  // and Geoffrey Frid on this alone. It counts only alongside a bad link sign.
+  if (/\bdmarc=fail\b/i.test(auth) || (/\bspf=fail\b/i.test(auth) && !/\bdkim=pass\b/i.test(auth))) {
+    weak.push('Gmail could not verify the sender');
+  }
 
+  // Reply-To pointing elsewhere is normal for DocuSign, Qualia and every
+  // sending system (the 2026-10-09 sweep: all 11 DocuSign envelopes). What is
+  // NOT normal is a business sender whose replies go to a free mailbox.
   const replyDomain = addrDomain(h['reply-to']);
-  if (links.length && replyDomain && fromDomain && replyDomain !== fromDomain) {
-    weak.push(`replies would go to ${replyDomain}, not the sender's ${fromDomain}`);
+  const FREE_MAIL = /^(gmail\.com|googlemail\.com|yahoo\.com|outlook\.com|hotmail\.com|live\.com|aol\.com|icloud\.com|me\.com|proton\.me|protonmail\.com|gmx\.com|mail\.com|zoho\.com|yandex\.com)$/i;
+  if (replyDomain && fromDomain && replyDomain !== fromDomain && FREE_MAIL.test(replyDomain) && !FREE_MAIL.test(fromDomain)) {
+    weak.push(`replies would go to a personal ${replyDomain} address, not the sender's ${fromDomain}`);
   }
 
   const reasons = [...new Set(strong)].concat([...new Set(weak)]);

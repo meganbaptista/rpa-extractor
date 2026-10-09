@@ -36,7 +36,8 @@ ok('a link that shows one site and goes to another', check(msg({
 
 ok('an .html attachment', check(msg({ attachments: [{ filename: 'Escrow_Docs_123_Main.html' }] })).suspicious, true);
 
-ok('DMARC failed', check(msg({ auth: 'mx.google.com; spf=fail; dkim=none; dmarc=fail (p=NONE)' })).suspicious, true);
+ok('DMARC failed + a link to free hosting', check(msg({ auth: 'mx.google.com; spf=fail; dkim=none; dmarc=fail (p=NONE)',
+  html: '<a href="https://escrow-files.web.app/x">Open</a>' })).suspicious, true);
 
 ok('shortened link + "click to view a document" + nothing attached', check(msg({
   text: 'You have a secure document waiting. Click here to view.',
@@ -48,7 +49,7 @@ ok('Microsoft-wrapped (SafeLinks) bad link is unwrapped and still caught', check
   html: `<a href="https://nam12.safelinks.protection.outlook.com/?url=${encodeURIComponent('https://sharepoint-file.web.app/doc')}&data=x">sharepoint.com/doc</a>`,
 })).suspicious, true);
 
-ok('wire instructions + reply-to elsewhere + link', check(msg({
+ok('wire instructions + replies to a personal Gmail + link', check(msg({
   replyTo: 'amy.escrow@gmail.com', text: 'Please use the updated wire instructions at the link.',
   html: '<a href="https://firstam.com/wire">wire info</a>',
 })).suspicious, true);
@@ -111,6 +112,24 @@ ok('a FAKE DocuSign that fails DMARC is still caught', check(msg({
   text: 'Your document has been completed. View Completed Document',
   html: '<a href="https://docusign-view.web.app/x">View Completed Document</a>',
 })).suspicious, true);
+
+// ---- the 2026-10-09 inbox sweep: 15 real emails, none phishing -----------
+ok('sweep: DocuSign Completed, replies to docusign.com (not verified header)', check(msg({
+  from: 'Docusign via Docusign <dse_NA3@docusign.net>', replyTo: 'dse@docusign.com', auth: 'mx.google.com; dkim=pass',
+  text: 'Your document has been completed. View Completed Document',
+  html: '<a href="https://na3.docusign.net/x">View Completed Document</a>' })).suspicious, false);
+ok('sweep: Megan via DocuSign, replies to mytcconcierge.com', check(msg({
+  from: 'Megan Baptista via Docusign <dse_NA3@docusign.net>', replyTo: 'megan@mytcconcierge.com', auth: '',
+  text: 'Please review and sign. REVIEW DOCUMENT', html: '<a href="https://na3.docusign.net/x">REVIEW DOCUMENT</a>' })).suspicious, false);
+ok('sweep: a small-business domain failing DMARC, no bad links', check(msg({
+  from: '"Cristie St. James" <cristie@stjamescanter.com>', auth: 'mx.google.com; spf=fail; dmarc=fail (p=NONE)',
+  text: 'Received, thank you.', html: '<a href="https://stjamescanter.com">stjamescanter.com</a>' })).suspicious, false);
+ok('sweep: Compass agent signature through WiseStamp', check(msg({
+  from: 'Kailee Tedesco <kailee.tedesco@compass.com>', text: 'Offer attached.',
+  html: '<a href="https://link.wisestamp.com/x">www.kaileetedesco.com</a>' })).suspicious, false);
+ok('sweep: escrow amendment through a link-protection service, mentions wiring', check(msg({
+  from: 'Dawn Dolan <dawn@pacificcescrow.com>', text: 'Attached is the amendment. Please wire funds for closing per the instructions.',
+  html: '<a href="https://url.emailprotection.link/?x">www.pacificcescrow.com</a>' })).suspicious, false);
 
 ok('a plain escrow email with no links', check(msg({ text: 'Attached are the escrow instructions for 123 Main St.' })).suspicious, false);
 
