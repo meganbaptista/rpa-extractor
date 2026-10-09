@@ -20,7 +20,8 @@ function ok(label, got, want) {
   const seen = [];
   const gmail = {
     listMessages: async ({ q }) => { seen.push(q); return /larryrutkowski@hotmail\.com/.test(q) ? [{ id: 'p1' }] : []; },
-    getMessage: async () => ({ headers: { subject: 'Seller Disclosure Package | 2402 Alto Cerro Cir, San Diego, CA 92109' } }),
+    getMessage: async () => ({ headers: { subject: 'Seller Disclosure Package | 2402 Alto Cerro Cir, San Diego, CA 92109' },
+      newestText: 'Hi Larry,\n\nAttached is your seller disclosure package...' }),
   };
   ok('proof: we sent Larry the package', await sellerClientFor('larry rutkowski <larryrutkowski@hotmail.com>', { gmail }),
     { seller: true, property: '2402 Alto Cerro Cir, San Diego, CA 92109' });
@@ -29,6 +30,17 @@ function ok(label, got, want) {
   ok('an agent we never sent it to is not a seller', await sellerClientFor('Agent <agent@gmail.com>', { gmail }), { seller: false });
   ok('our own address is never checked', await sellerClientFor('Megan <megan@mytcconcierge.com>', { gmail }), { seller: false });
   ok('emailOf', emailOf('"Larry R" <LarryRutkowski@Hotmail.com>'), 'larryrutkowski@hotmail.com');
+
+  // An AGENT on the To line of the package is not a seller (33852 Del Obispo).
+  const agentGmail = {
+    listMessages: async () => [{ id: 'p2' }],
+    getMessage: async () => ({ headers: { subject: 'Seller Disclosure Package | 33852 Del Obispo St' },
+      newestText: 'Hi Susan,\n\nAttached is your seller disclosure package...' }),
+  };
+  ok('Shannon (an agent on the To line) is not proven a seller', await sellerClientFor('Shannon Parks <shannon@anvilreinc.com>', { gmail: agentGmail }), { seller: false });
+  ok('the greeted seller is', (await sellerClientFor('Susan Lee <susanlee@gmail.com>', { gmail: agentGmail })).seller, true);
+  ok('two sellers greeted together', (await sellerClientFor('Mark Lee <mark@gmail.com>', { gmail: {
+    listMessages: async () => [{ id: 'x' }], getMessage: async () => ({ headers: { subject: 'Seller Disclosure Package | 1 Main' }, newestText: 'Hello Susan and Mark,\n...' }) } })).seller, true);
 
   // The router.
   let classified = 0;

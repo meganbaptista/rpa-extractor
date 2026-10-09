@@ -111,6 +111,7 @@ async function inspectionSweep(q) {
       const message = await gmail.getMessage(m.id);
       if (!filer._internal.pickFiles(message, {}).pdfs.length) continue; // not an inspection email
       const r = await filer.fileInspectionReports(message, {}, { preview: !apply });
+      if (!r) continue; // skipped on purpose (our own email, filing off): nothing to show
       const h = message.headers || {};
       rows.push({ subject: h.subject || '', from: h.from || '', result: r });
     } catch (e) { rows.push({ subject: `(error ${m.id})`, from: '', result: { filed: [], why: e.message } }); }
