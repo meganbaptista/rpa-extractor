@@ -63,5 +63,16 @@ ok('never Megan', M.greetName('Megan Baptista'), '');
 ok('never a router teammate (Edelyn)', M.greetName('Edelyn Biñas'), '');
 ok('never an email address', M.greetName('amy@x.com'), '');
 
+// --- Chautauqua: blank questions off a scan are chased, as one line ---------
+{
+  const u = (item, extra = {}) => ({ form: 'SPQ', item, issue: 'unanswered', reason: 'neither Yes nor No is checked', from_scan: true, pass_count: 2, pass_total: 2, ...extra });
+  ok('three blank questions, one line', M.groupReviseLines([u('6A'), u('6B'), u('6K')]),
+    ['SPQ 6A, 6B and 6K were left unanswered. Could the seller mark Yes or No on those?']);
+  ok('a blank APN is not a Yes/No question', M.groupReviseLines([u('6A'), u('6B'), u('APN', { reason: 'the APN is left blank' })]).length, 2);
+  const r = M.routeUnconfirmedFlags([u('6A'), u('6B', { pass_count: 1 }),
+    { form: 'SPQ', item: '7A', issue: 'yes_no_explanation', from_scan: true, pass_count: 2, pass_total: 2 }]);
+  ok('agreed blank is chased; one-pass blank and mark readings go to VERIFY', r.scanUnconfirmed.map((f) => f.item), ['6B', '7A']);
+}
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall chase-voice checks pass');

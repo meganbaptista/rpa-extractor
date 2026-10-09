@@ -2836,7 +2836,16 @@ function routeUnconfirmedFlags(allFlags) {
     // which box a mark is in.
     const blankWrittenField = /\b(left\s+)?blank\b|\bempty\b|not\s+filled|no\s+date\b/i.test(text)
       && !/\bcheck(ed|box)?\b|\bmark(ed|s)?\b|\bbox(es)?\b|\byes\b|\bno\b(?!\s+date)|\bselect(ed)?\b/i.test(text);
-    if (f.from_scan && f.issue !== 'detail_incomplete' && !blankWrittenField) {
+    /**
+     * A QUESTION WITH NO MARK AT ALL is legible on a scan too. 931 Chautauqua
+     * (2026-10-09): SPQ 6A, 6B and 6K were genuinely unanswered, both review
+     * passes said so, and all three went to VERIFY, which Megan does not read,
+     * so they vanished. The Bluffside errors that started this rule were about
+     * WHICH box a mark sat in; "no mark in either box" has no box to misplace.
+     * Chased when every pass agreed; a one-pass reading still goes to VERIFY.
+     */
+    const agreedBlank = f.issue === 'unanswered' && Number(f.pass_total) >= 2 && f.pass_count === f.pass_total;
+    if (f.from_scan && f.issue !== 'detail_incomplete' && !blankWrittenField && !agreedBlank) {
       f.original_issue = f.issue;
       f.issue = 'scan_unconfirmed';
       scanUnconfirmed.push(f);
@@ -2978,7 +2987,17 @@ function groupReviseLines(flags) {
     if (!groups.has(key)) { groups.set(key, []); lines.push({ key }); }
     groups.get(key).push(f);
   }
+  // Every question left with no answer is ONE ask: "SPQ 6A, 6B and 6K were left
+  // unanswered" reads like a person; three identical lines read like a machine.
+  // Yes/No questions only ("6A", "13B(2)", "C12"); a blank APN or date is not one.
+  const blanks = lines.filter((x) => x.one && x.one.issue === 'unanswered' && /^(\d+[A-Z]|[A-Z]\d+)/i.test(String(x.one.item || '').trim()));
+  if (blanks.length >= 2) {
+    const first = lines.indexOf(blanks[0]);
+    for (const b of blanks) lines.splice(lines.indexOf(b), 1);
+    lines.splice(first, 0, { blankGroup: blanks.map((b) => b.one) });
+  }
   const out = lines.map((x) => {
+    if (x.blankGroup) return `${joinRefs(x.blankGroup)} were left unanswered. Could the seller mark Yes or No on those?`;
     if (x.one) return reviseLineFor(x.one);
     const g = groups.get(x.key);
     if (g.length === 1) return reviseLineFor(g[0]);
