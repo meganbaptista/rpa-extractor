@@ -77,6 +77,19 @@ ok('escrow email mentions DocuSign, links only to her own site and LinkedIn', ch
   html: '<a href="https://www.firstam.com">firstam.com</a> <a href="https://linkedin.com/in/amy">LinkedIn</a>',
 })).suspicious, false);
 
+ok("Megan's signature Instagram handle is not a fake address", check(msg({
+  from: 'Escrow <amy@firstam.com>',
+  html: '@<a href="https://www.instagram.com/my.tc.concierge">My.TC.Concierge</a> <a href="http://www.mytcconcierge.com">MyTcConcierge.com</a>',
+})).suspicious, false);
+
+ok('our own outgoing email is never flagged', check(msg({
+  from: 'Megan Baptista <megan@mytcconcierge.com>', attachments: [{ filename: 'x.html' }],
+})).suspicious, false);
+
+ok('a bad link in the QUOTED history does not flag the new reply', check(msg({
+  html: '<div>Thanks, received!</div><div class="gmail_quote">On Mon wrote:<blockquote><a href="https://x.firebaseapp.com">www.firstam.com</a></blockquote></div>',
+})).suspicious, false);
+
 ok('a plain escrow email with no links', check(msg({ text: 'Attached are the escrow instructions for 123 Main St.' })).suspicious, false);
 
 ok('an escrow email linking to its own site', check(msg({

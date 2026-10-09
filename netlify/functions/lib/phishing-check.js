@@ -75,6 +75,10 @@ function linksOf(html) {
 // visible "zillow.com" that really goes to one of these is normal, not a trick.
 const CLICK_TRACKERS = /(^|\.)(list-manage\.com|sendgrid\.net|mandrillapp\.com|hubspotlinks\.com|hs-sites\.com|hubspotemail\.net|rs6\.net|mailgun\.org|mailchimp\.com|mcusercontent\.com|exacttarget\.com|klaviyo\.com|sparkpostmail\.com|cmail\d*\.com|createsend\d*\.com|mjt\.lu|awstrack\.me|ct\.sendgrid\.net|lnks?\.gd|e2ma\.net|constantcontact\.com|mailjet\.com|postmarkapp\.com|salesforce\.com|pardot\.com|marketo\.com|mktoweb\.com|bombbomb\.com|follow-up-boss\.com|followupboss\.com|kvcore\.com|boomtownroi\.com)$/i;
 
+// Endings a shown web address actually uses. Anything else ("My.TC.Concierge")
+// is a name with dots in it, not a site.
+const REAL_TLD = /\.(com|net|org|edu|gov|us|io|co|biz|info|me|app|ai|realty|realtor|homes|house|properties|estate|law|legal|title|bank|ca|uk|co\.uk|de|mx|tv|ly|gl|ms|link|site|online|top|xyz|click|zip|mov)$/i;
+
 // Short links hide where they go.
 const SHORTENERS = /^(bit\.ly|tinyurl\.com|t\.ly|rebrand\.ly|ow\.ly|is\.gd|cutt\.ly|shorturl\.at|rb\.gy|buff\.ly|tiny\.cc|s\.id|v\.gd|qrco\.de|shorturl\.com)$/i;
 
@@ -111,9 +115,24 @@ function addrDomain(header) {
   return m ? baseDomain(m[1].toLowerCase()) : '';
 }
 
+/** The newest message only: Gmail and Outlook quoted history is dropped, so an
+ * old message in the thread cannot flag the new one. */
+function newestHtml(html) {
+  let s = String(html || '');
+  const cuts = [/<div[^>]+class="[^"]*gmail_quote/i, /<blockquote\b/i, /<div[^>]+id="(divRplyFwdMsg|appendonsend)"/i, /<hr[^>]*>\s*<div[^>]*>\s*<font[^>]*>\s*<b>From:/i];
+  let cut = s.length;
+  for (const re of cuts) { const m = s.match(re); if (m && m.index < cut) cut = m.index; }
+  return s.slice(0, cut);
+}
+
+// Our own outgoing mail (reminders, Zaps sending as Megan) is never phishing to us.
+const OWN_DOMAINS = String(process.env.ROUTER_OWN_DOMAINS || 'mytcconcierge.com')
+  .split(',').map((d) => d.trim().toLowerCase()).filter(Boolean);
+
 function check(message) {
   const h = (message && message.headers) || {};
-  const html = String((message && message.bodyHtml) || '');
+  if (OWN_DOMAINS.includes(addrDomain(h.from))) return { suspicious: false, reasons: [], strong: [], weak: [] };
+  const html = newestHtml((message && message.bodyHtml) || '');
   const text = `${h.subject || ''}\n${(message && message.newestText) || (message && message.bodyText) || ''}`;
   const strong = [];
   const weak = [];
@@ -133,8 +152,12 @@ function check(message) {
     const base = baseDomain(host);
 
     // A link that SAYS one site and GOES to another. The strongest sign there is.
+    // Only text that really reads as a web address: "www.", "http", or a known
+    // ending. Megan's signature "@My.TC.Concierge" (her Instagram handle) was
+    // read as the domain "tc.concierge" and her own email got flagged.
     const shown = l.text.match(/\b((?:[a-z0-9-]+\.)+[a-z]{2,})(?:\/\S*)?\b/i);
-    if (shown && !/@/.test(l.text)) {
+    const looksLikeAddress = shown && (/^(https?:\/\/|www\.)/i.test(l.text.trim()) || REAL_TLD.test(shown[1]));
+    if (looksLikeAddress && !/@/.test(l.text)) {
       const shownBase = baseDomain(shown[1].toLowerCase().replace(/^www\./, ''));
       if (shownBase && base && shownBase !== base && !CLICK_TRACKERS.test(host)) {
         strong.push(`a link shows "${shown[1]}" but actually goes to ${host}`);
