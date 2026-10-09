@@ -230,8 +230,9 @@ async function fileInspectionReports(message, decision, deps = {}) {
       if (existing.has(base) && existing.get(base) === bytes.length) { skipped.push(base); continue; }
       let name = base;
       for (let n = 2; existing.has(name); n++) name = base.replace(/(\.pdf)?$/i, ` (${n})$1`);
+      // Preview (the backfill page) stops here: same decisions, nothing saved.
       // eslint-disable-next-line no-await-in-loop
-      await d.drive.uploadMultipart({ name, parents: [folder.id], mimeType: 'application/pdf', bytes });
+      if (!deps.preview) await d.drive.uploadMultipart({ name, parents: [folder.id], mimeType: 'application/pdf', bytes });
       existing.set(name, bytes.length);
       filed.push(name === cleanName(p.filename) ? name : `${name} (was ${cleanName(p.filename)})`);
     }

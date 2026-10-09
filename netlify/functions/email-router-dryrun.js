@@ -85,8 +85,57 @@ ${rows.map((r) => `<tr style="border-top:1px solid #ddd;${r.flagged ? 'backgroun
   return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body };
 }
 
+/**
+ * INSPECTION BACKFILL / PREVIEW. ?inspections=1 runs lib/inspection-filer over
+ * recent emails with attachments: which deal folder it would use and what it
+ * would name each file, saving NOTHING. Add &apply=1 to actually file them
+ * (same "only when sure" rules; a file already there is skipped, so re-running
+ * cannot duplicate). Built 2026-10-09 for the reports that arrived before
+ * filing went live.
+ *   /.netlify/functions/email-router-dryrun?inspections=1
+ *   /.netlify/functions/email-router-dryrun?inspections=1&q=newer_than:7d has:attachment&apply=1
+ */
+async function inspectionSweep(q) {
+  const filer = require('./lib/inspection-filer');
+  const apply = q.apply === '1';
+  const search = q.q || 'in:inbox has:attachment newer_than:3d';
+  const limit = Math.min(Math.max(parseInt(q.limit, 10) || 120, 1), 300);
+  const started = Date.now();
+  const ids = (await gmail.listMessages({ q: search, maxPages: 3 })).slice(0, limit);
+  const rows = [];
+  let looked = 0;
+  for (const m of ids) {
+    if (Date.now() - started > 22000) break; // stay inside the function timeout
+    looked++;
+    try {
+      const message = await gmail.getMessage(m.id);
+      if (!filer._internal.pickFiles(message, {}).pdfs.length) continue; // not an inspection email
+      const r = await filer.fileInspectionReports(message, {}, { preview: !apply });
+      const h = message.headers || {};
+      rows.push({ subject: h.subject || '', from: h.from || '', result: r });
+    } catch (e) { rows.push({ subject: `(error ${m.id})`, from: '', result: { filed: [], why: e.message } }); }
+  }
+  const esc = (x) => String(x || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const ok = rows.filter((r) => r.result && r.result.filed && r.result.filed.length).length;
+  const body = `<html><head><meta charset="utf-8"><title>Inspection filing ${apply ? '' : 'preview'}</title></head>
+<body style="font-family:-apple-system,Arial,sans-serif;font-size:13px;margin:20px">
+<h2>Inspection filing ${apply ? '<span style="color:#2e7d32">APPLIED</span>' : 'PREVIEW (nothing saved)'}: ${ok} of ${rows.length} inspection emails ${apply ? 'filed' : 'would file'}</h2>
+<p>Search: <code>${esc(search)}</code>, ${looked} of ${ids.length} emails checked${looked < ids.length ? ' (time limit; narrow the search or run again)' : ''}.
+${apply ? '' : 'Add <code>&amp;apply=1</code> to the address to file them for real.'}</p>
+<table cellpadding="6" style="border-collapse:collapse">
+<tr style="background:#eee"><th align="left">Email</th><th align="left">From</th><th align="left">Deal folder</th><th align="left">${apply ? 'Filed as' : 'Would file as'} / why not</th></tr>
+${rows.map((r) => { const x = r.result || {}; const good = x.filed && x.filed.length;
+    return `<tr style="border-top:1px solid #ddd;${good ? 'background:#e8f5e9' : ''}"><td>${esc(r.subject)}</td><td>${esc(r.from)}</td>`
+      + `<td>${esc(x.folder || '')}</td><td>${good ? esc(x.filed.join('<br>')).replace(/&lt;br&gt;/g, '<br>') : esc(filer.summary(x).replace(/^INSPECTION\s*/, ''))}</td></tr>`; }).join('\n')}
+</table></body></html>`;
+  return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body };
+}
+
 exports.handler = async function (event) {
   const q = (event && event.queryStringParameters) || {};
+  if (q.inspections) {
+    try { return await inspectionSweep(q); } catch (e) { return { statusCode: 500, body: `inspection sweep failed: ${e.message}` }; }
+  }
   if (q.phishing) {
     try { return await phishingSweep(q); } catch (e) { return { statusCode: 500, body: `phishing sweep failed: ${e.message}` }; }
   }

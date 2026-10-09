@@ -130,6 +130,11 @@ const up = (d) => d.uploads.map((u) => u.replace(/ \(was .*\)$/, ''));
   ok('a scan with no text and no clue', T({ filename: 'scan0001.pdf', subject: 'see attached', text: '' }), 'Buyer Report - Inspection.pdf');
   ok("our seller's own report", T({ filename: 'termite.pdf', subject: '', text: '', sellerSent: true }), 'Seller Report - Termite.pdf');
 
+  // Preview (the backfill page) decides everything and saves nothing.
+  d = fakeDrive();
+  r = await F.fileInspectionReports(msg('Inspection Reports | 410 N Crescent Heights', ['Home Inspection.pdf']), {}, { drive: d, gmail, pdfHeadText, preview: true });
+  ok('preview: names the file, uploads nothing', [d.uploads, r.filed.map((x) => x.replace(/ \(was .*\)$/, ''))], [[], ['Buyer Report - General.pdf']]);
+
   process.env.INSPECTION_FILING = 'off';
   d = fakeDrive();
   r = await run(msg('Inspection Reports | 410 N Crescent Heights', ['Home Inspection.pdf']), d);
