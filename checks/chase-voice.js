@@ -87,5 +87,18 @@ ok('never an email address', M.greetName('amy@x.com'), '');
   ok('no VERIFY items, no box', M.checkBeforeSending([]), { text: '', html: '' });
 }
 
+// --- TDS "Line N" citations match Section C (931 Chautauqua) ---------------
+{
+  const entries = [{ form: 'TDS', item: 'Line 1', text: 'radon' }, { form: 'TDS', item: 'Line 4 & 5', text: 'permits' },
+    { form: 'TDS', item: 'Line 11', text: 'wildfire' }];
+  const v = (item, addendum_item) => M.validateAddendumFlags([{ form: 'TDS', item, issue: 'explanation_on_addendum', addendum_item }], entries)[0].issue;
+  ok('TDS C1 cited "Line 1" is explained', v('C1', 'Line 1'), 'explanation_on_addendum');
+  ok('TDS C5 cited "Line 4 & 5" is explained', v('C5', 'Line 4 & 5'), 'explanation_on_addendum');
+  ok('TDS C9 cannot borrow "Line 4 & 5"', v('C9', 'Line 4 & 5'), 'yes_no_explanation');
+  ok('SPQ entry 5 still cannot explain 6G',
+    M.validateAddendumFlags([{ form: 'SPQ', item: '6G', issue: 'explanation_on_addendum', addendum_item: '5' }],
+      [{ form: 'SPQ', item: '5', text: 'x' }])[0].issue, 'yes_no_explanation');
+}
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall chase-voice checks pass');

@@ -2352,21 +2352,42 @@ function addendumKey(item) {
 // explanation_on_addendum must cite one. Here we check that the cited entry actually exists and
 // actually corresponds to the sub-item's number. If it does not, the flag is DOWNGRADED to
 // yes_no_explanation, which chases the seller. Default to asking.
+/**
+ * HOW SELLERS LABEL THE SHEET. 931 Chautauqua (2026-10-09) wrote "Paragraph C,
+ * Line 1" and "Line 4 & 5" for TDS C1, C4, C5; the model cited "Line 1", whose
+ * key came out "LINE", never "C", so a real explanation was rejected and
+ * chased. Words like Paragraph / Line / Letter / Item are dropped, and on the
+ * TDS a bare line number belongs to Section C (the only numbered Yes/No list).
+ */
+const citeClean = (x) => String(x || '').replace(/\b(paragraph|para|line|lines|letter|item|section|no\.?)\b|#/gi, ' ')
+  .replace(/\s+/g, ' ').trim();
+function citeKey(form, x) {
+  const k = addendumKey(citeClean(x));
+  return String(form || '').toUpperCase() === 'TDS' && /^\d+$/.test(k) ? 'C' : k;
+}
+/** The line numbers a TDS citation names: "Line 4 & 5" -> [4, 5]. */
+const citeNumbers = (x) => (citeClean(x).match(/\d+/g) || []).map(Number);
+
 function validateAddendumFlags(flags, entries) {
   const byForm = new Map();
   for (const e of entries) {
-    const key = `${e.form}|${addendumKey(e.item)}`;
+    const key = `${e.form}|${citeKey(e.form, e.item)}`;
     if (!byForm.has(key)) byForm.set(key, e);
   }
   return flags.map((f) => {
     if (f.issue !== 'explanation_on_addendum') return f;
     const form = String(f.form || '').trim().toUpperCase();
     const wanted = addendumKey(f.item);
-    const cited = f.addendum_item ? addendumKey(f.addendum_item) : '';
+    const cited = f.addendum_item ? citeKey(form, f.addendum_item) : '';
     const entry = byForm.get(`${form}|${wanted}`);
+    // On the TDS, a citation by line number must name THIS line: "Line 4 & 5"
+    // explains C4 and C5, not C9.
+    const itemNo = Number((String(f.item || '').match(/\d+/) || [])[0]);
+    const nums = citeNumbers(f.addendum_item);
+    const lineOk = form !== 'TDS' || !nums.length || !itemNo || nums.includes(itemNo);
     // Valid only when the sheet really has an entry under this sub-item's number, and the entry
     // the model cited is that same one (it may not borrow entry 5 to explain 6G).
-    const ok = !!entry && !!wanted && (!cited || cited === wanted);
+    const ok = !!entry && !!wanted && (!cited || cited === wanted) && lineOk;
     if (ok) return f;
     const ref = [f.form, f.item].filter(Boolean).join(' ');
     // NO ENTRIES VISIBLE AT ALL is a different situation from a claim that does not
@@ -3850,7 +3871,20 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // of the chase email and out of followupCount, and becomes a VERIFY line, the section a human
   // already reads. The pipeline never decides whether that paragraph covers the sub-item. A
   // person does. That is the whole point.
-  const allFlags = Array.isArray(responseFlags) ? responseFlags : [];
+  /**
+   * ONE ITEM, ONE VERDICT. When one review pass found a sub-item's explanation
+   * on the seller's sheet and the other did not, the union kept both, and the
+   * same TDS C1 showed as "explained" and "not explained" side by side (931
+   * Chautauqua). A validated sheet explanation wins over a "no explanation"
+   * reading of the same item that not every pass made.
+   */
+  const explainedOnSheet = new Set((Array.isArray(responseFlags) ? responseFlags : [])
+    .filter((f) => f && f.issue === 'explanation_on_addendum')
+    .map((f) => `${String(f.form || '').toUpperCase()}|${String(f.item || '').toUpperCase()}`));
+  const allFlags = (Array.isArray(responseFlags) ? responseFlags : []).filter((f) => !(f
+    && f.issue === 'yes_no_explanation'
+    && explainedOnSheet.has(`${String(f.form || '').toUpperCase()}|${String(f.item || '').toUpperCase()}`)
+    && !(Number(f.pass_total) >= 2 && f.pass_count === f.pass_total)));
   // A flag claiming a cited attachment is absent is a claim the review cannot
   // support (see citesAnUnseenAttachment). Retag before the filtering below so it
   // takes the VERIFY route instead of the chase email.
@@ -4233,7 +4267,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold
