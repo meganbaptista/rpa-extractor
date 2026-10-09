@@ -2866,7 +2866,12 @@ function routeUnconfirmedFlags(allFlags) {
      * Chased when every pass agreed; a one-pass reading still goes to VERIFY.
      */
     const agreedBlank = f.issue === 'unanswered' && Number(f.pass_total) >= 2 && f.pass_count === f.pass_total;
-    if (f.from_scan && f.issue !== 'detail_incomplete' && !blankWrittenField && !agreedBlank) {
+    // TDS SECTION III WITH NO BOX CHECKED goes to the agent, not the check
+    // list (Megan, 2026-10-09: "I do want the section III item about the AVID
+    // to have a checkbox at the very least"). Still only when every pass agreed:
+    // on 20371 Bluffside a one-off reading called a completed Section III blank.
+    const agreedSectionIII = isTdsSectionIII(f) && Number(f.pass_total) >= 2 && f.pass_count === f.pass_total;
+    if (f.from_scan && f.issue !== 'detail_incomplete' && !blankWrittenField && !agreedBlank && !agreedSectionIII) {
       f.original_issue = f.issue;
       f.issue = 'scan_unconfirmed';
       scanUnconfirmed.push(f);
@@ -2892,7 +2897,16 @@ const reasonOf = (f) => dashless(f && f.reason).replace(/[;.,]\s*please\b[\s\S]*
 const refOf = (f) => [f && f.form, f && f.item].filter(Boolean).join(' ');
 const verbFor = (src) => (/(documents|instructions)\b/i.test(src) ? 'indicate' : 'indicates');
 
+const isTdsSectionIII = (f) => !!f && /^tds$/i.test(String(f.form || '').trim())
+  && /section\s*(iii|3)\b|^iii$/i.test(String(f.item || '').trim());
+
 function reviseLineFor(f) {
+  // The listing agent's own part of the TDS, asked in plain words.
+  if (isTdsSectionIII(f)) {
+    const unsigned = /\bsign|signature|unsigned/i.test(String(f.reason || ''));
+    return 'TDS Section III (Agent\'s Inspection Disclosure): none of the boxes are checked. Could the listing agent '
+      + `check one (usually "See attached AVID")${unsigned ? ', and sign and date it' : ''}?`;
+  }
   const ref = refOf(f);
   const why = reasonOf(f);
   const marked = f.marked || 'No';
@@ -4267,7 +4281,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold

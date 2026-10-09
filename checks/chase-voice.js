@@ -100,5 +100,16 @@ ok('never an email address', M.greetName('amy@x.com'), '');
       [{ form: 'SPQ', item: '5', text: 'x' }])[0].issue, 'yes_no_explanation');
 }
 
+// --- TDS Section III goes to the agent when both reads agree ---------------
+{
+  const f = { form: 'TDS', item: 'Section III', issue: 'verify_mismatch', from_scan: true, pass_count: 2, pass_total: 2,
+    reason: "Section III has none of its three boxes checked; please have the listing agent complete it" };
+  ok('agreed Section III is chased', M.routeUnconfirmedFlags([f]).scanUnconfirmed.length, 0);
+  ok('one-pass Section III stays in the check list', M.routeUnconfirmedFlags([{ ...f, pass_count: 1 }]).scanUnconfirmed.length, 1);
+  ok('Section III asks for a box', M.reviseLineFor(f),
+    'TDS Section III (Agent\'s Inspection Disclosure): none of the boxes are checked. Could the listing agent check one (usually "See attached AVID")?');
+  ok('and a signature when it is unsigned', /sign and date it\?$/.test(M.reviseLineFor({ ...f, reason: 'no box checked and the agent signature is blank' })), true);
+}
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall chase-voice checks pass');
