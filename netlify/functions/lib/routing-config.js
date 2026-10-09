@@ -192,10 +192,6 @@ const ROSTER = [
       + 'CDA, a QUESTION about a CDA, and a request to have an agent reimbursed through the '
       + 'CDA at closing. (A finished CDA merely being delivered as an attachment by '
       + 'commission finance is still NO_TAG — see the no-tag rules.) '
-      + 'Lender LOAN-STATUS / loan-progress updates — '
-      + 'a "loan update" from the lender: loan approval received, conditions or ICD requested, '
-      + 'underwriting or appraisal progress. (This is distinct from the physical loan DOCS '
-      + 'arriving or signing logistics, which stay NO_TAG.) '
       + 'Any email that STATES, CONFIRMS, or CHANGES a specific closing date (e.g. "we can '
       + 'close Friday", "set to close on the 30th", a close-date revision, or an escrow '
       + 'closing audit response with a changed close date) — so Belle can verify or update '
@@ -349,6 +345,7 @@ const PAIRS = [];
 // ---------------------------------------------------------------------------
 const NO_TAG_RULES = [
   'MLS LISTING MAINTENANCE that is the listing AGENT\'s job, not ours: removing or editing MLS photos, closing out / withdrawing the MLS listing, updating the MLS with agent names. Our team does not do MLS upkeep, so even a direct "can you take care of this?" request is NO_TAG. (This is DIFFERENT from receiving an "MLS SOLD" copy, which IS Belle.)',
+  'LENDER LOAN-STATUS / loan-progress updates with no ask of our team: underwriting submitted, loan approved, conditions issued or cleared, appraisal ordered/received/progress, "loan update". Per Megan (2026-10-09) "loan status, not really anything". EXCEPTIONS: if it states or changes a specific closing date -> Belle (close-date rule); if it directly asks our team to do or send something -> route by who owns that ask.',
   'SELLER opening package or BUYER opening package (NOT the agent/broker opening package) once escrow is open and the email says "SELLER OPENING" / "BUYER OPENING".',
   '"Loan docs are in / have arrived."',
   'Buyer signing loan docs, notary appointments to sign docs, scheduling the buyer to sign loan docs.',
@@ -395,7 +392,7 @@ const ROUTING_NOTES = [
   'NEW LISTING / NEW DEAL INTAKE goes to BELLE FIRST, even when the email is addressed to Megan by name and asks for HER availability ("Hi Megan — I have a new listing, would you be available to start working with me on this?"). Belle opens and sets up every new file before it reaches Megan. Being addressed to Megan is NOT a routing signal here; the ask is a new file. Route to MEGAN only when there is NO specific deal — a general inquiry about our services, pricing, or capacity from someone not bringing a listing — or when the thread is a LEASE (Megan owns the whole lease file). A phone-call request to Megan is still Megan.',
   'Leases: CAR form "LR" -> Megan; but RLAS / SIP (leaseback or seller-in-possession after sale) -> Jill.',
   'Milestone receipts count only when in the NEWEST message (EMD received, funded, recorded/closed) and route to Belle; the same words quoted from an older message do not.',
-  'Loan emails split two ways: a lender LOAN-STATUS / progress update (approval received, conditions/ICD requested, appraisal progress, "loan update") -> Belle. But the physical loan DOCS arriving, buyer signing loan docs / scheduling the signing, and a bare appraisal-scheduling email stay NO_TAG.',
+  'Loan emails are NO_TAG: a lender LOAN-STATUS / progress update (underwriting, approval, conditions, appraisal progress, "loan update"), the physical loan DOCS arriving, buyer signing loan docs / scheduling the signing, and appraisal scheduling. Only a stated/changed closing date (-> Belle) or a direct ask of our team gets routed.',
   'CLOSE DATE beats the loan-docs no-tag: if an email states or confirms a specific closing date (e.g. "loan docs are coming so we can close Friday"), route to Belle to verify/update Process Street — do NOT mark it NO_TAG just because it also mentions loan docs arriving. Only a pure loan-docs-arriving note with no close date stays NO_TAG.',
 ];
 
