@@ -55,7 +55,9 @@ const { CanvasFactory } = require('pdf-parse/worker');
 const { PDFParse } = require('pdf-parse');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-opus-4-8';
+// Env-selectable for the model comparison (2026-10-09); unset = unchanged.
+// The identify cache key includes MODEL, so a switch never serves the old model's answer.
+const MODEL = process.env.INTAKE_MODEL || 'claude-opus-4-8';
 const CALLBACK_URL_ENV = process.env.DISCLOSURE_INTAKE_CALLBACK_URL || '';
 
 // Published-CSV URL of the master "audit lists" Google Sheet (one row per deal:

@@ -88,3 +88,6 @@ The `*_date` fields are worked out from Acceptance, which is wrong on a deal who
 - Run `node --check` on every changed JS file, and a `require()`/load test for shared modules, before delivering.
 - No Airtable. Keep data shapes V2-ready (multi-tenant aware, configurations as editable data).
 - The schema lives in ONE place now (`lib/rpa-fields.js`). Keep it that way — never re-inline `FIELDS`.
+
+### g) Model comparison switches (2026-10-09)
+`SPLIT_MODEL` (lib/page-strips.js + lib/document-audit.js) and `INTAKE_MODEL` (disclosure-intake-check-background.js) are Netlify env vars; unset keeps `claude-opus-4-8`. For the Opus 5.5 / Fable 5.1 comparison Megan asked for. lib/claude.js now sends the `server-side-fallback-2026-07-01` beta + `fallbacks: "default"` for opus-5-5 / fable-5-1 / opus-5 / sonnet-5-5, and throws a named error on `stop_reason: "refusal"` so the caller's failed-call path routes it to review. Effort is always sent explicitly (default 'high'), so Opus 5.5's `medium` default never applies. usage-log prices Opus 5.5 at $4/$20. The intake's identify cache key includes MODEL, so switching never serves the other model's cached answer. Not yet verified live: run one packet per model and check the ledger shows the new model id.

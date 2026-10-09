@@ -97,7 +97,8 @@ const STRIP_PAGES_PER_CALL = 10;
  */
 const RENDER_CHUNK_PAGES = 4;
 
-const MODEL = 'claude-opus-4-8';
+// Env-selectable for the model comparison (2026-10-09); unset = unchanged.
+const MODEL = process.env.SPLIT_MODEL || 'claude-opus-4-8';
 
 /**
  * How many strip batches are read at once.

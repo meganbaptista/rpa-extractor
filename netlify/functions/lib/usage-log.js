@@ -41,6 +41,7 @@ const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 // ~0.1x input, cache writes at ~1.25x input. Keep this in sync with pricing.
 const PRICES = {
   'claude-fable-5-1': { in: 10, out: 50 },
+  'claude-opus-5-5': { in: 4, out: 20 },
   'claude-opus-5': { in: 5, out: 25 },
   'claude-opus-4-8': { in: 5, out: 25 },
   'claude-opus-4-7': { in: 5, out: 25 },

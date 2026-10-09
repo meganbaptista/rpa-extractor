@@ -20,6 +20,8 @@
 // ----------------------------------------------------------------------------
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+// Models that need the refusal fallback (see callClaude).
+const FALLBACK_MODELS = /^claude-(opus-5-5|fable-5-1|opus-5|sonnet-5-5)$/;
 const usageLog = require('./usage-log');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -92,7 +94,10 @@ async function callClaude(opts) {
   try {
     response = await fetch(ANTHROPIC_API_URL, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      headers: {
+        'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01',
+        ...(FALLBACK_MODELS.test(model) ? { 'anthropic-beta': 'server-side-fallback-2026-07-01' } : {}),
+      },
       body: JSON.stringify({
         model,
         max_tokens: maxTokens,
@@ -100,6 +105,10 @@ async function callClaude(opts) {
         output_config: { effort },
         stream: true,
         messages: [{ role: 'user', content }],
+        // Opus 5.5 / Fable 5.1 run safety classifiers that can decline a request.
+        // "default" lets the server retry on a model that will answer, by refusal
+        // category, instead of the call returning nothing.
+        ...(FALLBACK_MODELS.test(model) ? { fallbacks: 'default' } : {}),
       }),
     });
   } catch (err) {
@@ -143,6 +152,10 @@ async function callClaude(opts) {
   // the most expensive failures the invisible ones.
   if (fn) await usageLog.logUsage({ fn, model, effort, usage: result.usage, note });
   if (result.stopReason === 'max_tokens') throw new Error(maxTokensError);
+  // A refusal that survived the fallback comes back as HTTP 200 with no usable
+  // text. Say so, so the caller's "this call failed" path routes it to review
+  // instead of a JSON parse error naming nothing.
+  if (result.stopReason === 'refusal') throw new Error('the model declined this request (refusal); review by hand');
   return result.text;
 }
 

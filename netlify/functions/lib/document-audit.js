@@ -45,7 +45,8 @@ const { mapLimit } = require('./map-limit');
 const AUDIT_DOCS_PER_CALL = 5;
 const AUDIT_PAGES_PER_CALL = 14;
 
-const MODEL = 'claude-opus-4-8';
+// Env-selectable for the model comparison (2026-10-09); unset = unchanged.
+const MODEL = process.env.SPLIT_MODEL || 'claude-opus-4-8';
 
 /**
  * How many audit calls run at once.
