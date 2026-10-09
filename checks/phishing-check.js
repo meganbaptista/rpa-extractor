@@ -158,6 +158,20 @@ ok("Jay's Outlook reply quoting an email with a bad link is judged on Jay's word
   html: '<p>Red Door will not come into play.</p><div style="border:none;border-top:solid #B5C4DF 1.0pt"><p><b>From:</b> Kristin</p>'
     + '<a href="https://evil.top/x">www.kristinlalexander.com</a></div>' })).suspicious, false);
 
+ok("Shannon Parks: vanity site linking to her brokerage's own domain", check(msg({
+  from: 'Shannon Parks <shannon@anvilreinc.com>', text: 'Attached you will find RR #1.',
+  html: '<a href="https://anvilreinc.com/agents/shannon">SHANNONPARKSREALTOR.COM</a>' })).suspicious, false);
+ok('an agent (gmail) whose vanity site links to the brokerage: one weak sign, not flagged', check(msg({
+  from: 'Agent <agent@gmail.com>', text: 'Offer attached.',
+  html: '<a href="https://www.compass.com/agents/x">www.agentname.com</a>' })).suspicious, false);
+ok('showing a trusted name (docusign.com) but going elsewhere is still strong', check(msg({
+  from: 'Agent <agent@gmail.com>', text: 'Please sign.',
+  html: '<a href="https://sign-docs-portal.com/x">www.docusign.com</a>' })).suspicious, true);
+
+ok('showing firstam.com but going to a look-alike is strong', check(msg({
+  from: 'Escrow <officer@gmail.com>', text: 'Your documents are ready.',
+  html: '<a href="https://firstam-secure-docs.com/x">www.firstam.com</a>' })).suspicious, true);
+
 ok('a plain escrow email with no links', check(msg({ text: 'Attached are the escrow instructions for 123 Main St.' })).suspicious, false);
 
 ok('an escrow email linking to its own site', check(msg({

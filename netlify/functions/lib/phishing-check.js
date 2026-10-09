@@ -79,6 +79,11 @@ const CLICK_TRACKERS = /(^|\.)(list-manage\.com|sendgrid\.net|mandrillapp\.com|h
 // is a name with dots in it, not a site.
 const REAL_TLD = /\.(com|net|org|edu|gov|us|io|co|biz|info|me|app|ai|realty|realtor|homes|house|properties|estate|law|legal|title|bank|ca|uk|co\.uk|de|mx|tv|ly|gl|ms|link|site|online|top|xyz|click|zip|mov)$/i;
 
+// Names worth faking in our world: title companies, big escrow and mortgage
+// brands, banks and wire-verification services. Showing one of these while
+// linking somewhere else is a real sign.
+const TRUSTED_SHOWN = /^(firstam\.com|fnf\.com|fidelity\w*\.com|ctt\.com|chicagotitle\.com|ticortitle\.com|ticor\.com|stewart\.com|oldrepublictitle\.com|ortc\.com|wfgnationaltitle\.com|wfgtitle\.com|lawyerstitle\.com|commonwealthtitle\.com|orangecoasttitle\.com|westcoastescrow\.com|chase\.com|wellsfargo\.com|bankofamerica\.com|usbank\.com|citi\.com|citibank\.com|paypal\.com|zellepay\.com|venmo\.com|irs\.gov|rocketmortgage\.com|loandepot\.com|certifid\.com|paymints\.io|earnnest\.com)$/i;
+
 // Short links hide where they go.
 const SHORTENERS = /^(bit\.ly|tinyurl\.com|t\.ly|rebrand\.ly|ow\.ly|is\.gd|cutt\.ly|shorturl\.at|rb\.gy|buff\.ly|tiny\.cc|s\.id|v\.gd|qrco\.de|shorturl\.com)$/i;
 
@@ -189,8 +194,21 @@ function check(message) {
         && host.replace(/[^a-z0-9]/g, '').includes(label(fromDomain).replace(/[^a-z0-9]/g, ''))
         && !/\bdmarc=fail\b/i.test(String(h['authentication-results'] || ''));
       const sameBrand = ownSite || BRANDS.some((b) => b.domains.test(shownBase) && b.domains.test(base));
-      if (shownBase && base && shownBase !== base && !sameBrand && !CLICK_TRACKERS.test(host)) {
-        strong.push(`a link shows "${shown[1]}" but actually goes to ${host}`);
+      // WHAT A DISGUISE ACTUALLY LOOKS LIKE. Agents link their vanity site to
+      // their brokerage all the time (Shannon Parks: "SHANNONPARKSREALTOR.COM"
+      // -> anvilreinc.com, her own sending domain; Kailee, Kristin, loanDepot
+      // before her). Phishing either SHOWS a name you trust (DocuSign,
+      // Microsoft, a bank...) or LANDS somewhere throwaway (free hosting, a
+      // short link, an odd ending, a raw IP, a look-alike). Only those are
+      // strong; any other mismatch is a weak sign that needs a second one, and
+      // a link to the sender's own domain is not a sign at all.
+      const toSender = base === fromDomain;
+      const showsBrand = BRANDS.some((b) => b.domains.test(shownBase)) || TRUSTED_SHOWN.test(shownBase);
+      const risky = FREE_HOSTING.test(host) || SHORTENERS.test(host) || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)
+        || /(^|\.)xn--/.test(host) || /\.(zip|mov|top|xyz|click|country|gq|tk|ml|cf|ga|rest|cam)$/i.test(host);
+      if (shownBase && base && shownBase !== base && !sameBrand && !CLICK_TRACKERS.test(host) && !toSender) {
+        if (showsBrand || risky) strong.push(`a link shows "${shown[1]}" but actually goes to ${host}`);
+        else weak.push(`a link shows "${shown[1]}" but goes to ${host}`);
       }
     }
     if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) strong.push(`a link goes to a bare IP address (${host})`);
