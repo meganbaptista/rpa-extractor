@@ -256,12 +256,16 @@ function stripHtml(html) {
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-const HEADER_KEYS = ['From', 'To', 'Cc', 'Subject', 'Date', 'Reply-To', 'Message-ID', 'In-Reply-To', 'References'];
+const HEADER_KEYS = ['From', 'To', 'Cc', 'Subject', 'Date', 'Reply-To', 'Message-ID', 'In-Reply-To', 'References',
+  // Gmail's own SPF/DKIM/DMARC verdict, read by lib/phishing-check.js.
+  'Authentication-Results'];
 
 function pickHeaders(payload) {
   const h = {};
   for (const { name, value } of (payload && payload.headers) || []) {
-    if (HEADER_KEYS.includes(name)) h[name.toLowerCase()] = value;
+    // First one wins: Gmail puts its own Authentication-Results at the top;
+    // later copies come from relays along the way.
+    if (HEADER_KEYS.includes(name) && h[name.toLowerCase()] == null) h[name.toLowerCase()] = value;
   }
   return h;
 }
@@ -307,6 +311,7 @@ async function getMessage(id) {
     internalDate: data.internalDate || null, // ms epoch as string
     headers,          // { from, subject, date, ... } lowercased keys
     bodyText,         // full decoded body (newest + quoted history)
+    bodyHtml: bodies.html || '', // raw html, for the link checks in phishing-check
     newestText: newest, // just the newest message, for history-scoped rules
     historyText: history,
     attachments,      // real attachments on the CURRENT message (rule 2)

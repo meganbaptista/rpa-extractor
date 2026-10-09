@@ -31,6 +31,7 @@ const cfg = require('./routing-config');
 const skipGate = require('./skip-gate');
 const personClassifier = require('./person-classifier');
 const dealSideLookup = require('./deal-side');
+const phishingCheck = require('./phishing-check');
 
 // The concrete "clear from the queue" action shared by skip + NO_TAG.
 function clearActions(config) {
@@ -41,7 +42,31 @@ function clearActions(config) {
   };
 }
 
+/**
+ * PHISHING WARNING, ON TOP OF ROUTING. Megan, 2026-10-09: spam made to look like
+ * escrow mail, with links, lands in the inbox and could be clicked. The check
+ * (lib/phishing-check.js) is pure and free. When it fires, the email is routed
+ * as usual but ALSO gets the warning label, and it is never marked read, so a
+ * skip or an already-assigned thread cannot quietly clear it.
+ */
 async function route(message, labelNames = [], deps = {}) {
+  const config = deps.config || cfg;
+  let phish = { suspicious: false, reasons: [] };
+  try { phish = (deps.phishingCheck || phishingCheck.check)(message); } catch (e) { /* never block routing */ }
+  const decision = await routeCore(message, labelNames, deps);
+  if (!phish.suspicious || !config.LABELS.phishing) return decision;
+  const actions = decision.actions || { addLabels: [], removeIntake: false, markRead: false };
+  decision.actions = {
+    ...actions,
+    addLabels: [config.LABELS.phishing, ...(actions.addLabels || []).filter((l) => l !== config.LABELS.phishing)],
+    markRead: false,
+  };
+  decision.phishing = phish.reasons;
+  decision.reason = `POSSIBLE PHISHING: ${phish.reasons.join('; ')} | ${decision.reason || ''}`;
+  return decision;
+}
+
+async function routeCore(message, labelNames = [], deps = {}) {
   const config = deps.config || cfg;
   const runSkipGate = deps.runSkipGate || skipGate.runSkipGate;
   const classify = deps.classify || personClassifier.classify;

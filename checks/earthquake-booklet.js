@@ -93,7 +93,9 @@ ok('relabel: earthquake questions under "ESD" only',
   ok('unsigned: any signed copy clears the family', M.unsignedSellerForms(withSigned).map((f) => f.code || f.name), ['SBSA']);
   ok('a receipt is not the statement', M.requiresSellerSignature({ name: 'NHD Receipt' }), false);
   ok('a brokerage form with no known seller line is never accused', M.requiresSellerSignature({ name: 'TruLine Mold Disclosure' }), false);
-  ok('AVID-LA counts as AVID', M.requiresSellerSignature({ code: 'AVID-LA' }), true);
+  // 2026-10-09: the AVID's own text says seller initials are not required (Dunkirk).
+  ok('AVID-LA needs no seller signature', M.requiresSellerSignature({ code: 'AVID-LA' }), false);
+  ok('TDS-LA style suffix still counts as TDS', M.requiresSellerSignature({ code: 'TDS-LA' }), true);
 }
 
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }

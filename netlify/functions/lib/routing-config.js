@@ -31,6 +31,9 @@ const TENANT = {
 const LABELS = {
   intake: 'INTAKE - REVIEW',      // the queue the poller scans
   needsAttention: 'Needs Attention', // classifier is UNSURE -> human review
+  // Added ON TOP of normal routing when an email's links look like phishing
+  // (lib/phishing-check.js). Never deletes or moves the email.
+  phishing: '\u26A0\uFE0F Possible phishing - do not click',
 };
 
 // ---------------------------------------------------------------------------
