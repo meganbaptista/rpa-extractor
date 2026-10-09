@@ -41,8 +41,55 @@ async function labelNamesFor(labelIds, allLabels) {
   return labelIds.map((id) => byId.get(id)).filter(Boolean);
 }
 
+/**
+ * PHISHING-ONLY SWEEP. ?phishing=1 runs ONLY lib/phishing-check over recent
+ * inbox mail (default: newer_than:14d, not from us) and lists what it would
+ * flag and why. No model calls, nothing applied, so it is free and safe. Built
+ * 2026-10-09 to answer "is it going to do that on all escrow signature lines?"
+ * with real mail instead of a guess.
+ *   /.netlify/functions/email-router-dryrun?phishing=1
+ *   /.netlify/functions/email-router-dryrun?phishing=1&q=newer_than:30d&limit=300
+ */
+async function phishingSweep(q) {
+  const phishing = require('./lib/phishing-check');
+  const search = q.q || 'in:inbox newer_than:14d -from:me';
+  const limit = Math.min(Math.max(parseInt(q.limit, 10) || 150, 1), 400);
+  const started = Date.now();
+  const ids = (await gmail.listMessages({ q: search, maxPages: 5 })).slice(0, limit);
+  const rows = [];
+  for (let i = 0; i < ids.length; i += 20) {
+    if (Date.now() - started > 20000) break; // stay inside the function timeout
+    const batch = await Promise.all(ids.slice(i, i + 20).map(async (m) => {
+      try {
+        const message = await gmail.getMessage(m.id);
+        const r = phishing.check(message);
+        const h = message.headers || {};
+        return { from: h.from || '', subject: h.subject || '', date: h.date || '', flagged: r.suspicious,
+          reasons: r.suspicious ? r.reasons : [], weak: r.suspicious ? [] : r.weak };
+      } catch (e) { return { from: '', subject: `(error ${m.id})`, date: '', flagged: false, reasons: [e.message], weak: [] }; }
+    }));
+    rows.push(...batch);
+  }
+  rows.sort((a, b) => Number(b.flagged) - Number(a.flagged));
+  const esc = (x) => String(x || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const flagged = rows.filter((r) => r.flagged).length;
+  const body = `<html><head><meta charset="utf-8"><title>Phishing sweep</title></head>
+<body style="font-family:-apple-system,Arial,sans-serif;font-size:13px;margin:20px">
+<h2>Phishing check sweep: ${flagged} of ${rows.length} would be flagged</h2>
+<p>Search: <code>${esc(search)}</code>. Nothing was labelled or changed. Rows below the flagged ones show any single weak sign (not enough to flag).</p>
+<table cellpadding="6" style="border-collapse:collapse">
+<tr style="background:#eee"><th align="left">Flag</th><th align="left">From</th><th align="left">Subject</th><th align="left">Why</th></tr>
+${rows.map((r) => `<tr style="border-top:1px solid #ddd;${r.flagged ? 'background:#fdecea' : ''}"><td>${r.flagged ? '\u26A0\uFE0F' : ''}</td>`
+    + `<td>${esc(r.from)}</td><td>${esc(r.subject)}</td><td>${esc((r.flagged ? r.reasons : r.weak).join('; '))}</td></tr>`).join('\n')}
+</table></body></html>`;
+  return { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body };
+}
+
 exports.handler = async function (event) {
   const q = (event && event.queryStringParameters) || {};
+  if (q.phishing) {
+    try { return await phishingSweep(q); } catch (e) { return { statusCode: 500, body: `phishing sweep failed: ${e.message}` }; }
+  }
   const limit = Math.min(Math.max(parseInt(q.limit, 10) || 20, 1), 60);
   const nowIso = new Date().toISOString();
 

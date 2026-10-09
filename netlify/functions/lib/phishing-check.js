@@ -189,7 +189,12 @@ function check(message) {
     const attached = ((message && message.attachments) || []).length > 0;
     weak.push(attached ? 'it asks you to click to view a document' : 'it asks you to click to view a document, and nothing is attached');
   }
-  if (links.length && MONEY.test(text)) weak.push('it mentions wiring money or changed bank details');
+  // Escrow mail carries a standard wire-FRAUD warning ("never trust wiring
+  // instructions sent by email, call to verify"). That is the opposite of a
+  // lure, so sentences that warn do not count.
+  const moneySentences = text.split(/(?<=[.!?])\s+|\n+/).filter((x) => MONEY.test(x)
+    && !/\b(fraud|scam|never|do\s+not|don['\u2019]?t|beware|caution|warning|verify\s+by\s+phone|call\s+(us|our|to\s+verify)|cyber)/i.test(x));
+  if (links.length && moneySentences.length) weak.push('it mentions wiring money or changed bank details');
 
   for (const a of (message && message.attachments) || []) {
     if (DANGEROUS_ATTACHMENT.test(a.filename || '')) strong.push(`attachment "${a.filename}" is a file type used to deliver fake login pages or malware`);

@@ -90,6 +90,14 @@ ok('a bad link in the QUOTED history does not flag the new reply', check(msg({
   html: '<div>Thanks, received!</div><div class="gmail_quote">On Mon wrote:<blockquote><a href="https://x.firebaseapp.com">www.firstam.com</a></blockquote></div>',
 })).suspicious, false);
 
+ok('an escrow signature: site, secure upload, wire-fraud warning, no-reply Reply-To', check(msg({
+  from: 'Amy Lee <amy@pacificcoastescrow.com>', replyTo: 'noreply@qualia.com',
+  text: 'Please see attached. WIRE FRAUD ALERT: Never trust wiring instructions sent via email. Call to verify. Send me files securely.',
+  html: '<p>Please see attached.</p><a href="https://www.pacificcoastescrow.com">www.pacificcoastescrow.com</a> '
+    + '<a href="https://pacificcoastescrow.sharefile.com/r-abc">Send me files securely</a> '
+    + '<a href="https://www.linkedin.com/company/pce"><img src="x"></a>',
+})).suspicious, false);
+
 ok('a plain escrow email with no links', check(msg({ text: 'Attached are the escrow instructions for 123 Main St.' })).suspicious, false);
 
 ok('an escrow email linking to its own site', check(msg({
