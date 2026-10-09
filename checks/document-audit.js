@@ -581,5 +581,14 @@ ok('AAA with no side stays plain',
   ok('with no FHDS, the DSDT files alone as FX', statusSuffix(alone.find((f) => f.code === 'DSDT')), 'FX');
 }
 
+// --- an MLS printout files as just "MLS" (83558 Tourmaline, 2026-10-09) -----
+ok('MLS printout takes no firm prefix',
+  formLabel({ code: '', name: 'MLS', brokerage: 'Anvil Real Estate' }), 'MLS');
+ok('property profile takes no firm prefix',
+  formLabel({ code: '', name: 'Property Profile', brokerage: 'Chicago Title' }), 'Property Profile');
+ok('a brokerage document still gets its firm',
+  formLabel({ code: '', name: 'Buyer Preliminary Title Report (PTR) Advisory', brokerage: "Christie's" }),
+  "Christie's - Buyer Preliminary Title Report (PTR) Advisory");
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

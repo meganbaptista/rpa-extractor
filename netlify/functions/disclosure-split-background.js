@@ -361,6 +361,8 @@ function nameCarriesBrokerage(name, brokerage) {
   return !!lead && n.includes(lead);
 }
 
+const NO_FIRM_PREFIX = /^(mls\b|property\s+profile\b)/i;
+
 function formLabel(form) {
   if (isAddendum(form)) {
     const parent = clean(form.parent_code).toUpperCase();
@@ -413,7 +415,13 @@ function formLabel(form) {
    * Banker privacy notice would file as "Coldwell Banker Realty - Privacy
    * Notice for Coldwell Banker Realty Clients".
    */
-  if (!clean(form.code)) {
+  /**
+   * A PRINTOUT IS NOT THE BROKERAGE'S DOCUMENT. An MLS listing prints the
+   * listing office on it, so 83558 Tourmaline (2026-10-09) filed "Anvil Real
+   * Estate - MLS". Megan: "I just want it to be the MLS". Same for a property
+   * profile, which names its title company. No firm prefix on either.
+   */
+  if (!clean(form.code) && !NO_FIRM_PREFIX.test(clean(form.name))) {
     const firm = brokerageName(form);
     if (firm && !nameCarriesBrokerage(form.name, firm)) base = `${firm} - ${base}`;
   }
