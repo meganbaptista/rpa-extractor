@@ -2283,14 +2283,17 @@ async function renderQAPageImages(buffer, name, opts = {}) {
       + `(pages ${scannedPages.join(', ')}); their mark-reading findings go to VERIFY`);
   }
   return {
-    images: hi.map((p) => ({ name: `${name} qa-p${p.pageNumber}`, base64: p.base64, scanned: isScanned(p.pageNumber) })),
+    images: hi.map((p) => ({
+      name: `${name} qa-p${p.pageNumber}`, base64: p.base64, scanned: isScanned(p.pageNumber),
+      text: ((pageTexts || []).find((t) => t.num === p.pageNumber) || {}).text || '',
+    })),
     selection: scannedPages.length ? `${selection} [scanned: ${scannedPages.join(',')}]` : selection,
     status: 'ok',
   };
 }
 
 // Parse the answer-review JSON into the { responseFlags, keyAnswers } shape callers expect.
-function parseAnswerReview(raw) {
+function parseAnswerReview(raw, extraEntries = []) {
   const parsed = parseJson(raw);
   const responseFlags = Array.isArray(parsed.response_flags) ? parsed.response_flags
     .map((r) => ({
@@ -2322,7 +2325,7 @@ function parseAnswerReview(raw) {
     fire_clearance_item: String(ka.fire_clearance_item || '').trim(),
     fhds: String(ka.fhds || 'na').toLowerCase().trim(),
   };
-  return { responseFlags: validateAddendumFlags(responseFlags, addendumEntries), keyAnswers, addendumEntries };
+  return { responseFlags: validateAddendumFlags(responseFlags, [...addendumEntries, ...(extraEntries || [])]), keyAnswers, addendumEntries };
 }
 
 // The entry a sub-item would be explained under, as the addendum numbers them: the SPQ numbers at
@@ -2496,6 +2499,32 @@ async function reviewAnswers(docs) {
     if (cur.length) batches.push(cur);
   }
 
+  /**
+   * A SCANNED FORM IS REVIEWED WITH THE TYPED EXPLANATIONS THAT ANSWER IT.
+   * 931 Chautauqua (2026-10-09): a wet-signed TDS/SPQ scan in one file, and the
+   * seller's typed "Attachment to Sellers' Written Disclosures" (every Yes
+   * explained, by paragraph and letter) in another. Scanned pages are batched
+   * apart from digital ones, so the scan was read without the sheet and 26 Yes
+   * answers came back "no explanation". The digital batches run first; the
+   * typed sheet's text and the entries they listed now ride along with every
+   * scanned batch, and validate its addendum claims.
+   */
+  // Whole DOCUMENT, not page by page: the sheet's last page is narrative with no
+  // "Paragraph"/"Letter" markers (Chautauqua p5), and a TA or AAA mentions
+  // "addendum" without being one. A document is a sheet when a page of it says so.
+  const RX_EXPL_SHEET = /attachment\s+to\s+sellers?['\u2019]?|seller['\u2019]?s?\s+explanations?|explanations?\s+(sheet|addendum|to)|questionnaire\s+explanations|written\s+disclosures\s+dated/i;
+  const docOf = (img) => String(img.name || '').replace(/\s+qa-p\d+$/, '');
+  const sheetDocs = new Set(qaImages.filter((img) => !img.scanned && RX_EXPL_SHEET.test(img.text || '')).map(docOf));
+  const sheetText = qaImages
+    .filter((img) => !img.scanned && sheetDocs.has(docOf(img)) && String(img.text || '').trim())
+    .map((img) => `[${img.name}]\n${String(img.text).trim()}`)
+    .join('\n\n')
+    .slice(0, 30000);
+  if (sheetText && batches.some((b) => b.every((img) => img.scanned))) {
+    console.log(`[disclosure-intake] scanned pages will be reviewed with the typed explanations in: ${[...sheetDocs].join(', ')}`);
+  }
+  const carriedEntries = [];
+
   let responseFlags = [];
   const keyAnswers = { ...EMPTY_KEY_ANSWERS };
   for (let i = 0; i < batches.length; i++) {
@@ -2506,6 +2535,19 @@ async function reviewAnswers(docs) {
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: img.base64 },
     }));
+    const isScanBatch = batches[i].every((img) => img.scanned);
+    if (isScanBatch && (sheetText || carriedEntries.length)) {
+      content.push({
+        type: 'text',
+        text: 'SEPARATE EXPLANATIONS SHEET IN THIS SAME PACKAGE (typed, not among the images above). Treat it '
+          + 'exactly as rule (b2) describes: a Yes sub-item explained here is explanation_on_addendum, never '
+          + 'yes_no_explanation, and list its entries in "addendum_entries".\n\n'
+          + (sheetText ? `${sheetText}\n\n` : '')
+          + (carriedEntries.length
+            ? `Entries already read off that sheet: ${carriedEntries.map((e) => `${e.form} ${e.item}: ${e.text}`).join(' | ').slice(0, 8000)}`
+            : ''),
+      });
+    }
     content.push({ type: 'text', text: ANSWER_REVIEW_PROMPT });
     // Record WHICH pages were reviewed, not just how many. classifyQAPages is a model
     // call and is NOT deterministic (same 46-page file, three runs, two different page
@@ -2521,7 +2563,7 @@ async function reviewAnswers(docs) {
 
     const passes = [];
     for (let k = 0; k < settled.length; k++) {
-      if (settled[k].status === 'fulfilled') { passes.push(parseAnswerReview(settled[k].value)); continue; }
+      if (settled[k].status === 'fulfilled') { passes.push(parseAnswerReview(settled[k].value, isScanBatch ? carriedEntries : [])); continue; }
       console.warn(`[disclosure-intake] answer-review batch ${i + 1}/${batches.length} pass ${k + 1}/`
         + `${ANSWER_REVIEW_PASSES} FAILED (${settled[k].reason && settled[k].reason.message}); `
         + 'continuing on the other pass(es)');
@@ -2543,7 +2585,7 @@ async function reviewAnswers(docs) {
         f.pass_total = passes.length;
       }
     }
-    if (batches[i].every((img) => img.scanned)) {
+    if (isScanBatch) {
       for (const f of merged) if (f) f.from_scan = true;
       if (passes.length > 1 && merged.length) {
         console.log(`[disclosure-intake] scanned batch ${i + 1}: pass agreement `
@@ -2552,6 +2594,7 @@ async function reviewAnswers(docs) {
     }
     if (merged.length) responseFlags = responseFlags.concat(merged);
     for (const x of passes) mergeKeyAnswers(keyAnswers, x.keyAnswers);
+    if (!isScanBatch) for (const x of passes) carriedEntries.push(...(x.addendumEntries || []));
     // Log per-pass counts AND what the union recovered. This is the telemetry that
     // says whether the second pass is worth its money: "+N only pass 2 saw" is a
     // finding one pass would have dropped on the floor.
