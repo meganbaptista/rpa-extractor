@@ -3415,18 +3415,37 @@ function checkBeforeSending(verify, clean = (x) => x) {
     const one = String(t || '').trim().split(/(?<=[.!?])\s+(?=[A-Z])/)[0] || '';
     return one.length > 220 ? `${one.slice(0, 217).trim()}...` : one;
   };
-  const lines = (verify || []).filter(Boolean)
-    .map((v) => clean(`${String(v.item || 'Item').trim()}: ${v.short || firstSentence(v.note)}`.replace(/:\s*$/, '')));
+  /**
+   * EXPLAINED ON THE SELLER'S SHEET IS ONE LINE, NOT TWENTY-TWO. 931 Chautauqua
+   * (2026-10-09): the box listed every Yes the typed sheet explains, one
+   * identical line each, and buried the four that needed a look. They are the
+   * good outcome (each was a false "no explanation" before), so they share one
+   * line per sheet, after the items that need a decision.
+   */
+  const sheets = new Map();
+  for (const v of (verify || [])) {
+    if (!v || v.kind !== 'addendum') continue;
+    const key = String(v.sheet || 'a separate explanations sheet').replace(/\s*\([^()]*\)\s*\)?$/, '').trim();
+    if (!sheets.has(key)) sheets.set(key, []);
+    sheets.get(key).push({ form: v.form, item: v.sub });
+  }
+  const sheetLines = [...sheets].map(([sheet, items]) => clean(
+    `Explained on ${sheet} (spot-check only): ${joinRefs(items)}`));
+  const lines = (verify || []).filter((v) => v && v.kind !== 'addendum')
+    .map((v) => clean(`${String(v.item || 'Item').trim()}: ${v.short || firstSentence(v.note)}`.replace(/:\s*$/, '')))
+    .concat(sheetLines);
   if (!lines.length) return { text: '', html: '' };
   const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return {
     text: '*** CHECK BEFORE SENDING (delete this section before you send) ***\n'
-      + lines.map((l) => `- ${l}`).join('\n') + '\n*** END OF CHECK ***\n\n',
-    html: '<div style="border:2px solid #c62828;background:#fdecea;color:#b71c1c;padding:10px 14px;margin:0 0 16px 0">'
-      + '<p style="margin:0 0 6px 0"><strong>CHECK BEFORE SENDING (delete this box before you send)</strong></p>'
-      + '<ul style="margin:0;padding-left:22px">'
+      + lines.map((l) => `- ${l}`).join('\n') + '\n---------- delete through here ----------\n\n',
+    // Plain red paragraphs, not a bordered box: Gmail's composer treats a styled
+    // <div> as one block that is hard to select and delete (Megan, 2026-10-09).
+    // Ordinary lines select like the rest of the email, top to the end marker.
+    html: '<p style="margin:0 0 6px 0;color:#c62828"><strong>CHECK BEFORE SENDING (delete from here to the line below)</strong></p>'
+      + '<ul style="margin:0 0 6px 0;padding-left:22px;color:#c62828">'
       + lines.map((l) => `<li style="margin:0 0 4px 0">${esc(l)}</li>`).join('')
-      + '</ul></div>\n',
+      + '</ul><p style="margin:0 0 16px 0;color:#c62828">---------- delete through here ----------</p>\n',
   };
 }
 
@@ -3965,6 +3984,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     const quote = noDash(f.reason);
     verify.push({
       item: ref,
+      kind: 'addendum', sheet: where, form: f.form, sub: f.item,
       note: `explanation found on a separate addendum${where ? ` (${where})` : ''}; verify it covers this sub-item`
         + (quote ? `. It reads: "${quote}"` : ''),
     });

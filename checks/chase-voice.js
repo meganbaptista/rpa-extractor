@@ -83,7 +83,7 @@ ok('never an email address', M.greetName('amy@x.com'), '');
   ok('box text names each item with its first sentence', box.text.split('\n').slice(1, 3),
     ['- SPQ 6G: Read off a scanned page, so check the mark.',
      '- SPQ 7 explanation: explanation found on a separate addendum (Seller Explanations); verify it covers this sub-item']);
-  ok('box is red and says delete', /#c62828/.test(box.html) && /delete this box/.test(box.html), true);
+  ok('red plain lines, no box, with an end marker', /#c62828/.test(box.html) && !/<div/.test(box.html) && /delete through here/.test(box.html), true);
   ok('no VERIFY items, no box', M.checkBeforeSending([]), { text: '', html: '' });
 }
 
