@@ -46,5 +46,15 @@ ok('a lone mismatch reads naturally',
 ok('different requested answers never share a line',
   M.groupReviseLines([mk('SPQ', '1', 'x'), { ...mk('SPQ', '2', 'x'), should_be: 'Unknown' }]).length, 2);
 
+// --- an explanation that says WHAT happened is an answer (Westshire 11D) ----
+const u = (reason) => M.wantsDetailOnly({ form: 'SPQ', item: '11D', issue: 'explanation_unclear', reason });
+ok('11D "does not state when or which exterminator" is dropped',
+  u("the explanation reads only 'rodent extermination by exterminator' and does not state when it occurred or which exterminator performed it"), true);
+ok('no date / no company is dropped', u('explanation gives no date for the repair'), true);
+ok('a truly unclear explanation stays', u('the explanation is illegible'), false);
+ok('a contradiction stays', u('the explanation says no leaks, which contradicts the Yes'), false);
+ok('only explanation_unclear is ever dropped',
+  M.wantsDetailOnly({ issue: 'detail_incomplete', reason: 'does not state when' }), false);
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall chase-voice checks pass');

@@ -1332,6 +1332,11 @@ const ANSWER_REVIEW_PROMPT =
   'or "explanation_unclear": the seller did explain it. Raise "issue":"explanation_misplaced", set "found_on" to ' +
   'where it actually is, in a few words ("the item 8 explanation line", "labeled 15D"), and "reason" to a short ' +
   'quote of it;\n' +
+  '(b4) "explanation_unclear" IS FOR AN EXPLANATION THAT CANNOT BE UNDERSTOOD, not one that could say more. An ' +
+  'explanation that says WHAT happened answers the question ("rodent extermination by exterminator", "roof ' +
+  'replaced", "water heater strapped"). Do NOT flag it for leaving out when it happened, who did it, which company, ' +
+  'the cost, or other detail the form line does not ask for. Use "explanation_unclear" only when a reader cannot ' +
+  'tell what the seller is disclosing (illegible, contradictory, or a fragment with no meaning);\n' +
   'ALSO return "addendum_entries": list EVERY entry you can see on any separate explanations sheet in this package, ' +
   'as {"form":"SPQ|TDS","item":"<entry number exactly as printed, e.g. 7 or C>","text":"<verbatim text>"}. List ' +
   'them all, even ones no Yes sub-item needs. Return [] if there is no such sheet in this package. Every ' +
@@ -2899,6 +2904,22 @@ function hoaQuestion(flags) {
   return `Is ${name ? `the ${name}` : 'the association the seller lists'} a mandatory HOA? If so, ${joinRefs(flags)} should be marked Yes.`;
 }
 
+/**
+ * AN EXPLANATION THAT SAYS WHAT HAPPENED IS AN ANSWER. 2781 Westshire re-run
+ * (2026-10-09): SPQ 11D "rodent extermination by exterminator" was chased for
+ * not saying when, or which exterminator. The SPQ does not ask that, and to an
+ * agent who had already asked whether this was AI it is the nitpick that
+ * proves it. Megan: "lets stop this automatically". The prompt says so (b4);
+ * this drops what still gets through, by its own stated reason.
+ */
+const RX_ONLY_WANTS_MORE = /\b(does\s+not|doesn['\u2019]?t|did\s+not|fails?\s+to)\s+(state|say|specify|indicate|include|mention|identify|name|list|give|provide)\b[^.;]*\b(when|date|year|who|which|whom|company|vendor|contractor|exterminator|plumber|roofer|cost|amount|how\s+much|permit)/i;
+const RX_NO_DETAIL = /\b(no|without\s+(a|the|any))\s+(date|year|vendor|company|contractor|details?|timeframe|cost)\b/i;
+function wantsDetailOnly(f) {
+  if (!f || f.issue !== 'explanation_unclear') return false;
+  const r = String(f.reason || '');
+  return RX_ONLY_WANTS_MORE.test(r) || RX_NO_DETAIL.test(r);
+}
+
 function groupReviseLines(flags) {
   const lines = [];
   const groups = new Map();
@@ -3772,7 +3793,13 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // produced a different running order every run. Sorting HERE, before the
   // revise/confirm split, means the email, the Process Street comment and
   // response_flags_text all share one order.
-  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => f.issue !== 'explanation_on_addendum'
+  const detailOnly = allFlags.filter(wantsDetailOnly);
+  if (detailOnly.length) {
+    console.log(`[disclosure-intake] dropped ${detailOnly.length} "explanation could say more" flag(s), the `
+      + `explanation answers the question: ${detailOnly.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
+  }
+  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f)
+    && f.issue !== 'explanation_on_addendum'
     && f.issue !== 'duplicate_form_copy'
     && f.issue !== 'cited_attachment_unseen'
     && f.issue !== 'fhds_default_option'
@@ -4086,7 +4113,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold
