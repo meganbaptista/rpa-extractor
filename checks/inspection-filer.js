@@ -109,9 +109,13 @@ const up = (d) => d.uploads.map((u) => u.replace(/ \(was .*\)$/, ''));
   ok('no address anywhere: nothing filed, reason logged', [d.uploads, F.summary(r)], [[], 'INSPECTION not filed: no address that matches a deal folder']);
 
   d = fakeDrive();
-  r = await run({ id: 'm', headers: { subject: 'Inspection Report | 410 N Crescent Heights' }, attachments: [], newestText: 'Here is the Spectora link' }, d,
-    { classifier: { reason: 'Inspection report linked via Spectora routes to Belle' } });
-  ok('a link with no PDF: logged, nothing filed', [d.uploads, /no PDF attached/.test(F.summary(r))], [[], true]);
+  r = await run({ id: 'm', headers: { subject: 'Inspection Report | 410 N Crescent Heights' }, attachments: [],
+    newestText: 'Here is the report: https://app.spectora.com/home-inspectors/x/sample_report' }, d);
+  ok('a Spectora link: logged as a link to download, nothing filed', [d.uploads, /came as a link \(spectora\)/.test(F.summary(r))], [[], true]);
+  r = await run({ id: 'm', headers: { subject: 'Re: 1643 Carmelina Ave' }, attachments: [],
+    newestText: 'Margie, are the attached notes the sewer report or is there a separate one?' }, d,
+    { classifier: { reason: 'question about whether the notes are the sewer report' } });
+  ok('a question about a report, no PDF, no link: no filing note', r, null);
 
   // ---- naming from the PDF's own text (the "WHKDNAKJFNCSk.PDF" case) -------
   const T = F._internal.teamName;

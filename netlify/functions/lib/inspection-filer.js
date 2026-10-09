@@ -200,8 +200,14 @@ async function fileInspectionReports(message, decision, deps = {}) {
   const d = { drive: deps.drive || require('./drive'), gmail: deps.gmail || require('./gmail') };
   try {
     const { pdfs, why } = pickFiles(message, decision);
-    if (!pdfs.length) return why === 'no PDF attached' && /inspection/i.test(String(((decision || {}).classifier || {}).reason || ''))
-      ? { filed: [], why: 'inspection email with no PDF attached (a link?), not filed' } : null;
+    if (!pdfs.length) {
+      // Say so only when the report really came as a LINK, which a person still
+      // has to download. A plain question about a report (1643 Carmelina, "is
+      // this the sewer report?") gets no filing note at all.
+      const link = String((message && message.newestText) || '').match(/https?:\/\/[^\s"'<>]*(spectora|dropbox\.com|drive\.google|docs\.google|1drv\.ms|sharepoint|wetransfer|box\.com|icloud\.com|homegauge|reportwriter|inspectionreport|horizon|htmlreport)[^\s"'<>]*/i);
+      return why === 'no PDF attached' && link
+        ? { filed: [], why: `not filed: the report came as a link (${(link[1] || 'link').toLowerCase()}), someone needs to download it` } : null;
+    }
     const { folder, why: noFolder } = await findPropertyFolder(message, pdfs, d);
     if (!folder) return { filed: [], why: `not filed: ${noFolder}` };
     // SAME NAME IS NOT SAME FILE. Agents send "Report.pdf" for everything; a
