@@ -216,6 +216,21 @@ async function routeCore(message, labelNames = [], deps = {}) {
     return decision;
   }
 
+  // BRANCH B — A COMPLETED PURCHASE AGREEMENT ON A DEAL ALREADY IN ESCROW ->
+  // Allana (contract audit). Megan, 2026-10-10 (26207 Ingleside Way): "we are
+  // already in escrow and its a contract". Being on the deals sheet (side
+  // known from the sheet or a side tag) is what "already in escrow" means; a
+  // contract for a deal NOT on the sheet is a new file and stays Belle's.
+  if (side && /^(?:\s*(?:re|fwd|fw)\s*:\s*)*completed\s*:.*\b(purchase\s+agreement|purchase\s+contract|residential\s+purchase|\brpa\b)/i.test(h.subject || '')) {
+    const allana = config.ROSTER.find((p) => p.name === 'Allana');
+    if (allana) {
+      decision.plannedLabel = allana.personLabel;
+      decision.reason = `${decision.reason} | completed purchase agreement on a deal already in escrow (${side} side, ${sideSource}) -> Allana (contract audit)`;
+      decision.actions = { addLabels: [allana.personLabel], removeIntake: true, markRead: false };
+      return decision;
+    }
+  }
+
   // BRANCH B — OUR SELLER CLIENT SENDING FILES -> Ethan. Proof, not a guess:
   // we sent this address our "Seller Disclosure Package" email (lib/seller-
   // client.js). Their reports, invoices, permits and photos feed the seller

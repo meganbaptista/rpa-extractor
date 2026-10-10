@@ -65,6 +65,15 @@ function ok(label, got, want) {
   const q = await route(question, [], deps);
   ok('a seller question with no files still goes through the classifier', classified, 2);
 
+  // A completed purchase agreement: Allana when the deal is already in escrow.
+  const pa = { headers: { from: 'Docusign via Docusign <dse_NA3@docusign.net>', subject: 'Completed: Complete with Docusign: Full Purchase Agreement | 26207 Ingleside Way' },
+    attachments: [{ filename: 'Full Purchase Agreement.pdf' }], hasAttachment: true, newestText: 'All signers completed' };
+  const onSheet = await route(pa, [], { ...deps, dealSide: { sideForSubject: async () => 'seller' } });
+  ok('completed purchase agreement on a deal in escrow -> Allana', onSheet.actions.addLabels, ['Allana']);
+  const before = classified;
+  const newDeal = await route(pa, [], deps);
+  ok('the same for a deal NOT on the sheet goes to the classifier (new file, Belle)', [newDeal.actions.addLabels, classified - before], [['Belle'], 1]);
+
   if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
   console.log('\nall seller-client checks pass');
 })();
