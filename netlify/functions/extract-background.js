@@ -56,6 +56,7 @@ const {
 // Scrubs model-emitted placeholder sentinels ("<UNKNOWN>", "N/A", ...) back to
 // empty string so a missed field reads as honestly blank, not fake-filled.
 const { scrubPlaceholders } = require('./lib/sanitize');
+const { applyContractDates } = require('./lib/contract-dates');
 // Per-call token ledger -> Google Sheet. Inert without USAGE_SHEET_ID, and every
 // failure is swallowed inside logUsage, so it can never fail an extraction.
 const usageLog = require('./lib/usage-log');
@@ -1056,6 +1057,14 @@ exports.handler = async function(event, context) {
       // etc.) so this — the source that flows to Zapier/Process Street — joins cleanly
       // with the sheet and the other functions, which use the same canonical form.
       if (mergedFields.property_address) mergedFields.property_address = canonicalAddress(mergedFields.property_address);
+
+      // The deadlines, counted in code from the model's day counts (lib/contract-
+      // dates.js, 2026-10-10): the model's own dates were right a third of the
+      // time on 184 live deals, the counted ones 76-92%. Never fatal.
+      try {
+        const counted = applyContractDates(mergedFields);
+        if (counted.length) console.log('contract dates counted in code: ' + counted.map((c) => c.field + ' ' + (c.model || '(blank)') + ' -> ' + c.code).join(', '));
+      } catch (e) { console.warn('contract dates skipped: ' + e.message); }
 
       mergedFields._extraction_status = extractionStatus;
       console.log('final extraction status: ' + extractionStatus);
