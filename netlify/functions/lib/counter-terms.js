@@ -202,6 +202,45 @@ function applyCounterTerms(fields, counters) {
   return { applied, review };
 }
 
+/**
+ * ACCEPTANCE FROM THE COUNTERS - the one piece wired into the live extraction
+ * (2026-10-11). Tested on 25 counter deals against Megan's day-0 intro emails
+ * and her own checks: the last counter's acceptance signature was right 22
+ * times, the extraction's own read 21 (7700 Isis: buyer accepted the SCO
+ * 10/08, extraction said 10/07; 21922 PCH 9/15 vs 9/11). The term changes
+ * (price, days) measured no better than the extraction and are NOT applied.
+ *
+ * The last counter not yet accepted (a "NeedB" packet): Acceptance is left
+ * EMPTY and said so - Hatteras's unsigned second contract was given the first
+ * escrow's 10/02. A back-up offer is accepted when the first deal's
+ * cancellation comes in (17942 Karen Dr: 10/09, on page 1), which no
+ * signature on the counters says - so it is flagged, not guessed.
+ */
+function acceptanceFromCounters(fields, counters) {
+  const notes = [];
+  const list = ordered((counters || []).filter((c) => c && c.kind));
+  if (list.length) {
+    const last = list[list.length - 1];
+    const accepted = isoDate(last.accepted_signed);
+    const before = String(fields.date_of_acceptance || '');
+    if (accepted) {
+      if (accepted !== before) notes.push(`Acceptance ${accepted}: ${label(last)} accepted (the extraction read ${before || 'nothing'})`);
+      fields.date_of_acceptance = accepted;
+    } else {
+      const waitingOn = OTHER_SIDE[SIDE[last.kind]] || 'other party';
+      notes.push(`Not yet accepted: ${label(last)} is awaiting the ${waitingOn}'s signature, so Acceptance and every date counted from it are blank until it is signed`);
+      fields.date_of_acceptance = '';
+      // The model's own dates were counted from an acceptance that has not happened.
+      for (const f of ['emd_due_date', 'seller_disclosures_due_date', 'inspection_contingency_date', 'appraisal_contingency_date', 'loan_contingency_date']) fields[f] = '';
+      if (!isoDate(fields.close_of_escrow_specific_date)) fields.close_of_escrow_date = '';
+    }
+  }
+  if (/^\s*y(es)?\s*$/i.test(String(fields.backup_offer || ''))) {
+    notes.push('Back-up offer: Acceptance is the day it moves into first position (the first deal\'s cancellation), usually written on page 1. Check it.');
+  }
+  return notes;
+}
+
 /** One line a TC reads: "Applied 2 counters: price 1250000 -> 1224500 (SCO #1); ..." */
 function summarize(applied, counters) {
   if (!applied.length) return counters && counters.length ? `${counters.length} counter offer(s) found; none changed the terms Keeva fills` : '';
@@ -211,4 +250,4 @@ function summarize(applied, counters) {
   return `Applied ${new Set(applied.map((a) => a.counter)).size} counter offer(s): ${parts.join('; ')}`;
 }
 
-module.exports = { COUNTER_TOOL, PROMPT, applyCounterTerms, summarize, _internal: { money, days, isoDate, ordered } };
+module.exports = { COUNTER_TOOL, PROMPT, applyCounterTerms, acceptanceFromCounters, summarize, _internal: { money, days, isoDate, ordered } };

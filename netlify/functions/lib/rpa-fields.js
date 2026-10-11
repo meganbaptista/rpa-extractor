@@ -81,6 +81,13 @@ const FIELDS = {
       cop_deposit_timing: { type: "string", description: "COP paragraph 11B 'BUYER'S DEPOSIT': 'As in Agreement' if its box is NOT checked, 'After buyer delivery' if the 'within 3 business days after Buyer Delivers' box IS checked. Empty if no COP." },
 
       // ─── PRICE & FINANCIAL ────────────────────────────────────────────────
+      // ─── COUNTERS + BACK-UP (2026-10-11) ─────────────────────────────────
+      // Counted here so the separate counter read (lib/counter-terms.js) runs
+      // only on packets that have counters; it reads the Acceptance date off
+      // the last counter's acceptance signature.
+      counter_offers_in_packet: { type: "string", description: "How many counter offer documents are in this packet: Seller Counter Offers (SCO), Buyer Counter Offers (BCO), Seller Multiple Counter Offers (SMCO), Buyer Multiple Counter Offers (BMCO). Count each counter document once. Digits only; '0' if there are none." },
+      backup_offer: { type: "string", description: "Yes/No. 'Yes' if this purchase agreement is a BACK-UP offer: a C.A.R. Back-Up Offer Addendum (BUO) is in the packet, or the agreement or a counter states it is accepted in back-up position. 'No' otherwise." },
+
       final_purchase_price: { type: "string", description: "Final agreed purchase price. Use the LATEST counter offer price (BCO or SCO) if any exist; otherwise use RPA paragraph 3A. Numeric only, e.g. '1315000' or '1,315,000'." },
       buyer_agent_commission_amount: { type: "string", description: "Buyer's broker compensation from RPA paragraph 3G(3). Either percentage (e.g. '2.5%') or fixed amount (e.g. '$15,000')." },
       seller_credit_referenced: { type: "string", description: "Yes/No. 'Yes' if any Seller credit to Buyer is referenced in paragraph 3G(1) or 3G(2); 'No' otherwise." },

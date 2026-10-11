@@ -8,7 +8,7 @@
 // reported, never refused (Megan, 2026-10-10: transactions are created from
 // "Contract NeedB" packets all the time).
 
-const { applyCounterTerms, summarize, _internal } = require('../netlify/functions/lib/counter-terms.js');
+const { applyCounterTerms, acceptanceFromCounters, summarize, _internal } = require('../netlify/functions/lib/counter-terms.js');
 const { money, days, isoDate } = _internal;
 
 let failed = 0;
@@ -61,6 +61,24 @@ ok('specific close date', [k.close_of_escrow_specific_date, k.close_of_escrow_da
 ok('unreadable price kept, flagged', [k.final_purchase_price, r3.review.some((r) => /could not be read/.test(r)), r3.review.some((r) => /handwritten/.test(r))], ['500000', true, true])
 
 ok('no counters, nothing happens', applyCounterTerms({ a: 1 }, []), { applied: [], review: [] })
+
+// ACCEPTANCE FROM THE COUNTERS - the wired-in piece.
+const isis = { date_of_acceptance: '2026-10-07', final_purchase_price: '1000000' }
+const n1 = acceptanceFromCounters(isis, [counter({ kind: 'SCO', number: '1', date: '10/7/2026', made_by_signed: '10/7/2026', accepted_signed: '10/08/26' })])
+ok('7700 Isis: the buyer accepted the SCO 10/08', isis.date_of_acceptance, '2026-10-08')
+ok('and the change is noted', /Acceptance 2026-10-08: SCO #1 accepted/.test(n1[0]), true)
+ok('terms are not touched', isis.final_purchase_price, '1000000')
+const hatteras = { date_of_acceptance: '2026-10-02', close_of_escrow_date: '2026-11-02', close_of_escrow_specific_date: '', inspection_contingency_date: '2026-10-13' }
+const n2 = acceptanceFromCounters(hatteras, [counter({ kind: 'SCO', number: '1', date: '10/7/2026', accepted_signed: '' })])
+ok('unsigned last counter: Acceptance and its dates go blank', [hatteras.date_of_acceptance, hatteras.close_of_escrow_date, hatteras.inspection_contingency_date], ['', '', ''])
+ok('and it says who it waits on', /Not yet accepted: SCO #1 is awaiting the buyer's signature/.test(n2[0]), true)
+const specific = { date_of_acceptance: '2026-10-02', close_of_escrow_specific_date: '2026-12-15', close_of_escrow_date: '2026-12-15' }
+acceptanceFromCounters(specific, [counter({ kind: 'BCO', number: '1', accepted_signed: '' })])
+ok('a specific close date stands even before acceptance', specific.close_of_escrow_date, '2026-12-15')
+const karen = { date_of_acceptance: '2026-09-28', backup_offer: 'Yes' }
+const n3 = acceptanceFromCounters(karen, [])
+ok('back-up offer: flagged, not guessed', [karen.date_of_acceptance, /Back-up offer/.test(n3[0])], ['2026-09-28', true])
+ok('no counters, not back-up: nothing', acceptanceFromCounters({ date_of_acceptance: '2026-09-01', backup_offer: 'No' }, []), [])
 
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\ncounter terms: all pass');

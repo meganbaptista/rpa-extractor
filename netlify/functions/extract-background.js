@@ -57,6 +57,7 @@ const {
 // empty string so a missed field reads as honestly blank, not fake-filled.
 const { scrubPlaceholders } = require('./lib/sanitize');
 const { applyContractDates } = require('./lib/contract-dates');
+const { COUNTER_TOOL, PROMPT: COUNTER_PROMPT, acceptanceFromCounters } = require('./lib/counter-terms');
 // Per-call token ledger -> Google Sheet. Inert without USAGE_SHEET_ID, and every
 // failure is swallowed inside logUsage, so it can never fail an extraction.
 const usageLog = require('./lib/usage-log');
@@ -809,6 +810,10 @@ exports.handler = async function(event, context) {
     let mainCallPromise;
     let targetedCallPromise = null;
 
+    // What the counter read (lib/counter-terms.js) is sent: the main call's own
+    // package, trimmed when the trim worked, so counters are always in it.
+    let counterSource = mainContent;
+
     if (haveDetection) {
       // ── HAPPY PATH: build both trims in parallel, then fire both calls ────
       // Targeted trim is required (the 2-page trim is the whole point of the
@@ -862,6 +867,7 @@ exports.handler = async function(event, context) {
 
       // Fire main call.
       mainCallPromise = callApi(mainContentToSend, extractionTool);
+      counterSource = mainContentToSend;
 
       // Fire targeted call on the 2-page trim, in parallel with main.
       if (trimmedTargetedB64) {
@@ -1057,6 +1063,25 @@ exports.handler = async function(event, context) {
       // etc.) so this — the source that flows to Zapier/Process Street — joins cleanly
       // with the sheet and the other functions, which use the same canonical form.
       if (mergedFields.property_address) mergedFields.property_address = canonicalAddress(mergedFields.property_address);
+
+      // ACCEPTANCE FROM THE COUNTERS (lib/counter-terms.js, 2026-10-11): only on
+      // packets the main call says have counters, one focused read that copies
+      // each counter's signatures; Acceptance is the last counter's acceptance
+      // signature, or empty and said so when it is not signed yet. Before the
+      // dates below, which count from it. Never fatal.
+      const reviewNotes = [];
+      try {
+        const counterCount = Number(String(mergedFields.counter_offers_in_packet || '').replace(/\D/g, '')) || 0;
+        let counters = [];
+        if (counterCount > 0) {
+          const resp = await callApi([...counterSource.slice(0, -1), { type: 'text', text: COUNTER_PROMPT }], COUNTER_TOOL);
+          const tool = findToolUse(resp);
+          counters = (tool && tool.input && tool.input.counters) || [];
+          console.log('counter read: ' + counters.length + ' counter(s) transcribed (main call counted ' + counterCount + ')');
+        }
+        reviewNotes.push(...acceptanceFromCounters(mergedFields, counters));
+      } catch (e) { console.warn('counter read skipped: ' + e.message); }
+      if (reviewNotes.length) mergedFields._review_notes = reviewNotes.join(' | ');
 
       // The deadlines, counted in code from the model's day counts (lib/contract-
       // dates.js, 2026-10-10): the model's own dates were right a third of the
