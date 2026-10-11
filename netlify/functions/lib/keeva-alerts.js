@@ -51,10 +51,12 @@ async function notifyNewEscrow(fields) {
         address,
         noteId: '',
         fromName: 'RPA extractor',
+        // No link into Keeva: its Create Transaction keeps no half-done deal to
+        // open (Megan, 2026-10-11) until the Belle-stages / Jill-finishes
+        // hand-off exists. And no mention of the system being retired.
         title: 'New escrow ready',
-        excerpt: `${address || 'A new contract'} is read and ready to create${buyers ? ` (buyers: ${buyers})` : ''}.`,
+        excerpt: `${address || 'A new contract'}: the contract is read${buyers ? ` (buyers: ${buyers})` : ''}.`,
         at,
-        href: '/transactions',
       };
       await bell.setJSON(key, [n, ...list].slice(0, BELL_LIMIT));
     }));
