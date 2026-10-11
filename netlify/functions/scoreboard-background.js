@@ -88,6 +88,16 @@ exports.handler = async function (event) {
       durationMs: Date.now() - started,
     };
     await board.setJSON('latest', result);
+    // AND INTO KEEVA'S OWN STORE (2026-10-11): Keeva shows the board behind its
+    // team login, and its functions have no token that reaches this site's
+    // store; this site's token reaches Keeva's. Never fatal.
+    const keevaSite = process.env.KEEVA_SITE_ID || '85bb6dba-d5dc-4f6e-83db-6603cfbca323';
+    const token = process.env.NETLIFY_BLOBS_TOKEN || process.env.NETLIFY_API_TOKEN;
+    if (token) {
+      await getStore({ name: 'extractor-scoreboard', siteID: keevaSite, token })
+        .setJSON('latest', result)
+        .catch((e) => console.warn('[scoreboard] could not copy the board to Keeva: ' + e.message));
+    }
     console.log(`[scoreboard] ${result.intros} intros, ${result.paired} paired, ${result.misses.length} misses, ${result.durationMs}ms`);
   } catch (err) {
     console.error('[scoreboard] failed:', err);
