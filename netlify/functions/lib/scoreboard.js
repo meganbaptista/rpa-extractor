@@ -86,7 +86,8 @@ function buildBoard(pairs) {
         if (r.countedOk) t.countedRight++;
       }
       const wrongNow = r.countedOk === null ? !r.sentOk : !r.countedOk;
-      if (wrongNow) misses.push({ address: p.address, side: p.side, field: k, email: r.email, extractor: r.countedOk === null ? r.sent : r.counted, emailedOn: p.sentAt.slice(0, 10) });
+      // `method`: 'counted' is today's extractor; 'sent' an older run that kept no day counts.
+      if (wrongNow) misses.push({ address: p.address, side: p.side, field: k, email: r.email, extractor: r.countedOk === null ? r.sent : r.counted, emailedOn: p.sentAt.slice(0, 10), method: r.countedOk === null ? 'sent' : 'counted' });
     }
   }
   return { fields, misses };

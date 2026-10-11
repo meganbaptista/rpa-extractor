@@ -57,6 +57,7 @@ const {
 // empty string so a missed field reads as honestly blank, not fake-filled.
 const { scrubPlaceholders } = require('./lib/sanitize');
 const { applyContractDates } = require('./lib/contract-dates');
+const { notifyNewEscrow } = require('./lib/keeva-alerts');
 const { COUNTER_TOOL, PROMPT: COUNTER_PROMPT, acceptanceFromCounters } = require('./lib/counter-terms');
 // Per-call token ledger -> Google Sheet. Inert without USAGE_SHEET_ID, and every
 // failure is swallowed inside logUsage, so it can never fail an extraction.
@@ -1107,6 +1108,8 @@ exports.handler = async function(event, context) {
         completed_at: new Date().toISOString(),
         duration_ms: Date.now() - startedAt
       });
+      // Belle's upload is read: Keeva's bell tells whoever creates the transaction (lib/keeva-alerts.js).
+      if (!existing || existing.source !== 'keeva') await notifyNewEscrow(mergedFields);
       console.log('extract-background: job ' + jobId + ' complete (RPA path)');
       await deletePayloadSafe(payloadStore, jobId);
       return { statusCode: 200 };
