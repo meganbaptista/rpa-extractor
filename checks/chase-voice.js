@@ -136,5 +136,29 @@ ok('a blank 7E(1) is still asked', M.isFactOnlyYes({ form: 'SPQ', item: '7E(1)',
 
 ok('the AVID never needs a seller signature', M.requiresSellerSignature({ code: 'AVID', name: 'Agent Visual Inspection Disclosure' }), false);
 
+ok('the SFLS square-footage note never opens the draft', M.checkBeforeSending([
+  { item: 'SFLS - Tax: 1,169 MLS: 2,154 sqft', note: 'SFLS received.' }]), { text: '', html: '' });
+ok('...but other check items still do', M.checkBeforeSending([
+  { item: 'SFLS - Tax: 1,169 MLS: 2,154 sqft', note: 'SFLS received.' }, { item: 'TDS C9', short: 'Yes, no explanation' }]).text.split('\n')[1], '- TDS C9: Yes, no explanation');
+
+ok('the TDS additional-dwelling-units box, in plain words (1707 S Stanley)', M.reviseLineFor({ form: 'TDS', item: 'additional dwelling units',
+  issue: 'answer_contradicts_package', marked: 'blank', other_form: 'SPQ (On SPQ 8E the seller discloses a detached permitted ADU used as a dwelling)' }),
+  'TDS page 1, first line: the box for "duplex, triplex, fourplex, or otherwise has additional dwelling units" is not checked, but SPQ 8E discloses an additional dwelling unit (ADU). Could the seller check that box and mark whether the TDS covers all units or only certain ones?');
+
+ok('SPQ 8A vs TDS II B (Stanley shower doors) is not chased', M.isMirrorDefectMismatch({ form: 'SPQ', item: '8A', issue: 'answer_contradicts_package',
+  other_form: 'TDS (TDS Section II B marks Doors as defective and states that the glass doors ... are not installed)' }), true);
+ok('...nor the other way round', M.isMirrorDefectMismatch({ form: 'TDS', item: 'Section II B', other_form: 'SPQ 8A' }), true);
+ok('TDS C11 vs SPQ 16A still is', M.isMirrorDefectMismatch({ form: 'TDS', item: 'C11', other_form: 'SPQ 16A neighborhood noise' }), false);
+
+// --- Stanley: an explanation that exists is not chased for more detail ----
+const y = (item, reason) => M.wantsDetailOnly({ form: 'SPQ', item, issue: 'yes_no_explanation', reason });
+ok('SPQ 8E(1): "does not identify which utilities" is dropped', y('8E(1)',
+  '8E(1) is marked Yes for separate utilities and meters for the ADU. The item 8 explanation states only that there is a detached ADU with a permit and does not identify which utilities or meters are separate'), true);
+ok('SPQ 18F: "does not state how any tenancy ended" is dropped', y('18F',
+  '18F is marked Yes for prior tenant occupancy. The explanation says the owner stayed for one week in the ADU during construction, which describes owner use rather than a tenancy, and it does not state how any tenancy ended'), true);
+ok('SPQ 7D: "does not address painting" is still chased', y('7D',
+  '7D is marked Yes for painting within the past 12 months. The item 7 explanation describes only the remodel and energy efficiency upgrades and does not address painting'), false);
+ok('no explanation at all is still chased', y('6G', 'marked Yes with no explanation'), false);
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\nall chase-voice checks pass');

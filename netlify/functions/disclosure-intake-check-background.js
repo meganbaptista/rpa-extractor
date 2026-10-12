@@ -1336,7 +1336,9 @@ const ANSWER_REVIEW_PROMPT =
   'explanation that says WHAT happened answers the question ("rodent extermination by exterminator", "roof ' +
   'replaced", "water heater strapped"). Do NOT flag it for leaving out when it happened, who did it, which company, ' +
   'the cost, or other detail the form line does not ask for. Use "explanation_unclear" only when a reader cannot ' +
-  'tell what the seller is disclosing (illegible, contradictory, or a fragment with no meaning);\n' +
+  'tell what the seller is disclosing (illegible, contradictory, or a fragment with no meaning). The same goes for ' +
+  '"yes_no_explanation": if an explanation for the item IS written, do not raise it because the explanation does ' +
+  'not also say which, when, who or how; raise it only when nothing addresses that Yes at all;\n' +
   '(b5) SPQ 7E (built before 1978): a Yes needs an explanation ONLY when 7E(1) or 7E(2) is also Yes. If both are ' +
   'No (or the house is simply pre-1978), do not raise yes_no_explanation for 7E. If you do raise it, say in "reason" ' +
   'which of 7E(1) / 7E(2) is Yes;\n' +
@@ -2922,6 +2924,19 @@ const isTdsSectionIII = (f) => !!f && /^tds$/i.test(String(f.form || '').trim())
   && /section\s*(iii|3)\b|^iii$/i.test(String(f.item || '').trim());
 
 function reviseLineFor(f) {
+  // THE TDS's "ADDITIONAL DWELLING UNITS" BOX, in plain words. 1707 S Stanley
+  // (2026-10-12): "TDS additional dwelling units is marked blank, which does
+  // not match SPQ" left Megan asking what it meant. It is the unlabeled first
+  // box on TDS page 1 ("This property is a duplex, triplex, fourplex, or
+  // otherwise has additional dwelling units ... This TDS is for ALL units (or
+  // only unit(s)...)"), unchecked while the SPQ discloses an ADU.
+  if (/^tds$/i.test(String(f.form || '').trim()) && /additional\s+dwelling|duplex|multi-?unit|\badu\b|units?\s+box/i.test(`${f.item || ''}`)) {
+    const src = dashless(f.other_form || f.source || f.reason || '');
+    const where = /spq\s*\d+[a-z]?/i.exec(src);
+    return `TDS page 1, first line: the box for "duplex, triplex, fourplex, or otherwise has additional dwelling units" `
+      + `is not checked, but ${where ? `${where[0].toUpperCase()} discloses` : 'the SPQ discloses'} an additional dwelling unit (ADU). `
+      + 'Could the seller check that box and mark whether the TDS covers all units or only certain ones?';
+  }
   // The listing agent's own part of the TDS, asked in plain words.
   if (isTdsSectionIII(f)) {
     const unsigned = /\bsign|signature|unsigned/i.test(String(f.reason || ''));
@@ -3034,10 +3049,35 @@ const isFactOnlyYes = (f) => !!f && f.issue === 'yes_no_explanation'
   && /^spq$/i.test(String(f.form || '').trim()) && /^7E$/i.test(String(f.item || '').trim())
   && !RX_7E_SUB_YES.test(String(f.reason || ''));
 
+/**
+ * SPQ 8A AND TDS SECTION II B ARE THE SAME QUESTION. Both ask about defects in
+ * the house's systems and components; a defect disclosed on EITHER has been
+ * disclosed. 1707 S Stanley (2026-10-12): "SPQ 8A is marked No, which does not
+ * match TDS (TDS Section II B marks Doors as defective ...)". Megan: "a bit too
+ * nit picky". A mismatch between just these two is not chased.
+ */
+function isMirrorDefectMismatch(f) {
+  if (!f) return false;
+  const here = `${f.form || ''} ${f.item || ''}`;
+  const there = `${f.other_form || ''} ${f.source || ''} ${f.reason || ''}`;
+  const isSpq8A = (t) => /\bspq\b[^a-z0-9]*8\s*a\b|\bspq\s+8a\b/i.test(t);
+  const isTdsIIB = (t) => /\btds\b.{0,20}(section\s+)?(ii|2)\s*\(?b\)?\b/i.test(t);
+  return (isSpq8A(here) && isTdsIIB(there)) || (isTdsIIB(here) && isSpq8A(there));
+}
+
+// THE EXPLANATION IS THERE, IT JUST DOES NOT SAY WHICH / WHEN / WHO / HOW.
+// 1707 S Stanley (2026-10-12): SPQ 8E(1) "does not identify which utilities or
+// meters are separate", SPQ 18F "does not state how any tenancy ended". Megan:
+// "a little drastic, lets chill those out". Only a wh- question counts: SPQ 7D
+// "does not address painting" names a missing TOPIC and is still chased.
+const RX_EXPLAINED = /\bexplanation\b[^.]*\b(states?|says?|describes?|lists?|mentions?|notes?|explains?|reads?)\b|\bexplained\b/i;
+const RX_WANTS_WH = /\b(does\s+not|doesn['\u2019]?t|did\s+not|without|fails?\s+to|no)\s+(identify|identifying|specify|specifying|state|stating|say|saying|explain|explaining|clarify|indicate|indicating|detail|describe)\s+(which|when|who|whom|how|what|whether|where|the\s+(date|year|vendor|company|contractor|cost|amount|reason))\b/i;
 function wantsDetailOnly(f) {
-  if (!f || f.issue !== 'explanation_unclear') return false;
+  if (!f) return false;
   const r = String(f.reason || '');
-  return RX_ONLY_WANTS_MORE.test(r) || RX_NO_DETAIL.test(r);
+  if (f.issue === 'explanation_unclear') return RX_ONLY_WANTS_MORE.test(r) || RX_NO_DETAIL.test(r) || RX_WANTS_WH.test(r);
+  if (f.issue === 'yes_no_explanation') return RX_EXPLAINED.test(r) && RX_WANTS_WH.test(r);
+  return false;
 }
 
 function groupReviseLines(flags) {
@@ -3499,7 +3539,11 @@ function checkBeforeSending(verify, clean = (x) => x) {
   }
   const sheetLines = [...sheets].map(([sheet, items]) => clean(
     `Explained on ${sheet} (spot-check only): ${joinRefs(items)}`));
-  const lines = (verify || []).filter((v) => v && v.kind !== 'addendum')
+  // NOT THE SFLS. Its verify line is a square-footage note ("SFLS - Tax: 1,169
+  // MLS: 2,154 sqft: SFLS received"), never something to do before sending.
+  // Megan, 2026-10-12: "we can take off the SFLS red notes". It stays in the
+  // full report.
+  const lines = (verify || []).filter((v) => v && v.kind !== 'addendum' && !/^\s*sfls\b|square\s+footage/i.test(String(v.item || '')))
     .map((v) => clean(`${String(v.item || 'Item').trim()}: ${v.short || firstSentence(v.note)}`.replace(/:\s*$/, '')))
     .concat(sheetLines);
   if (!lines.length) return { text: '', html: '' };
@@ -4000,7 +4044,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     console.log(`[disclosure-intake] dropped ${detailOnly.length} "explanation could say more" flag(s), the `
       + `explanation answers the question: ${detailOnly.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
   }
-  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f) && !isFactOnlyYes(f)
+  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f) && !isFactOnlyYes(f) && !isMirrorDefectMismatch(f)
     && f.issue !== 'explanation_on_addendum'
     && f.issue !== 'duplicate_form_copy'
     && f.issue !== 'cited_attachment_unseen'
@@ -4322,7 +4366,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold

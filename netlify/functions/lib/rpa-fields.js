@@ -21,7 +21,7 @@ const FIELDS = {
       year_built: { type: "string", description: "Year structure was built, from MLS or property profile." },
       property_type: {
         type: "string",
-        description: "Use PROP SUB TYPE from MLS or Type from Property Profile. NEVER derive from contract form name. Valid values: SFR, Condo, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex."
+        description: "Use PROP SUB TYPE from MLS or Type from Property Profile. NEVER derive from contract form name. Valid values: SFR, Condo, Townhouse, PUD, Probate, Revocable Trust, Vacant Land, Mobile Home, New Construction, Commercial, Duplex, Triplex, Quadruplex. When the MLS sub type says Townhouse or Single Family Residence, use that. When the only source is the Property Profile and its Type is PUD, add its County Land Use in parentheses, which says whether it is attached: e.g. 'PUD (Attached SFR - Not Condo)' or 'PUD (Detached SFR)'."
       },
 
       // ─── SQUARE FOOTAGE — return ONLY numeric values, never the field label ─

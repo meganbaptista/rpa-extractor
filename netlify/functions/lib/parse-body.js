@@ -233,7 +233,7 @@ function parseRequestBody(event) {
       try {
         const body = JSON.parse(repaired);
         if (body && typeof body === 'object') {
-          notes.push('repaired quotes inside a free-text name field');
+          notes.push('repaired a hand-edited body (stray quotes in a name, or a missing comma between lines)');
           return { ok: true, body, note: notes.join('; ') };
         }
       } catch (e) { /* fall through to the original diagnosis */ }
@@ -252,7 +252,12 @@ function parseRequestBody(event) {
  */
 const FREE_TEXT_LINE = /^(\s*"(?:senderName|sender_name)"\s*:\s*)(.*?)(,?)\s*$/gm;
 function repairFreeTextFields(raw) {
-  return raw.replace(FREE_TEXT_LINE, (_, head, value, comma) =>
+  // A MISSING COMMA BETWEEN TWO LINES, the other way a hand-edited Zapier body
+  // breaks: adding "senderName" under "threadId" without a comma after it
+  // (2026-10-09 and again 2026-10-12, Dona Chavez). Only between a line that
+  // ends a value and a line that starts a new "key":.
+  const commaFixed = raw.replace(/(["\]}\d]|true|false|null)[ \t]*\r?\n(\s*"[A-Za-z_][A-Za-z0-9_]*"\s*:)/g, '$1,\n$2');
+  return commaFixed.replace(FREE_TEXT_LINE, (_, head, value, comma) =>
     `${head}${JSON.stringify(String(value).replace(/["\\]/g, '').trim())}${comma}`);
 }
 
