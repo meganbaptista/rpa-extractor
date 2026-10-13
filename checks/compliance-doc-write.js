@@ -245,5 +245,13 @@ ok('a normalised status still reads as outstanding', OUTSTANDING.test(status('BA
   ok("a Christie's ABA does not clear a Douglas Elliman line", q.lines.find((l) => /Affiliate/.test(l.text || '')).action, 'keep');
 }
 
+// --- "Natural Hazard Disclosure Statement" clears "NHD Receipt Signed" (5955 Via Del Tecolote)
+{
+  const p = planDoc('DISCLOSURES\n- NHD Receipt Signed\n', ['FX - Natural Hazard Disclosure Statement.pdf']);
+  ok('the NHD statement, filed by its title, clears NHD Receipt Signed', p.lines.find((l) => /NHD/.test(l.text || '')).action, 'delete');
+  const q = planDoc('DISCLOSURES\n- NHD Receipt Signed\n', ['NeedB - Natural Hazard Disclosure Statement.pdf']);
+  ok('an unsigned one annotates it', q.lines.find((l) => /NHD/.test(l.text || '')).to, 'NHD Receipt Signed - NeedB');
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

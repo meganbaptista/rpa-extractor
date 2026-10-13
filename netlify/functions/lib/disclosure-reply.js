@@ -161,6 +161,16 @@ const STATUS_NOTE = /^(NEEDB|Need)[A-Za-z()]*(\+[A-Za-z()]+)*$/i;
  * stand". The wording of the line itself is still hers and still verbatim.
  */
 function listItem(line) {
+  // A trailing status after the LAST " - " wins: an unlisted form arrives as
+  // "Trident Pest Control - Work Authorization - NeedSS+BA", whose first " - "
+  // is part of its name (5955 Via Del Tecolote, 2026-10-13).
+  const parts = String(line).split(/\s[-\u2013]\s/);
+  if (parts.length > 2 && STATUS_NOTE.test(parts[parts.length - 1].trim())) {
+    const status = parts.pop().trim();
+    const item = parts.join(' - ').trim();
+    const mine = owedBy(status) === 'us';
+    return `${esc(item)} - <b><i>${esc(statusWords(status) || status)}${mine ? ' (I will get this)' : ''}</i></b>`;
+  }
   const cut = line.search(/\s[-\u2013]\s/);
   const item = (cut > 0 ? line.slice(0, cut) : line).replace(/\s*[-\u2013]\s*$/, '').trim();
   const note = cut > 0 ? line.slice(cut + 3).replace(/\s*[-\u2013]\s*$/, '').trim() : '';

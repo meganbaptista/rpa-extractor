@@ -69,7 +69,13 @@ const ALIASES = [
    * on being asked for. Both spellings answer the form.
    */
   { key: 'wfda', match: [/^wfda\b/i, /^wdfa\b/i, /^wildfire\s+disaster\s+advisory/i] },
-  { key: 'nhd', match: [/^nhd\b/i] },
+  /**
+   * The signed NHD STATEMENT is what her "NHD Receipt Signed" line asks for, and
+   * the splitter files it by its printed title, "Natural Hazard Disclosure
+   * Statement", with no code. That keyed to nothing, so the line was asked for
+   * on every delivery that had it (5955 Via Del Tecolote, 2026-10-13).
+   */
+  { key: 'nhd', match: [/^nhd\b/i, /^natural\s+hazards?\s+disclosure/i] },
   { key: 'prelim', match: [/^prelim\b/i] },
   { key: 'home-insp', match: [/^property\s+inspections?\b/i, /^home\s+insp/i] },
   { key: 'termite', match: [/^termite\b/i] },

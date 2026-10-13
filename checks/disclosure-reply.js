@@ -217,5 +217,13 @@ ok('and the sections that belong in the email are kept',
   ok('a free-text note is untouched', listItem('VP - once completed'), 'VP - <b><i>once completed</i></b>');
 }
 
+// --- an unlisted form whose name has a dash still gets words (Via Del Tecolote)
+{
+  const { listItem } = require('../netlify/functions/lib/disclosure-reply.js');
+  ok('Trident work authorization', listItem('Trident Pest Control - Work Authorization - NeedSS+BA'),
+    "Trident Pest Control - Work Authorization - <b><i>Pending Seller and Buyer's Agent</i></b>");
+  ok('RFR', listItem('RFR - Receipt for Reports - NeedSS'), 'RFR - Receipt for Reports - <b><i>Pending Seller (I will get this)</i></b>');
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);
