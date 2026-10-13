@@ -326,8 +326,22 @@ function isSellerOnlyForm(audit) {
   return SELLER_ONLY_FORMS.some((re) => re.test(name));
 }
 
+/**
+ * THE RFR IS THE BUYER's RECEIPT. Megan, 2026-10-13: "the RFR does not need
+ * seller signature, it's FX at buyer signing." 5955 Via Del Tecolote filed
+ * "NeedSS - RFR - Receipt for Reports" from the form's seller lines.
+ */
+const BUYER_ONLY_FORMS = [/^\s*receipt\s+for\s+reports\b/i];
+function isBuyerOnlyForm(audit, code) {
+  return /^RFR$/i.test(String(code || '').trim()) || BUYER_ONLY_FORMS.some((re) => re.test(String((audit && audit.name) || '')));
+}
+
 function resolveSigners(audit, code) {
   const lines = Array.isArray(audit.signature_lines) ? audit.signature_lines : [];
+  if (isBuyerOnlyForm(audit, code)) {
+    const signed = normTokens(audit.present_signers).includes('B');
+    return { required_signers: ['B'], present_signers: signed ? ['B'] : [], lines, signerAmbiguity: 0 };
+  }
   if (isSellerOnlyForm(audit)) {
     // WHO signed stays the model's answer, as below: a one-seller deal leaves
     // the second printed line blank, so counting lines would read NeedSS.

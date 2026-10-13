@@ -603,5 +603,17 @@ ok('a brokerage document still gets its firm',
   ok('with no RFR it files as the RFR list, never under a firm', formLabel(alone[0]), 'RFR - Attached List of Reports');
 }
 
+// --- the RFR needs only the buyer (Megan, 2026-10-13) ----------------------
+{
+  const A = require('../netlify/functions/lib/document-audit')._internal || {};
+  if (A.resolveSigners) {
+    const r = A.resolveSigners({ name: 'Receipt for Reports', present_signers: [], signature_lines: [{ label: 'Seller' }, { label: 'Buyer' }] }, 'RFR');
+    ok('RFR requires the buyer only', r.required_signers, ['B']);
+    ok('unsigned RFR is NEEDB, not NeedSS', statusSuffix({ code: 'RFR', name: 'Receipt for Reports', ...r }), 'NEEDB');
+    const s2 = A.resolveSigners({ name: 'Receipt for Reports', present_signers: ['B'], signature_lines: [{ label: 'Seller' }] }, 'RFR');
+    ok('buyer-signed RFR is FX even with the seller line blank', statusSuffix({ code: 'RFR', name: 'Receipt for Reports', ...s2 }), 'FX');
+  } else { console.log('skip  resolveSigners not exported'); }
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);
