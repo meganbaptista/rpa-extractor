@@ -267,8 +267,38 @@ function mergeDecisionTrees(allForms) {
   return allForms.filter((f) => !f._merged);
 }
 
+/**
+ * THE RFR's ATTACHED LIST IS PAGE 3 OF THE RFR, not a document of its own
+ * (5955 Via Del Tecolote, 2026-10-13). Our Receipt for Reports is the C.A.R.
+ * form plus "RECEIPT FOR REPORTS - ATTACHED LIST OF REPORTS ... Attachment to
+ * C.A.R. Form RFR", one PDF. The splitter cut the list off, and because the
+ * list names Trident Pest Control's reports it even filed it as "Trident Pest
+ * Control - Receipt for Reports - Attached List of Reports". It now joins the
+ * nearest RFR (the one before it first); with no RFR in the delivery it files
+ * as "RFR - Attached List of Reports", never under a firm's name.
+ */
+const isRfrList = (f) => /attached\s+list\s+of\s+reports|attachment\s+to\s+c\.?\s*a\.?\s*r\.?\s+form\s+rfr/i.test(`${clean(f.name)} ${clean(f.code)}`);
+const isRfr = (f) => !isRfrList(f) && (clean(f.code).toUpperCase() === 'RFR' || /^receipt\s+for\s+reports\b/i.test(clean(f.name)));
+
+function mergeRfrLists(allForms) {
+  for (const list of allForms.filter(isRfrList)) {
+    const first = Math.min(...list.pages);
+    const rfrs = allForms.filter(isRfr);
+    const before = rfrs.filter((r) => Math.max(...r.pages) < first).sort((a, b) => Math.max(...b.pages) - Math.max(...a.pages))[0];
+    const host = before || rfrs.sort((a, b) => Math.min(...a.pages) - Math.min(...b.pages))[0];
+    if (host) {
+      host.pages = [...new Set([...host.pages, ...list.pages])].sort((a, b) => a - b);
+      list._merged = true;
+      console.log(`[disclosure-split] merged the RFR's attached list of reports (pages ${list.pages.join(',')}) into the RFR`);
+    } else {
+      list.code = 'RFR'; list.name = 'Attached List of Reports'; list.brokerage = ''; list.brand = '';
+    }
+  }
+  return allForms.filter((f) => !f._merged);
+}
+
 function mergeAddenda(allForms) {
-  allForms = mergeDecisionTrees(allForms);
+  allForms = mergeRfrLists(mergeDecisionTrees(allForms));
   const parents = allForms.filter((f) => !isTOA(f));
   const toas = allForms.filter((f) => isTOA(f));
   if (!toas.length || !parents.length) return allForms;

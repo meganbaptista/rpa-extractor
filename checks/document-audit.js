@@ -590,5 +590,18 @@ ok('a brokerage document still gets its firm',
   formLabel({ code: '', name: 'Buyer Preliminary Title Report (PTR) Advisory', brokerage: "Christie's" }),
   "Christie's - Buyer Preliminary Title Report (PTR) Advisory");
 
+// --- the RFR's attached list stays with the RFR (5955 Via Del Tecolote) -----
+{
+  const { mergeAddenda } = split._internal;
+  const forms = [
+    { code: 'RFR', name: 'Receipt for Reports', pages: [20, 21] },
+    { code: '', name: 'Receipt for Reports - Attached List of Reports', brokerage: 'Trident Pest Control', pages: [22] },
+    { code: 'WDO', name: 'Wood Destroying Pests and Organisms Inspection Report', brokerage: 'Trident Pest Control', pages: [23, 24] },
+  ];
+  ok('the attached list joins the RFR', mergeAddenda(forms).map((f) => `${f.code || f.name}:${f.pages.join(',')}`), ['RFR:20,21,22', 'WDO:23,24']);
+  const alone = mergeAddenda([{ code: '', name: 'RECEIPT FOR REPORTS - ATTACHED LIST OF REPORTS', brokerage: 'Trident Pest Control', pages: [3] }]);
+  ok('with no RFR it files as the RFR list, never under a firm', formLabel(alone[0]), 'RFR - Attached List of Reports');
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);
