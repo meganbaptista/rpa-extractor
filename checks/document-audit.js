@@ -615,5 +615,8 @@ ok('a brokerage document still gets its firm',
   } else { console.log('skip  resolveSigners not exported'); }
 }
 
+ok('a REALTOR association is not a brokerage prefix', formLabel({ code: '', name: 'San Fernando Valley Local Area Disclosure and Advisory',
+  brokerage: 'SOUTHLAND REGIONAL ASSOCIATION OF REALTORS®' }), 'San Fernando Valley Local Area Disclosure and Advisory');
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

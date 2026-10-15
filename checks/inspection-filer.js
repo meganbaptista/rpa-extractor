@@ -155,6 +155,26 @@ const up = (d) => d.uploads.map((u) => u.replace(/ \(was .*\)$/, ''));
   await run(msg('Termite report 304 W Juanita Ave', ['Termite.pdf']), d, {}, { sellerClientFor: async () => ({ seller: true }) });
   ok('a proven seller client is a Seller Report even without routing (the preview page)', up(d), ['p4:Seller Report - Termite.pdf']);
 
+  // ---- the 2026-10-14 misfiles ---------------------------------------------
+  const pick = (subject, files, reason = '') => F._internal.pickFiles({ headers: { subject }, attachments: files.map(pdf) }, { classifier: { reason } }).pdfs.map((p) => p.filename);
+  ok('Charmant: an Extension of Time Amendment is not a report', pick('7405 Charmant Dr. #2022', ['Extension of Time Amendment #1 - 1225.pdf', '7405_Charmant_Dr_Unit_2022___Condo_Inspection full report.pdf']),
+    ['7405_Charmant_Dr_Unit_2022___Condo_Inspection full report.pdf']);
+  ok('Ocean Ave: "54_BIW - Master NEW.pdf" is a waiver, not a report', pick('Fwd: Completed: 1755 Ocean Ave #412- Termite Waive', ['54_BIW - Master NEW.pdf']), []);
+  ok('Muirfield: a Sewer Facilities Charge from escrow is not an inspection email', pick('Re: FW: Selling Agent Opening Package | 239 S Muirfield', ['sfc62429.pdf'],
+    'The current newest email has an attachment (Sewer Facilities Charge / Bonded and Special Sewer Connection Certificate).'), []);
+  ok('Hortense: a Chimney Doctor report is Chimney, not General', T({ filename: '12706 Hortense St.pdf', subject: 'Fwd: Inspection Report: 12706 Hortense St',
+    text: 'Chimney Doctor INSPECTION REPORT 12706 Hortense St. Level II chimney inspection. The chimney flue liner shows cracking. Chimney crown deteriorated. Fireplace firebox.' }), 'Buyer Report - Chimney.pdf');
+  ok('a condo inspection is General', T({ filename: '7405_Charmant_Dr_Unit_2022___Condo_Inspection full report.pdf', subject: '', text: '' }), 'Buyer Report - General.pdf');
+  // The PDF's own title vetoes: a VP form named InspectionCodyRd.pdf.
+  TEXT.vp1 = 'VERIFICATION OF PROPERTY CONDITION (C.A.R. Form VP, Revised 6/24)';
+  d = fakeDrive();
+  r = await run({ id: 'm', headers: { subject: 'Inspection 304 W Juanita Ave' }, newestText: '', attachments: [{ filename: 'InspectionCodyRd (1).pdf', attachmentId: 'vp1' }] }, d);
+  ok('Cody Rd: a VP form named "Inspection…" is vetoed by its own title', [d.uploads, /not an inspection report/.test(F.summary(r))], [[], true]);
+  TEXT.wdo1 = 'WOOD DESTROYING PESTS AND ORGANISMS INSPECTION REPORT Escrow No. 12345 Section 1 Section 2';
+  d = fakeDrive();
+  await run({ id: 'm', headers: { subject: 'Termite 304 W Juanita Ave' }, newestText: '', attachments: [{ filename: 'report.pdf', attachmentId: 'wdo1' }] }, d);
+  ok('a real termite report with "Escrow No." on page 1 still files', up(d), ['p4:Buyer Report - Termite.pdf']);
+
   process.env.INSPECTION_FILING = 'off';
   d = fakeDrive();
   r = await run(msg('Inspection Reports | 410 N Crescent Heights', ['Home Inspection.pdf']), d);

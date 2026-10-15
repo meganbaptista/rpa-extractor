@@ -114,8 +114,32 @@ function withoutLeadingFirm(text) {
   return cut > 0 ? t.slice(cut + 3).trim() : '';
 }
 
+/**
+ * LOCAL AREA DISCLOSURES PAIR BY REGION, wherever the words sit. Her line
+ * "San Fernando Local Area Disclosures" and the association's form "San
+ * Fernando Valley Local Area Disclosure and Advisory" (filed under SOUTHLAND
+ * REGIONAL ASSOCIATION OF REALTORS®) never matched: different word order, a
+ * firm in front (14322 Dickens St, 2026-10-15). Both now key to the region.
+ */
+const LAD_REGIONS = [
+  ['san-fernando', /san\s+fernando/i], ['orange-county', /orange\s+county/i],
+  ['santa-clarita', /santa\s+clarita|antelope\s+valley/i], ['san-bernardino', /san\s+bernardino/i],
+  ['coachella', /coachella/i], ['ventura', /ventura/i], ['pasadena', /pasadena|foothill/i],
+  ['malibu', /malibu/i], ['palm-springs', /palm\s+springs|desert\s+area/i], ['san-gabriel', /san\s+gabriel/i],
+  ['south-bay', /south\s+bay|beach\s+cities/i], ['inland', /inland\s+valley/i],
+  ['los-angeles-county', /los\s+angeles\s+county|\bla\s+county/i],
+];
+function localAreaKey(text) {
+  const t = String(text || '');
+  if (!/local\s+area\s+(disclosures?|advisor(y|ies))|area\s+disclosure\s+and\s+advisory|^\s*(fx\s+-\s+)?lad\b/i.test(t)) return '';
+  const hit = LAD_REGIONS.find(([, re]) => re.test(t));
+  return hit ? `lad-${hit[0]}` : '';
+}
+
 /** The canonical key for either a Doc line or a filename, or '' if neither. */
 function aliasFor(text) {
+  const lad = localAreaKey(text);
+  if (lad) return lad;
   for (const a of ALIASES) if (a.match.some((re) => re.test(text))) return a.key;
   const tail = withoutLeadingFirm(text);
   if (tail) {

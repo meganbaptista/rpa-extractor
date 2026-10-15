@@ -363,6 +363,10 @@ const NOT_A_BROKERAGE = /^(california association of realtors|c\.?a\.?r\.?|snapn
 function brokerageName(form) {
   let b = String(form.brokerage || '').trim();
   if (!b) return '';
+  // A REALTOR ASSOCIATION OR MLS IS NOT A BROKERAGE. It publishes forms, like
+  // C.A.R. does; "SOUTHLAND REGIONAL ASSOCIATION OF REALTORS® - San Fernando
+  // Valley Local Area Disclosure" buried the form's name (2026-10-15).
+  if (/association\s+of\s+realtors|board\s+of\s+realtors|\brealtors®?\s*$|\bmls\b|multiple\s+listing/i.test(b)) return '';
   // A co-branded header ("AKG | Christie's International Real Estate") names
   // the TEAM and the firm; the firm is the half worth filing under. Split
   // first, because clean() turns the pipe into a space and the two halves

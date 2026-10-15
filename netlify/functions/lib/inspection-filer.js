@@ -23,7 +23,7 @@
 // name alone.
 const INSPECTION_RX = /\binspect|termite|wood\s*destroying|\bwdo\b|\bpest\b|sewer|\blateral|\broof|chimney|\bmold|\bhvac|plumb|foundation|structural|geolog|\bsoils?\b|\bseptic|electrical|leak\s+detect|moisture|asbestos|radon|\bgas\s+line|arborist|\bspectora\b/i;
 // Never these: contract forms, disclosures and escrow paperwork that ride along.
-const EXCLUDE_RX = /\b(tds|spq|avid|esd|fhds|lpd|nhd|natural\s+hazard|zone\s+report|prelim|preliminary\s+title|escrow\s+instruction|amend|rpa|purchase\s+agreement|addendum|counter|request\s+for\s+repair|\brr\b|rrrr|contingency|\bcr\b|crb|biw|waiver|disclosure|questionnaire|closing\s+statement|commission|\bcda\b|w-?9|grant\s+deed|vp|verification\s+of\s+property|rfr|receipt\s+for\s+reports|hoa|cc&?rs|bylaws|budget|9a|city\s+report|offer|acceptance|pre-?approval|proof\s+of\s+funds|escrow|funds|deposit|emd|wire|statement|demand|payoff)\b/i;
+const EXCLUDE_RX = /\b(tds|spq|avid|esd|fhds|lpd|nhd|natural\s+hazard|zone\s+report|prelim|preliminary\s+title|escrow\s+instruction|amend\w*|extension\s+of\s+time|\beot\b|rpa|purchase\s+agreement|addendum|counter|request\s+for\s+repair|\brr\b|rrrr|contingency|\bcr\b|crb|biw|waiver|disclosure|questionnaire|closing\s+statement|commission|\bcda\b|w-?9|grant\s+deed|vp|verification\s+of\s+property|rfr|receipt\s+for\s+reports|hoa|cc&?rs|bylaws|budget|9a|city\s+report|offer|acceptance|pre-?approval|proof\s+of\s+funds|escrow|funds|deposit|emd|wire|statement|demand|payoff)\b/i;
 // An email ABOUT inspections, by its subject.
 // Not "report" alone: NHD, wildfire, 9A and city reports are escrow paperwork.
 const SUBJECT_RX = /inspect|termite|\bwdo\b|sewer|\broof|chimney|\bmold|\bhvac|plumb|foundation|geolog|\bsoil|septic|wood\s*destroying/i;
@@ -63,9 +63,13 @@ function pickFiles(message, decision) {
   if (!pdfs.length) return { pdfs: [], why: 'no PDF attached' };
   const reason = String((decision && decision.classifier && decision.classifier.reason) || '');
   const emailIsInspection = SUBJECT_RX.test(h.subject || '')
-    || /inspection\s+report|termite|sewer|roof\s+(report|inspection)|inspection\s+reports?\s+(attached|linked)|route(s)?\s+to\s+belle[^.]*inspection/i.test(reason);
+    // "sewer" alone is not enough: a Sewer Facilities Charge certificate from
+    // escrow is not an inspection (239 S Muirfield, 2026-10-14).
+    || /inspection\s+reports?\b|termite\s+(report|inspection)|sewer\s+(line|lateral|scope|camera|video)\s*(inspection|report)?|roof\s+(report|inspection)/i.test(reason);
   const keep = pdfs.filter((a) => {
-    const name = String(a.filename || '');
+    // Underscores and dots are separators in file names: "54_BIW - Master.pdf"
+    // hid "BIW" from the word match (1755 Ocean Ave, 2026-10-14).
+    const name = String(a.filename || '').replace(/[_.]+/g, ' ');
     if (EXCLUDE_RX.test(name)) return false;
     // A PDF named like a report files on its own name. Anything else (an
     // invoice, "Scan_0042.pdf", the estimate) files only when the EMAIL is
@@ -74,7 +78,7 @@ function pickFiles(message, decision) {
   });
   if (!keep.length) return { pdfs: [], why: 'no inspection-type PDF' };
   // A PDF whose name says inspection is enough; otherwise the email itself must.
-  if (!emailIsInspection && !keep.some((a) => INSPECTION_RX.test(a.filename || ''))) return { pdfs: [], why: 'not an inspection email' };
+  if (!emailIsInspection && !keep.some((a) => INSPECTION_RX.test(String(a.filename || '').replace(/[_.]+/g, ' ')))) return { pdfs: [], why: 'not an inspection email' };
   return { pdfs: keep, why: '' };
 }
 
@@ -144,7 +148,7 @@ const REPORT_TYPES = [
   ['Lead', /lead[\s-]*based\s+paint\s+(inspection|test)/i],
   ['Arborist', /arborist|tree\s+(report|inspection)/i],
   ['Survey', /\bsurvey\b/i],
-  ['General', /home\s+inspection|property\s+inspection|general\s+inspection|residential\s+inspection|inspection\s+report|summary\s+report|inspection\s+agreement/i],
+  ['General', /home\s+inspection|property\s+inspection|general\s+inspection|residential\s+inspection|condo(minium)?\s+inspection|inspection\s+report|summary\s+report|inspection\s+agreement/i],
 ];
 // A broad report names every system; four or more of these is a general one.
 const SYSTEMS = [/\broof/i, /plumbing/i, /electrical/i, /\bhvac\b|heating/i, /foundation/i, /attic/i, /water\s+heater/i, /kitchen/i, /garage/i, /exterior/i];
@@ -152,8 +156,15 @@ const SYSTEMS = [/\broof/i, /plumbing/i, /electrical/i, /\bhvac\b|heating/i, /fo
 /** "Termite", "General", ... or '' when nothing says. */
 function reportType(head, body) {
   for (const [name, rx] of REPORT_TYPES) if (name !== 'General' && rx.test(head)) return name;
-  if (REPORT_TYPES.find(([n]) => n === 'General')[1].test(head)) return 'General';
+  // A home inspection names four or more of the house's systems; a chimney or
+  // roof report does not, even when its title says "inspection report"
+  // (12706 Hortense: a Chimney Doctor report was named General, 2026-10-14).
   if (SYSTEMS.filter((rx) => rx.test(body)).length >= 4) return 'General';
+  const counts = REPORT_TYPES.filter(([n]) => n !== 'General')
+    .map(([name, rx]) => [name, (String(body).match(new RegExp(rx.source, 'gi')) || []).length])
+    .filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
+  if (counts.length) return counts[0][0];
+  if (REPORT_TYPES.find(([n]) => n === 'General')[1].test(head)) return 'General';
   for (const [name, rx] of REPORT_TYPES) if (rx.test(body)) return name;
   return '';
 }
@@ -231,6 +242,7 @@ async function fileInspectionReports(message, decision, deps = {}) {
     const existing = new Map(children.map((f) => [f.name, Number(f.size) || 0]));
     const filed = [];
     const skipped = [];
+    const notReport = [];
     // SELLER REPORT when it is the seller's: the router sent it to Ethan as our
     // seller client, the thread is a "Seller Disclosure Package" (17942 Karen
     // Dr), or the sender is a proven seller client (lib/seller-client.js; asked
@@ -249,6 +261,19 @@ async function fileInspectionReports(message, decision, deps = {}) {
       const bytes = await d.gmail.getAttachment(message.id, p.attachmentId);
       // eslint-disable-next-line no-await-in-loop
       const text = await (deps.pdfHeadText || pdfHeadText)(bytes);
+      // THE PDF's OWN TITLE CAN VETO IT. "InspectionCodyRd.pdf" was a C.A.R. VP
+      // form and "sfc62429.pdf" a Sewer Facilities Charge certificate (both
+      // 2026-10-14). A C.A.R. form, or a title naming excluded paperwork, is
+      // not a report.
+      // Only the TITLE area, and only paperwork words: a real termite report
+      // prints "Escrow No." on its first page, so the general exclusion list
+      // cannot be used here.
+      const title = String(text || '').slice(0, 250);
+      if (/C\.?\s?A\.?\s?R\.?\s+Form\b|CALIFORNIA\s+ASSOCIATION\s+OF\s+REALTORS/i.test(title)
+        || /extension\s+of\s+time|\bamendment\b|\baddendum\b|request\s+for\s+repairs?|verification\s+of\s+property|inspection\s+waiver|contingency\s+(removal|release)|escrow\s+instructions|closing\s+statement|preliminary\s+(title\s+)?report|facilities\s+charge|sewer\s+connection\s+certificate|certificate\s+of\s+compliance|receipt\s+for\s+funds/i.test(title)) {
+        notReport.push(cleanName(p.filename));
+        continue;
+      }
       const base = cleanName(teamName({ text, filename: p.filename, subject, sellerSent }));
       // The same report forwarded again: same name AND same size.
       if (existing.has(base) && existing.get(base) === bytes.length) { skipped.push(base); continue; }
@@ -260,7 +285,8 @@ async function fileInspectionReports(message, decision, deps = {}) {
       existing.set(name, bytes.length);
       filed.push(name === cleanName(p.filename) ? name : `${name} (was ${cleanName(p.filename)})`);
     }
-    return { filed, skipped, folder: folder.name, why: '' };
+    if (!filed.length && !skipped.length) return { filed: [], why: `not filed: not an inspection report (${notReport.join(', ')})` };
+    return { filed, skipped, folder: folder.name, why: '', notReport };
   } catch (e) {
     return { filed: [], why: `not filed: error ${e.message}` };
   }

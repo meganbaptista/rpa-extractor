@@ -253,5 +253,16 @@ ok('a normalised status still reads as outstanding', OUTSTANDING.test(status('BA
   ok('an unsigned one annotates it', q.lines.find((l) => /NHD/.test(l.text || '')).to, 'NHD Receipt Signed - NeedB');
 }
 
+// --- local area disclosures pair by region (14322 Dickens St) --------------
+{
+  const doc = 'DISCLOSURES\n- San Fernando Local Area Disclosures - \n- Local Area Disclosures – Orange County\n- Santa Clarita Local Area Disclosure\n';
+  const p = planDoc(doc, ['FX - SOUTHLAND REGIONAL ASSOCIATION OF REALTORS® - San Fernando Valley Local Area Disclosure and Advisory.pdf',
+    'FX - San Fernando Valley Local Area Disclosure and Advisory.pdf', 'FX - Local Area Disclosures – Orange County.pdf']);
+  const act = (rx) => p.lines.find((l) => rx.test(l.text || '')).action;
+  ok('San Fernando line cleared by the SFV association form', act(/San Fernando/), 'delete');
+  ok('Orange County still cleared', act(/Orange County/), 'delete');
+  ok('a different region is not cleared by it', act(/Santa Clarita/), 'keep');
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);
