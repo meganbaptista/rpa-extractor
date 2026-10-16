@@ -98,6 +98,9 @@ const BRANDS = [
   { name: 'Microsoft / OneDrive / SharePoint', words: /onedrive|sharepoint|office\s*365|microsoft\s*365|outlook\s+web/i, domains: /(^|\.)(microsoft\.com|sharepoint\.com|onedrive\.live\.com|1drv\.ms|live\.com|office\.com|microsoftonline\.com|office365\.com)$/i },
   { name: 'Adobe', words: /adobe\s*(sign|acrobat|document\s*cloud|pdf)/i, domains: /(^|\.)(adobe\.com|adobesign\.com|echosign\.com|acrobat\.com)$/i },
   { name: 'Google Drive', words: /google\s*(drive|docs)/i, domains: /(^|\.)(google\.com|drive\.google\.com|docs\.google\.com|goo\.gl)$/i },
+  // Google itself: Gmail / Workspace "password expires" fakes (2026-10-16).
+  { name: 'Google', words: /\bgoogle\b|\bgmail\b|g-?work(place|space)/i, domains: /(^|\.)(google\.com|accounts\.google\.com)$/i }, // NOT gmail.com: anyone can have one
+  { name: 'Apple', words: /\bapple\s+id\b|\bicloud\b/i, domains: /(^|\.)(apple\.com|icloud\.com)$/i },
   { name: 'Dotloop', words: /dotloop/i, domains: /(^|\.)dotloop\.com$/i },
   { name: 'Skyslope', words: /skyslope/i, domains: /(^|\.)skyslope\.com$/i },
   { name: 'Qualia', words: /\bqualia\b/i, domains: /(^|\.)(qualia\.com|qualia\.io)$/i },
@@ -113,6 +116,11 @@ const LURE = /\b(view|open|access|review)\s+(the\s+)?(secure\s+)?(document|file|
 // CHANGED banking details, the actual scam ("our bank details have changed,
 // wire to this new account"). Not "wire instructions" on its own: every escrow
 // status sheet says "Wire Instructions Issued" (PHEG Escrow, 2026-10-09).
+// A THREAT TO AN ACCOUNT: the password is expiring, the mailbox is full, the
+// account will be restricted. Real services send these from their own
+// domains; anyone else sending one is phishing for a login.
+const ACCOUNT_THREAT = /password[^.]{0,30}(expir\w*|reset|will\s+expire|has\s+expired)|expire'?s?\s+today|keep\s+(your\s+)?(current|active)\s+password|account\s+(will\s+be\s+)?(suspended|restricted|disabled|locked|deactivated|closed)|restricted\s+access|mailbox\s+(is\s+)?(full|almost\s+full|over\s+quota)|storage\s+(is\s+)?full|verify\s+your\s+(account|mailbox|email\s+account)|unusual\s+sign[\s-]?in/i;
+
 const MONEY = /\b(updated|new|changed|revised|different|corrected|alternate)\s+(wire|wiring|bank(ing)?|account|payment)\s+(instructions?|details|info(rmation)?|account)\b|\b(bank(ing)?|account|wire)\s+(details|information|instructions)\s+(have|has)\s+(been\s+)?(changed|updated)\b|\bwire\s+(the\s+)?(funds|deposit|emd|payment)\s+to\s+(a|the|our)\s+(new|different|updated)\b/i;
 
 const DANGEROUS_ATTACHMENT = /\.(html?|shtml|svg|xhtml|hta|js|vbs|wsf|exe|scr|bat|cmd|iso|img|lnk|one)$/i;
@@ -231,6 +239,23 @@ function check(message) {
       strong.push(`it says ${b.name}, but its "${l.text.slice(0, 40)}" button goes to ${host}`);
       break;
     }
+  }
+
+  /**
+   * PHISHING FOR A LOGIN, regardless of how the links are dressed. "G-Workplace
+   * <Shane@swot-on.com.au> via sendgrid.net": "Password Expired Notification
+   * ... megan@mytcconcierge.com password expire's Today ... Keep Your Active
+   * Password" (2026-10-16). Its buttons went through SendGrid, which the link
+   * checks rightly ignore for newsletters, so the WORDS have to carry it: an
+   * account threat that names a service the sender is not, or names OUR OWN
+   * address from outside, is strong on its own.
+   */
+  const fullText = `${h.subject || ''} ${h.from || ''} ${text}`;
+  if (ACCOUNT_THREAT.test(fullText)) {
+    const claimed = BRANDS.find((b) => b.words.test(fullText) && !b.domains.test(fromDomain));
+    const ownAddress = OWN_DOMAINS.some((dmn) => new RegExp(`@${dmn.replace(/\./g, '\\.')}\\b`, 'i').test(fullText));
+    if (claimed) strong.push(`it warns about your ${claimed.name} account/password, but it was sent from ${fromDomain || 'an unknown address'}, not ${claimed.name}`);
+    else if (ownAddress) strong.push(`an outside sender (${fromDomain || 'unknown'}) warns that your own mailbox's password or account is at risk`);
   }
 
   if (links.length && LURE.test(text)) {

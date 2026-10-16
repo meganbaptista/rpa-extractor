@@ -54,6 +54,21 @@ ok('wire instructions + replies to a personal Gmail + link', check(msg({
   html: '<a href="https://firstam.com/wire">wire info</a>',
 })).suspicious, true);
 
+ok('fake Google Workspace "password expires today" through SendGrid (2026-10-16)', check(msg({
+  from: 'G-Workplace <Shane@swot-on.com.au>', subject: 'ATTN-Critical_Alert: _GmailNew Password Review.',
+  auth: 'mx.google.com; dkim=pass; spf=pass; dmarc=pass',
+  text: "Google Workspace Password Expired Notification. The megan@mytcconcierge.com password expire's Today, 10/16/2026. You must take immediate steps to maintain and prevent restricted access. Keep Your Active Password",
+  html: '<a href="https://u123.ct.sendgrid.net/ls/click?upn=x">Keep Your Active Password</a> <a href="https://u123.ct.sendgrid.net/ls/click?upn=y">Change Password Settings</a>',
+})).suspicious, true);
+ok('a real Google security alert from google.com (verified) is not flagged', check(msg({
+  from: 'Google <no-reply@accounts.google.com>', subject: 'Security alert', auth: 'mx.google.com; dkim=pass; spf=pass; dmarc=pass',
+  text: 'New sign-in to your account megan@mytcconcierge.com. If this was you, you don\'t need to do anything.',
+  html: '<a href="https://accounts.google.com/AccountChooser">Check activity</a>' })).suspicious, false);
+ok('an escrow secure-message notice mentioning a password is not flagged', check(msg({
+  from: 'Chartwell Escrow <secure@chartwellescrow.com>', subject: 'Secure message',
+  text: 'You have received a secure message. Use the password you created to open it.',
+  html: '<a href="https://securemail.chartwellescrow.com/x">Open message</a>' })).suspicious, false);
+
 // ---- real mail that must NOT be flagged ----------------------------------
 ok('a real DocuSign envelope', check(msg({
   from: 'Amy via Docusign <dse_NA4@docusign.net>', subject: 'Please DocuSign: 123 Main St',
