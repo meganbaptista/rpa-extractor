@@ -45,6 +45,7 @@ const pdfHeadText = async (bytes) => TEXT[String(bytes).slice(5)] || '';
 const pdf = (filename) => ({ filename, mimeType: 'application/pdf', attachmentId: `a-${filename}` });
 const msg = (subject, files, text = '') => ({ id: 'm1', headers: { subject }, attachments: files.map(pdf), newestText: text });
 const notSeller = async () => ({ seller: false });
+process.env.INSPECTION_FILING = 'on'; // the checks exercise the filer itself
 const run = async (m, drive, decision = {}, extra = {}) => F.fileInspectionReports(m, decision, { drive, gmail, pdfHeadText, sellerClientFor: notSeller, ...extra });
 const up = (d) => d.uploads.map((u) => u.replace(/ \(was .*\)$/, ''));
 
@@ -175,11 +176,15 @@ const up = (d) => d.uploads.map((u) => u.replace(/ \(was .*\)$/, ''));
   await run({ id: 'm', headers: { subject: 'Termite 304 W Juanita Ave' }, newestText: '', attachments: [{ filename: 'report.pdf', attachmentId: 'wdo1' }] }, d);
   ok('a real termite report with "Escrow No." on page 1 still files', up(d), ['p4:Buyer Report - Termite.pdf']);
 
+  delete process.env.INSPECTION_FILING;
+  d = fakeDrive();
+  r = await run(msg('Inspection Reports | 410 N Crescent Heights', ['Home Inspection.pdf']), d);
+  ok('off by default', [d.uploads, r], [[], null]);
   process.env.INSPECTION_FILING = 'off';
   d = fakeDrive();
   r = await run(msg('Inspection Reports | 410 N Crescent Heights', ['Home Inspection.pdf']), d);
   ok('off switch', [d.uploads, r], [[], null]);
-  delete process.env.INSPECTION_FILING;
+  process.env.INSPECTION_FILING = 'on';
 
   if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
   console.log('\nall inspection-filer checks pass');

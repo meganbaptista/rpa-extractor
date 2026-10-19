@@ -16,7 +16,9 @@
 // Folder layout (lib/watch.js): 00 MTC CLIENTS / <agent> / 00 ESCROW /
 // <property address> / ... . Files go in <property address> itself.
 //
-// Off switch: INSPECTION_FILING=off in Netlify.
+// OFF BY DEFAULT since 2026-10-19 (Megan: "i dont want them to be saved, its
+// getting it wrong and I cant catch it"). It files only with
+// INSPECTION_FILING=on in Netlify. A preview (nothing written) still runs.
 // ============================================================================
 
 // What an inspection report is called. Specific enough to file on the PDF's
@@ -220,7 +222,7 @@ const fromOurselves = (message) => {
 };
 
 async function fileInspectionReports(message, decision, deps = {}) {
-  if (String(process.env.INSPECTION_FILING || '').toLowerCase() === 'off') return null;
+  if (String(process.env.INSPECTION_FILING || '').toLowerCase() !== 'on' && !deps.preview) return null;
   if (fromOurselves(message)) return null;
   const d = { drive: deps.drive || require('./drive'), gmail: deps.gmail || require('./gmail') };
   try {
