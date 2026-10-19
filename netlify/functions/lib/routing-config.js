@@ -34,8 +34,9 @@ const LABELS = {
   // Added ON TOP of normal routing when an email's links look like phishing
   // (lib/phishing-check.js). Never deletes or moves the email.
   phishing: '\u26A0\uFE0F Possible phishing - do not click',
-  // Added when lib/inspection-filer.js saved the email's report PDFs into the
-  // deal's escrow folder, so Belle can see it is already done.
+  // Was added when lib/inspection-filer.js saved the email's report PDFs into
+  // the deal's escrow folder. Turned off 2026-10-19 (Megan); kept so the
+  // name is on record if it comes back.
   inspectionFiled: 'Inspection filed to Drive',
 };
 

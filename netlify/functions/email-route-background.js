@@ -100,10 +100,9 @@ exports.handler = async function (event) {
       if (note) {
         decision.reason = `${note} | ${decision.reason || ''}`;
         applied.inspection = filing;
-        if (filing.filed && filing.filed.length) {
-          await gmail.modifyMessage(message.id, { add: [await gmail.ensureLabel(cfg.LABELS.inspectionFiled)], remove: [] })
-            .catch(() => {});
-        }
+        // No "Inspection filed to Drive" Gmail label any more (Megan,
+        // 2026-10-19: turn it off). The filing itself still runs; the log's
+        // reason column says what was filed.
       }
     }
 
