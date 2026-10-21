@@ -1028,9 +1028,15 @@ async function fetchToBuffer(url, name) {
 // Load each document as base64. Accepts { base64 } directly, or { url } to fetch.
 // A .zip is expanded into the disclosure PDFs inside it. Anything that is neither
 // a valid zip nor a valid PDF is logged and skipped — never handed to Claude.
+//
+// `report` (optional array): every file NOT loaded is pushed as { name, reason },
+// and each archive as { name, reason, info: true } with its summary. The job
+// pipeline (lib/intake-job.js) shows these to Megan, so a skipped file is never
+// silent. Callers that pass nothing behave exactly as before.
 // ----------------------------------------------------------------------------
-async function loadDocuments(documents) {
+async function loadDocuments(documents, report = null) {
   const out = [];
+  const skip = (name, reason, info = false) => { if (Array.isArray(report)) report.push(info ? { name, reason, info: true } : { name, reason }); };
   for (const d of (documents || [])) {
     if (!d) continue;
     const name = d.name || d.filename || 'document.pdf';
@@ -1041,9 +1047,10 @@ async function loadDocuments(documents) {
         buf = Buffer.from(d.base64, 'base64');
       } else if (d.url) {
         const fetched = await fetchToBuffer(d.url, name);
-        if (!fetched) continue;
+        if (!fetched) { skip(name, 'could not be downloaded (link failed, or over the size ceiling)'); continue; }
         buf = fetched.buf; contentType = fetched.contentType;
       } else {
+        skip(name, 'no file content or link');
         continue;
       }
 
@@ -1059,7 +1066,7 @@ async function loadDocuments(documents) {
           // Not a real zip. If the bytes are actually a PDF (e.g. a single PDF mis-named
           // attachments.zip), fall through to single-document handling below; otherwise
           // skip (likely an HTML interstitial / permission page).
-          if (!(buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC))) continue;
+          if (!(buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC))) { skip(name, 'unreadable archive (not a real zip or PDF)'); continue; }
         }
         if (readable) {
           // Recursive: a nested .zip is expanded, not discarded. Agents routinely
@@ -1086,6 +1093,7 @@ async function loadDocuments(documents) {
           });
           for (const k of result.kept) out.push({ name: k.name, base64: k.data.toString('base64') });
           console.log(`[disclosure-intake] unzipped ${name}: ${summarizeCollect(result, name)}`);
+          skip(name, `archive: ${summarizeCollect(result, name)}`, true);
           continue;
         }
         // entries === null and bytes are a PDF: fall through to single-document handling.
@@ -1095,6 +1103,7 @@ async function loadDocuments(documents) {
       // the filename — a fetched HTML error/interstitial page would slip through).
       if (!(buf.length >= 4 && buf.subarray(0, 4).equals(PDF_MAGIC))) {
         console.warn(`[disclosure-intake] ${name} is not a PDF or zip, skipping | ${describeBuffer(buf, contentType)}`);
+        skip(name, 'not a PDF or zip');
         continue;
       }
       // Non-disclosure reports and informational booklets are worthless to every
@@ -1102,11 +1111,12 @@ async function loadDocuments(documents) {
       // zip branch above has always filtered them; the single-attachment path did
       // not, so anything emailed as a loose attachment (the common case) bypassed
       // the blocklist entirely and was billed in full.
-      if (isBlockedName(name)) { console.log(`[disclosure-intake] ${name} blocked (non-disclosure), skipping`); continue; }
-      if (buf.length > MAX_DOC_BYTES) { console.warn(`[disclosure-intake] ${name} too large (${buf.length}B), skipping`); continue; }
+      if (isBlockedName(name)) { console.log(`[disclosure-intake] ${name} blocked (non-disclosure), skipping`); skip(name, 'not reviewed by rule (booklet, report or record, by its file name)'); continue; }
+      if (buf.length > MAX_DOC_BYTES) { console.warn(`[disclosure-intake] ${name} too large (${buf.length}B), skipping`); skip(name, `too large to review (${Math.round(buf.length / 1048576)}MB)`); continue; }
       out.push({ name, base64: buf.toString('base64') });
     } catch (err) {
       console.warn(`[disclosure-intake] failed to load ${name}: ${err.message}`);
+      skip(name, `failed to load: ${err.message}`);
     }
   }
   return out;
@@ -2497,6 +2507,13 @@ async function reviewAnswers(docs) {
     }
   }
   console.log(`[disclosure-intake] page selection: ${selections.join(' | ') || '(none)'}`);
+  // Which pages of which document were actually put in front of the model, for
+  // the job pipeline's page accounting. Derived from the rendered image names.
+  const reviewedPages = {};
+  for (const img of qaImages) {
+    const m = String(img.name || '').match(/^(.*) qa-p(\d+)$/);
+    if (m) (reviewedPages[m[1]] = reviewedPages[m[1]] || []).push(Number(m[2]));
+  }
   if (!qaImages.length) {
     // No Q&A images. For a delivery with no seller-answered pages (an RPA packet, an NHD-only
     // report) this is the correct, cheap answer: zero flags. The old code instead shipped every
@@ -2508,7 +2525,7 @@ async function reviewAnswers(docs) {
     } else {
       console.log('[disclosure-intake] no seller Q&A pages in this delivery — answer review is a no-op (0 flags)');
     }
-    return { responseFlags: [], keyAnswers: { ...EMPTY_KEY_ANSWERS }, dropped: [], incomplete: anyFailed };
+    return { responseFlags: [], keyAnswers: { ...EMPTY_KEY_ANSWERS }, dropped: [], incomplete: anyFailed, selections, reviewedPages };
   }
 
   // Batch the images under the request size/count cap, SCANNED PAGES APART from
@@ -2635,7 +2652,7 @@ async function reviewAnswers(docs) {
           + `${merged.length > best ? `, +${merged.length - best} no single pass caught` : ''}]`
         : ''));
   }
-  return { responseFlags, keyAnswers, dropped: [], incomplete: false };
+  return { responseFlags, keyAnswers, dropped: [], incomplete: false, selections, reviewedPages };
 }
 
 // ----------------------------------------------------------------------------
@@ -3285,7 +3302,13 @@ async function identifyAndReview(batch) {
   // zero flags plus an `incomplete` marker instead of taking the delivery down.
   const [ids, ans] = await Promise.allSettled([identifyForms(batch), reviewAnswers(batch)]);
   if (ids.status === 'rejected') throw ids.reason;   // identify is essential; without forms there is nothing to record
-  const idr = ids.value;
+  return combineIdentifyReview(ids.value, ans);
+}
+
+// identify's result + review's SETTLED outcome -> the per-batch shape. Shared by
+// identifyAndReview and the job pipeline, which runs the two as separate saved
+// steps (lib/intake-job.js) so a slow review can never take identify down with it.
+function combineIdentifyReview(idr, ans) {
   let ansr;
   if (ans.status === 'fulfilled') {
     ansr = ans.value;
@@ -3356,6 +3379,26 @@ const isExplanationSheet = (d) => /explanation/i.test(String(d.name || ''))
 
 async function identifyFormsChunked(docs) {
   if (docs.length <= 1) return identifyAndReview(docs);
+  const batches = await planBatches(docs);
+  const outcomes = [];
+  for (let i = 0; i < batches.length; i++) {
+    // Isolate each batch: one batch throwing (a corrupt doc, an API error) must not discard the
+    // forms other batches already identified. A skipped batch is logged loud and its forms are
+    // simply absent from the received set — visible, never a silent wipe of the whole delivery.
+    try {
+      outcomes.push({ ok: true, r: await identifyAndReview(batches[i]) });
+    } catch (err) {
+      outcomes.push({ ok: false, err });
+    }
+  }
+  return mergeBatchResults(batches, outcomes);
+}
+
+// How a delivery is split into requests. Exported for the job pipeline, which
+// runs each batch as its own saved step. A single document is one batch, with no
+// earthquake-booklet scan (identifyFormsChunked never ran it for one document).
+async function planBatches(docs) {
+  if (docs.length <= 1) return [docs];
   await markEqBookletStatements(docs);
   const MAX_BATCH_B64 = 18 * 1024 * 1024; // keep each request well under the 32MB cap
   const MAX_BATCH_DOCS = 10;              // and bounded on page/doc count
@@ -3387,7 +3430,11 @@ async function identifyFormsChunked(docs) {
       + `${batches.length} batch(es) so every form is reviewed alongside its explanations: `
       + sheets.map((d) => d.name).join(', '));
   }
+  return batches;
+}
 
+// outcomes[i] = { ok: true, r } (identifyAndReview's shape) or { ok: false, err }.
+function mergeBatchResults(batches, outcomes) {
   let allForms = [], address = '', dropped = [], responseFlags = [];
   // Per-batch attribution, kept so a section flag can be checked against the OTHER
   // documents in the same delivery. See markContestedSectionFlags above.
@@ -3395,18 +3442,14 @@ async function identifyFormsChunked(docs) {
   const keyAnswers = { ...EMPTY_KEY_ANSWERS };
   let anyIncomplete = false;
   for (let i = 0; i < batches.length; i++) {
-    // Isolate each batch: one batch throwing (a corrupt doc, an API error) must not discard the
-    // forms other batches already identified. A skipped batch is logged loud and its forms are
-    // simply absent from the received set — visible, never a silent wipe of the whole delivery.
-    let r;
-    try {
-      r = await identifyAndReview(batches[i]);
-    } catch (err) {
+    const o = outcomes[i] || { ok: false, err: new Error('no result') };
+    if (!o.ok) {
       anyIncomplete = true;
       const names = batches[i].map((d) => d.name).join(', ');
-      console.error(`[disclosure-intake] identify batch ${i + 1}/${batches.length} FAILED (${err.message}); docs NOT recorded this run: ${names}`);
+      console.error(`[disclosure-intake] identify batch ${i + 1}/${batches.length} FAILED (${o.err && o.err.message}); docs NOT recorded this run: ${names}`);
       continue;
     }
+    const r = o.r;
     if (r.reviewIncomplete) anyIncomplete = true;
     allForms = mergeForms(allForms, r.forms);
     if (r.responseFlags && r.responseFlags.length) responseFlags = responseFlags.concat(r.responseFlags);
@@ -3652,11 +3695,17 @@ function greetName(name) {
   return ` ${first[0].toUpperCase()}${first.slice(1).toLowerCase()}`;
 }
 
-async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}, threadId = '', droppedDocs = [], reviewIncomplete = false, senderName = '') {
+// opts (job pipeline only; the Zap path passes nothing and is unchanged):
+//   skipClaim     - the job's lease already guarantees one finish per email, so
+//                   the 2-minute claimCallbackSlot hold is not needed.
+//   extraPayload  - fields merged into the payload (page accounting).
+//   deliver(p)    - replaces the callback POST (shadow mode saves instead).
+// Returns the payload.
+async function reconcileAndCallback(address, received, auditList, callback, responseFlags = [], keyAnswers = {}, threadId = '', droppedDocs = [], reviewIncomplete = false, senderName = '', opts = {}) {
   // One email, one draft. Before spending anything, hold briefly and see whether
   // another source on this same email is going to call back with more than we
   // have. See claimCallbackSlot.
-  if (!await claimCallbackSlot(threadId, address)) return;
+  if (!opts.skipClaim && !await claimCallbackSlot(threadId, address)) return null;
 
   // What belongs to THIS sale, and what came from an earlier one. currentForms is
   // what reconcile and every deterministic rule below consume: a prior sale's ESD
@@ -4357,9 +4406,12 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     result: { present, still_needed: stillNeeded, prepared_by_us: preparedByUs, confirmed: confirmedReadings, verify, not_applicable: na, response_flags: flags, outdated_versions: outdated, historical: historical.map(vintageLabel) },
   };
 
+  if (opts.extraPayload) Object.assign(payload, opts.extraPayload);
   console.log(`[disclosure-intake] ${address}: ${overall} — ${stillNeeded.length} to request, ${flags.length} response flag(s), `
     + `${preparedByUs.length} prepared by us, ${historical.length} quarantined as prior-sale`);
-  await sendCallback(callback, payload);
+  if (typeof opts.deliver === 'function') await opts.deliver(payload);
+  else await sendCallback(callback, payload);
+  return payload;
 }
 
 // Exposed for checks/vintage-partition.js, following lib/skip-gate.js's _internal
@@ -4367,6 +4419,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
 module.exports._internal = { isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+
+// The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
+// Same functions the handler below uses, so the two paths cannot drift.
+module.exports.core = {
+  loadDocuments, planBatches, identifyForms, reviewAnswers, combineIdentifyReview,
+  mergeBatchResults, reconcileAndCallback, sendCallback, pdfPageCount, mergeForms,
+  normalizeAddress, blobsConfig, STATE_STORE, CALLBACK_URL_ENV, EMPTY_KEY_ANSWERS,
+};
 
 exports.handler = async function (event) {
   // How much of this invocation is left is what decides whether the one-draft hold

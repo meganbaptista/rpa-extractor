@@ -23,3 +23,10 @@
 # how fast new intake mail is picked up. Inert until EMAIL_ROUTER_ENABLED=true.
 [functions."email-route-poller"]
   schedule = "*/2 * * * *"
+
+# Buyer-side disclosure intake JOB (2026-10-21) — front door + watchdog. Lists the
+# "Disclosures - AI Review" label and starts one job per new email, and restarts any
+# job step that failed or stalled. Inert until INTAKE_JOB_MODE=shadow|live (default
+# off). See netlify/functions/lib/intake-job.js.
+[functions."disclosure-intake-job-poller"]
+  schedule = "*/2 * * * *"
