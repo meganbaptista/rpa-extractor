@@ -8,18 +8,25 @@
 const { getStore } = require('@netlify/blobs');
 const J = require('../netlify/functions/lib/intake-job.js');
 
-const filter = String(process.argv[2] || '').toLowerCase();
+// --set-since <ISO date> moves the poller's cut-off (the only write this makes).
+const setIdx = process.argv.indexOf('--set-since');
+const filter = setIdx > 0 ? '' : String(process.argv[2] || '').toLowerCase();
 
 (async () => {
   const store = getStore({ name: J.STORE_NAME, siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
-  const since = await store.get('meta/since', { type: 'json' });
+  if (setSince) {
+    await store.setJSON('meta/since-v2', { at: setSince, setBy: 'intake-job-status' });
+    console.log(`cut-off set to ${new Date(setSince).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}`);
+  }
+  const since = await store.get('meta/since-v2', { type: 'json' });
   const cond = await store.get('meta/conditions', { type: 'json' });
   console.log(cond
     ? `storage check (${new Date(cond.at).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}): `
       + `${cond.mode} connection, conditional writes ${cond.conditionsHeld === true ? 'HELD' : cond.conditionsHeld === false ? 'IGNORED' : 'untested'}`
     : 'storage check: not run yet');
   console.log(`mode on the site: ${process.env.INTAKE_JOB_MODE || '(unset = off)'}`);
-  console.log(`emails received before ${since ? new Date(since.at).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }) : '(no cut-off yet: the poller has not run in shadow/live)'} are ignored`);
+  if (process.env.INTAKE_JOB_SINCE) console.log('NOTE: INTAKE_JOB_SINCE is set in Netlify but no longer used; delete it (4KB env limit)');
+  console.log(`cut-off: emails received before ${since ? new Date(since.at).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }) : '(no cut-off yet: the poller has not run in shadow/live)'} are ignored`);
 
   const { blobs } = await store.list({ prefix: 'job/' });
   const jobs = [];

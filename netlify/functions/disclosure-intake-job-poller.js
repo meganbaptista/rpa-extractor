@@ -47,9 +47,13 @@ async function sweep(store) {
   return kicked;
 }
 
+// The cut-off lives in Blobs, not an env var: the site's variables are AT
+// Netlify's 4KB Lambda limit (GOOGLE_SA_JSON is most of it), and adding
+// INTAKE_JOB_SINCE on 2026-10-21 failed every function deploy. To move it,
+// overwrite meta/since-v2 (checks/intake-job-status.js --set-since <ISO>).
+// `-v2` because the first build rewrote meta/since on every poll.
 async function since(store) {
-  if (process.env.INTAKE_JOB_SINCE) return Date.parse(process.env.INTAKE_JOB_SINCE) || 0;
-  const m = await J.setOnce(store, 'meta/since', { at: Date.now() }, rt.verifyMs());
+  const m = await J.setOnce(store, 'meta/since-v2', { at: Date.now() }, rt.verifyMs());
   return (m && m.at) || Date.now();
 }
 
