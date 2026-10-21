@@ -30,8 +30,17 @@
 // that were not loaded at all are listed with their reason. Nothing is silent.
 //
 // Everything here is plain logic over a small store interface (getWithMetadata /
-// setJSON with onlyIfMatch|onlyIfNew / get / set / delete / list), so
-// checks/intake-job.js runs it against an in-memory store.
+// setJSON / get / set / delete / list), so checks/intake-job.js runs it against
+// an in-memory store.
+//
+// CONDITIONAL WRITES ARE NOT TRUSTED. Measured 2026-10-21 against the live site
+// store, connected by siteID + token the way every rpa-extractor function
+// connects: setJSON with { onlyIfNew } overwrote an existing key, and
+// { onlyIfMatch } with a wrong etag still wrote. Both returned modified: true.
+// The first trial run showed it: the `since` cut-off was rewritten on every
+// poll, so every email looked too old. So the conditions are still passed (they
+// cost nothing and may be honoured elsewhere), but every guarantee here is made
+// by WRITE, WAIT, READ BACK: whoever's write survived owns the thing.
 // ============================================================================
 
 const STORE_NAME = 'disclosure-intake-jobs';
@@ -42,6 +51,10 @@ const MAX_ATTEMPTS = 3;
 const LEASE_MS = 16 * 60 * 1000;
 // A step that is pending (its kick was lost) is re-kicked after this long.
 const STALL_MS = 90 * 1000;
+// How long to wait before reading back a claim. Two racing writers have both
+// landed well inside this; the survivor is the one both of them then read.
+const VERIFY_MS = Number(process.env.INTAKE_JOB_VERIFY_MS || 1500);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const OPTIONAL = (name) => /^(identify|review):\d+$/.test(name);
 
@@ -59,6 +72,7 @@ function jobIdFor(messageId, run = 0) {
 function newJob({ id, mode, source, now }) {
   return {
     id,
+    nonce: randomToken(),  // who created it; see createJob
     mode,                 // 'shadow' | 'live'
     status: 'running',    // 'running' | 'done' | 'failed'
     createdAt: now,
@@ -132,11 +146,26 @@ async function readJob(store, id) {
   return { job: r.data, etag: r.etag };
 }
 
-async function createJob(store, job) {
+/** Create once. Read first, write, then read back: only the writer whose copy
+ *  survived goes on, so two polls racing on one email make one job. */
+async function createJob(store, job, verifyMs = VERIFY_MS) {
+  if (await readJob(store, job.id)) return false;
   const w = await store.setJSON(keys.job(job.id), job, { onlyIfNew: true });
-  if (!w || !w.modified) return false;
+  if (w && w.modified === false) return false;
+  if (verifyMs) await sleep(verifyMs);
+  const back = await readJob(store, job.id);
+  if (!back || back.job.nonce !== job.nonce) return false;
   await store.setJSON(keys.active(job.id), { at: job.createdAt });
   return true;
+}
+
+/** A value written once and never changed (the poller's `since` cut-off). */
+async function setOnce(store, key, value, verifyMs = VERIFY_MS) {
+  const cur = await store.get(key, { type: 'json', consistency: 'strong' });
+  if (cur) return cur;
+  await store.setJSON(key, value, { onlyIfNew: true });
+  if (verifyMs) await sleep(verifyMs);
+  return (await store.get(key, { type: 'json', consistency: 'strong' })) || value;
 }
 
 /** Read-modify-write with retry on a lost race. mutate(job) returns false to abort. */
@@ -164,7 +193,7 @@ async function updateJob(store, id, mutate, now = Date.now()) {
  *   { job, failed: { name, error } }    the job just failed (alert once)
  *   null                                nothing to do
  */
-async function claimNext(store, id, now = Date.now()) {
+async function claimNext(store, id, now = Date.now(), verifyMs = VERIFY_MS) {
   let result = null;
   const job = await updateJob(store, id, (j) => {
     result = null;
@@ -196,6 +225,17 @@ async function claimNext(store, id, now = Date.now()) {
     }
   }, now);
   if (!job || !result) return null;
+  if (result.token && verifyMs) {
+    // Two invocations can both read the record before either writes (a
+    // watchdog kick landing with the runner's own). Both write; the later
+    // write wins. Each reads back and only the one whose token is on the
+    // step goes ahead.
+    await sleep(verifyMs);
+    const back = await readJob(store, id);
+    const s = back && back.job.steps[result.name];
+    if (!s || s.leaseToken !== result.token) return null;
+    return { job: back.job, ...result };
+  }
   return { job, ...result };
 }
 
@@ -299,9 +339,9 @@ function compactPages(pages) {
 }
 
 module.exports = {
-  STORE_NAME, MAX_ATTEMPTS, LEASE_MS, STALL_MS, keys,
+  STORE_NAME, MAX_ATTEMPTS, LEASE_MS, STALL_MS, VERIFY_MS, keys,
   jobIdFor, newJob, addSteps, nextStep, needsKick, OPTIONAL,
-  readJob, createJob, updateJob, claimNext, completeStep, failStep,
+  readJob, createJob, setOnce, updateJob, claimNext, completeStep, failStep,
   putDoc, getDoc, putOut, getOut, activeJobIds,
   pageAccounting, accountingText, compactPages,
 };

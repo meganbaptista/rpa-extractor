@@ -28,8 +28,17 @@ exports.handler = async function (event) {
   const jobId = parsed.ok && parsed.body && parsed.body.jobId;
   if (!jobId) { console.error('[intake-job] no jobId in the request'); return { statusCode: 400 }; }
 
+  rt.connect(event);
   const store = rt.jobStore();
-  const claim = await J.claimNext(store, jobId);
+  let claim;
+  try {
+    claim = await J.claimNext(store, jobId, Date.now(), rt.verifyMs());
+  } catch (err) {
+    // A claim that cannot be saved (repeated stale reads) is not an error to
+    // surface: nothing ran, and the watchdog tries again in 2 minutes.
+    console.warn(`[intake-job] ${jobId}: could not claim a step (${err.message}); leaving it to the watchdog`);
+    return { statusCode: 200 };
+  }
   if (!claim) { console.log(`[intake-job] ${jobId}: nothing to run`); return { statusCode: 200 }; }
 
   const { job } = claim;

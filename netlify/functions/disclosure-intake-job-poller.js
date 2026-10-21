@@ -49,8 +49,7 @@ async function sweep(store) {
 
 async function since(store) {
   if (process.env.INTAKE_JOB_SINCE) return Date.parse(process.env.INTAKE_JOB_SINCE) || 0;
-  await store.setJSON('meta/since', { at: Date.now() }, { onlyIfNew: true });
-  const m = await store.get('meta/since', { type: 'json', consistency: 'strong' });
+  const m = await J.setOnce(store, 'meta/since', { at: Date.now() }, rt.verifyMs());
   return (m && m.at) || Date.now();
 }
 
@@ -105,7 +104,7 @@ async function poll(store, mode) {
         receivedAt: Number(msg.internalDate || 0),
       },
     });
-    if (!(await J.createJob(store, job))) continue;
+    if (!(await J.createJob(store, job, rt.verifyMs()))) continue;
     console.log(`[intake-poller] new ${mode} job ${jobId}: "${job.source.subject}" from ${from}`);
     await rt.kick(jobId).catch((err) => console.warn(`[intake-poller] kick ${jobId} failed (the next pass will retry): ${err.message}`));
     started++;
@@ -113,11 +112,19 @@ async function poll(store, mode) {
   return started;
 }
 
-exports.handler = async function () {
+exports.handler = async function (event) {
   const mode = rt.MODE();
   if (mode !== 'shadow' && mode !== 'live') return { statusCode: 200 };
+  rt.connect(event);
   const store = rt.jobStore();
   try {
+    // Evidence for going live: which Blobs connection this got, and whether a
+    // conditional write held on it. Read by checks/intake-job-status.js.
+    const cond = await rt.checkConditions(store);
+    if (mode === 'live' && cond.conditionsHeld === false && cond.mode === 'token') {
+      await rt.intakeAlert('intake-conditions', 'Live intake is running on a Blobs connection that ignores '
+        + 'conditional writes; duplicate drafts are possible in rare races. See lib/intake-runtime.js.');
+    }
     const kicked = await sweep(store);
     const started = await poll(store, mode);
     if (kicked || started) console.log(`[intake-poller] ${mode}: ${started} new job(s), ${kicked} restarted`);

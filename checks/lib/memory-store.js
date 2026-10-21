@@ -4,11 +4,15 @@
 // job relies on: etags, conditional writes (onlyIfMatch / onlyIfNew), binary
 // values and prefix listing. Used by checks/intake-job.js and the local replay.
 
-function memoryStore() {
+// { ignoreConditions: true } behaves like the live Netlify store as measured on
+// 2026-10-21: onlyIfNew / onlyIfMatch are accepted and IGNORED, and every write
+// reports modified: true.
+function memoryStore({ ignoreConditions = false } = {}) {
   const data = new Map();   // key -> { value, etag }
   let n = 0;
   const etag = () => `"e${++n}"`;
   const conditionOk = (key, opts = {}) => {
+    if (ignoreConditions) return true;
     const cur = data.get(key);
     if (opts.onlyIfNew && cur) return false;
     if (opts.onlyIfMatch && (!cur || cur.etag !== opts.onlyIfMatch)) return false;

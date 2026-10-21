@@ -10,6 +10,9 @@
 // 3. A dead invocation's step is re-claimed after its lease runs out.
 // 4. Page accounting is arithmetic and names every unmatched page.
 
+// No read-back pause in the sequential checks; the race checks below pass
+// their own pause explicitly.
+process.env.INTAKE_JOB_VERIFY_MS = '0';
 const J = require('../netlify/functions/lib/intake-job.js');
 const { memoryStore } = require('./lib/memory-store.js');
 
@@ -129,6 +132,21 @@ function ok(label, got, want) {
     'FILE NOT REVIEWED: Booklet.pdf (not reviewed by rule (booklet)).',
     `INCOMPLETE: seller answers in this batch were not audited after ${J.MAX_ATTEMPTS} tries (timed out).`,
   ]);
+
+  // --- races, against a store that IGNORES conditional writes (the live one) -------
+  for (let round = 1; round <= 5; round++) {
+    const live = memoryStore({ ignoreConditions: true });
+    const a = J.newJob({ id: 'j_race', mode: 'shadow', source: src, now: T0 });
+    const b = J.newJob({ id: 'j_race', mode: 'shadow', source: src, now: T0 });
+    const made = await Promise.all([J.createJob(live, a, 20), J.createJob(live, b, 20)]);
+    ok(`round ${round}: two polls racing on one email make ONE job`, made.filter(Boolean).length, 1);
+    const claims = await Promise.all([J.claimNext(live, 'j_race', T0, 20), J.claimNext(live, 'j_race', T0, 20)]);
+    ok(`round ${round}: two runs racing on one step, ONE goes ahead`, claims.filter((c) => c && c.token).length, 1);
+  }
+  const live = memoryStore({ ignoreConditions: true });
+  const first = await J.setOnce(live, 'meta/since', { at: 100 }, 5);
+  const second = await J.setOnce(live, 'meta/since', { at: 999 }, 5);
+  ok('the cut-off is written once and never moves', [first.at, second.at], [100, 100]);
 
   // --- the front door: what counts as a delivery ----------------------------------
   const S = require('../netlify/functions/lib/intake-steps.js');
