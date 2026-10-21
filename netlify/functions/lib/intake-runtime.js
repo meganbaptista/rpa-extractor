@@ -11,13 +11,16 @@
 //     overwrote, a wrong onlyIfMatch still wrote, both said modified: true.
 //   function mode (connectLambda(event), the invocation's own Blobs context):
 //     writes go to the Blobs edge, which answers a failed condition with 412.
-//     It cannot do `strong` reads (no uncached URL in the Lambda context), so
-//     the consistency option is dropped in this mode; a stale read is caught by
-//     the conditional write that follows it.
-// connect(event) uses function mode whenever the invocation carries a context,
-// and falls back to token mode, where lib/intake-job.js's write-then-read-back
-// is the guard. The poller records which mode it got and whether a condition
-// actually held (checkConditions), so going live is decided on evidence.
+//     But it can only do CACHED reads (no uncached URL in the Lambda context),
+//     and a read right after a write commonly returns the old value or null.
+//     Found live 2026-10-21: every new job read back as missing, so no job was
+//     ever created, and the conditions probe misreported IGNORED.
+// So, HYBRID: READ through the token (strong, uncached), WRITE through the
+// function context (conditions enforced). Same store, same etags. Without a
+// function context everything goes through the token and lib/intake-job.js's
+// write-then-read-back is the guard. The poller records which mode it got and
+// whether a condition held (checkConditions), so going live is decided on
+// evidence.
 
 const { getStore, connectLambda } = require('@netlify/blobs');
 const J = require('./intake-job');
@@ -40,22 +43,28 @@ function connect(event) {
   return functionMode ? 'function' : 'token';
 }
 
-/** In function mode, drop `consistency` (strong reads are unavailable there). */
-function withoutStrong(store) {
-  const strip = (o) => { if (o && o.consistency) { const c = { ...o }; delete c.consistency; return c; } return o; };
+function tokenStore(name) {
+  return getStore({ name, siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+}
+
+/** Reads through the token (fresh), writes through the function context (conditional). */
+function hybrid(name) {
+  const reader = tokenStore(name);
+  // The function context is process-global, so read it NOW, not per call.
+  const writer = getStore({ name });
+  const strong = (o) => ({ ...(o || {}), consistency: 'strong' });
   return {
-    getWithMetadata: (k, o) => store.getWithMetadata(k, strip(o)),
-    get: (k, o) => store.get(k, strip(o)),
-    setJSON: (k, v, o) => store.setJSON(k, v, o),
-    set: (k, v, o) => store.set(k, v, o),
-    delete: (k) => store.delete(k),
-    list: (o) => store.list(o),
+    getWithMetadata: (k, o) => reader.getWithMetadata(k, strong(o)),
+    get: (k, o) => reader.get(k, strong(o)),
+    list: (o) => reader.list(o),
+    setJSON: (k, v, o) => writer.setJSON(k, v, o),
+    set: (k, v, o) => writer.set(k, v, o),
+    delete: (k) => writer.delete(k),
   };
 }
 
 function blobs(name) {
-  if (functionMode) return withoutStrong(getStore({ name }));
-  return getStore({ name, siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+  return functionMode ? hybrid(name) : tokenStore(name);
 }
 
 const jobStore = () => blobs(J.STORE_NAME);
@@ -71,16 +80,19 @@ const verifyMs = () => (functionMode ? 0 : J.VERIFY_MS);
 async function checkConditions(store) {
   const key = `meta/probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   let held = null;
+  let detail = '';
   try {
-    await store.setJSON(key, { v: 1 }, { onlyIfNew: true });
+    const first = await store.setJSON(key, { v: 1 }, { onlyIfNew: true });
     const second = await store.setJSON(key, { v: 2 }, { onlyIfNew: true });
     const back = await store.get(key, { type: 'json', consistency: 'strong' });
     held = !!(second && second.modified === false) && !!back && back.v === 1;
+    detail = `first.modified=${first && first.modified} second.modified=${second && second.modified} read=${JSON.stringify(back)}`;
     await store.delete(key);
   } catch (err) {
-    console.warn(`[intake-runtime] conditions probe failed: ${err.message}`);
+    detail = `probe failed: ${err.message}`;
+    console.warn(`[intake-runtime] conditions ${detail}`);
   }
-  const result = { mode: functionMode ? 'function' : 'token', conditionsHeld: held, at: Date.now() };
+  const result = { mode: functionMode ? 'function (token reads)' : 'token', conditionsHeld: held, detail, at: Date.now() };
   try { await store.setJSON('meta/conditions', result); } catch (e) { /* best effort */ }
   return result;
 }

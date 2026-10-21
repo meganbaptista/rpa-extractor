@@ -24,7 +24,14 @@ const filter = setIdx > 0 ? '' : String(process.argv[2] || '').toLowerCase();
   console.log(cond
     ? `storage check (${new Date(cond.at).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}): `
       + `${cond.mode} connection, conditional writes ${cond.conditionsHeld === true ? 'HELD' : cond.conditionsHeld === false ? 'IGNORED' : 'untested'}`
+      + (cond.detail ? `\n  (${cond.detail})` : '')
     : 'storage check: not run yet');
+  const lp = await store.get('meta/last-poll', { type: 'json' });
+  if (lp) {
+    console.log(`last watcher pass ${new Date(lp.at).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}: `
+      + `${lp.listed} email(s) carry "${lp.label}"`);
+    for (const s of lp.seen || []) console.log(`  - ${s.subject || s.id}: ${s.outcome}`);
+  }
   console.log(`mode on the site: ${process.env.INTAKE_JOB_MODE || '(unset = off)'}`);
   if (process.env.INTAKE_JOB_SINCE) console.log('NOTE: INTAKE_JOB_SINCE is set in Netlify but no longer used; delete it (4KB env limit)');
   console.log(`cut-off: emails received before ${since ? new Date(since.at).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }) : '(no cut-off yet: the poller has not run in shadow/live)'} are ignored`);

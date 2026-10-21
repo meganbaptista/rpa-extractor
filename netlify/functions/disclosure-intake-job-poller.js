@@ -81,16 +81,22 @@ async function poll(store, mode) {
 
   const listed = await gmail.listMessages({ labelIds: [labelId], maxPages: 1, pageSize: 50 });
   let started = 0;
+  // What this pass saw and why each message was or was not started, kept at
+  // meta/last-poll for checks/intake-job-status.js. A skipped email is
+  // explained, never silent.
+  const seen = [];
+  const note = (id, subject, outcome) => { if (seen.length < 15) seen.push({ id, subject: String(subject || '').slice(0, 70), outcome }); };
   for (const { id } of listed) {
     // Cheap test first: has this message already got a job?
     const jobId = await jobIdToRun(store, id, mode);
-    if (!jobId) continue;
+    if (!jobId) { note(id, '', 'already has a job'); continue; }
     const msg = await gmail.getMessage(id);
-    if (Number(msg.internalDate || 0) < cutoff) continue;
+    const subj = (msg.headers && msg.headers.subject) || '';
+    if (Number(msg.internalDate || 0) < cutoff) { note(id, subj, 'received before the cut-off'); continue; }
     const from = (msg.headers && msg.headers.from) || '';
-    if (me && from.toLowerCase().includes(me)) continue;
+    if (me && from.toLowerCase().includes(me)) { note(id, subj, 'sent by us'); continue; }
     const hasFiles = msg.attachments.some(steps.isPdfOrZip) || steps.shareLinks(msg.bodyHtml, msg.bodyText).length > 0;
-    if (!hasFiles) continue;
+    if (!hasFiles) { note(id, subj, `no PDF, zip or share link (${msg.attachments.length} attachment(s))`); continue; }
 
     const job = J.newJob({
       id: jobId,
@@ -108,11 +114,13 @@ async function poll(store, mode) {
         receivedAt: Number(msg.internalDate || 0),
       },
     });
-    if (!(await J.createJob(store, job, rt.verifyMs()))) continue;
+    if (!(await J.createJob(store, job, rt.verifyMs()))) { note(id, subj, 'job creation lost a race or did not save'); continue; }
+    note(id, subj, `started ${jobId}`);
     console.log(`[intake-poller] new ${mode} job ${jobId}: "${job.source.subject}" from ${from}`);
     await rt.kick(jobId).catch((err) => console.warn(`[intake-poller] kick ${jobId} failed (the next pass will retry): ${err.message}`));
     started++;
   }
+  await store.setJSON('meta/last-poll', { at: Date.now(), label: labelName, listed: listed.length, cutoff, seen }).catch(() => {});
   return started;
 }
 

@@ -152,9 +152,12 @@ async function createJob(store, job, verifyMs = VERIFY_MS) {
   if (await readJob(store, job.id)) return false;
   const w = await store.setJSON(keys.job(job.id), job, { onlyIfNew: true });
   if (w && w.modified === false) return false;
-  if (verifyMs) await sleep(verifyMs);
-  const back = await readJob(store, job.id);
-  if (!back || back.job.nonce !== job.nonce) return false;
+  if (verifyMs) {
+    // Only where conditions are ignored: read back to see whose write survived.
+    await sleep(verifyMs);
+    const back = await readJob(store, job.id);
+    if (!back || back.job.nonce !== job.nonce) return false;
+  }
   await store.setJSON(keys.active(job.id), { at: job.createdAt });
   return true;
 }
