@@ -16,9 +16,12 @@
 //
 // INTAKE_JOB_MODE:
 //   off     (default) does nothing, so deploying this changes nothing.
-//   shadow  runs every job and SAVES the result; no draft, no Process Street
-//           post, no label change, no write to the per-deal received set. For
-//           the trial week next to the Zaps. The Zap's "Remove Label" step must
+//   shadow  runs every job and SAVES the result, plus ONE standalone "[TRIAL]"
+//           draft (no recipient, not in the thread, labelled per
+//           INTAKE_TRIAL_LABELS) so Megan can compare it with the Zap's draft.
+//           No reply in the thread, no Process Street post, no label change, no
+//           write to the per-deal received set. For the trial week next to the
+//           Zaps. The Zap's "Remove Label" step must
 //           be OFF that week, or the label is gone before this sees it.
 //   live    drafts the reply in the thread, posts the Process Street results to
 //           Zap B, and removes the label. A message re-labelled after a live

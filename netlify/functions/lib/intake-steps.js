@@ -228,7 +228,13 @@ async function finish(ctx) {
       payload.ps_comment_md = `${payload.ps_comment_md || ''}\n\n**INTAKE CHECK**\n${acctText}`;
     }
     await J.putOut(store, job.id, 'payload', payload);
-    if (!live) return;
+    if (!live) {
+      if (!effects.trialDraft && ctx.gmail) {
+        effects.trialDraft = await trialDraft(ctx, payload, address, acct, acctText);
+        await saveEffects();
+      }
+      return;
+    }
     if (!effects.callback) {
       await core.sendCallback(ctx.callbackUrl, payload);
       effects.callback = Date.now(); await saveEffects();
@@ -272,6 +278,46 @@ async function finish(ctx) {
       ? `${payload.overall_status}: ${payload.still_needed_count} to request, ${payload.response_flags_count} answer flag(s)`
       : 'finished';
   };
+}
+
+/**
+ * SHADOW MODE: the result as a draft Megan can open, NOT in the thread.
+ *
+ * Two drafts in one thread cannot both be seen on her computer (Megan,
+ * 2026-10-21: "i have to go into my phone and pull it up"), so the trial draft
+ * stands alone in Drafts, with no recipient (Send does nothing), a [TRIAL]
+ * subject, a box saying how the run went, then the exact reply live mode would
+ * have drafted. INTAKE_TRIAL_LABELS (default "Megan,Edelyn") are put on it; a
+ * label Gmail refuses is logged, never fatal.
+ */
+async function trialDraft(ctx, payload, address, acct, acctText) {
+  const { job, gmail } = ctx;
+  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const mins = Math.max(1, Math.round((Date.now() - (job.createdAt || Date.now())) / 60000));
+  const box = '<div style="border:2px solid #b45309;padding:10px 12px;margin-bottom:16px;font-family:Arial,sans-serif;font-size:13px">'
+    + '<b>TRIAL RUN OF THE NEW INTAKE (not sent, nothing changed)</b><br>'
+    + `Email: "${esc(job.source.subject)}" from ${esc(job.source.from)}<br>`
+    + `Finished in about ${mins} min. ${acct.claimed} of ${acct.total} pages matched to a form.<br>`
+    + esc(acctText).replace(/\n/g, '<br>')
+    + '<br><br>Below is the reply it would have drafted. Compare it with the draft in the email thread.</div>';
+  const body = payload.chase_email_body_html || '<p>(no reply: nothing to chase)</p>';
+  const draft = await gmail.createDraft({
+    to: '',
+    subject: `[TRIAL] ${address} - new intake result`,
+    htmlBody: box + body,
+  });
+  const messageId = draft && draft.message && draft.message.id;
+  const names = String(process.env.INTAKE_TRIAL_LABELS || 'Megan,Edelyn').split(',').map((s) => s.trim()).filter(Boolean);
+  if (messageId && names.length) {
+    try {
+      const ids = (await Promise.all(names.map((n) => gmail.labelId(n)))).filter(Boolean);
+      if (ids.length) await gmail.modifyMessage(messageId, { add: ids });
+      if (ids.length < names.length) ctx.log(`trial draft: some labels not found in Gmail (${names.join(', ')})`);
+    } catch (err) {
+      ctx.log(`trial draft created, but labelling it failed: ${err.message}`);
+    }
+  }
+  return (draft && draft.id) || 'created';
 }
 
 async function removeLabel(ctx) {
