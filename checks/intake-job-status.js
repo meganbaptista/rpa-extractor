@@ -10,6 +10,7 @@ const J = require('../netlify/functions/lib/intake-job.js');
 
 // --set-since <ISO date> moves the poller's cut-off (the only write this makes).
 const setIdx = process.argv.indexOf('--set-since');
+const setSince = setIdx > 0 ? Date.parse(process.argv[setIdx + 1]) : 0;
 const filter = setIdx > 0 ? '' : String(process.argv[2] || '').toLowerCase();
 
 (async () => {
