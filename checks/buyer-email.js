@@ -72,5 +72,8 @@ const rw = fillBuyerEmail(WRAPPED, { seller: { from: 1, to: 17 }, avid: { pendin
 ok('wrapped draft: still-to-come right after the remainder sentence', rw.html.indexOf('Still to come') < rw.html.indexOf('I am also including'), true);
 ok('wrapped draft: AVID line removed, no warnings', [/Agent Visual/.test(rw.html), rw.warnings], [false, []]);
 
+const again = fillBuyerEmail(rw.html, { seller: { from: 1, to: 8 } });
+ok('re-run corrects an already-filled seller range', [/Pages 1 - 8 /.test(again.html), /Pages 1 - 17/.test(again.html)], [true, false]);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall buyer-email checks pass');
 process.exit(failed ? 1 : 0);

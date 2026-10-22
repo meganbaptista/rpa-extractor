@@ -19,7 +19,9 @@
 // Whatever HTML Gmail wraps around a placeholder (the yellow highlight is a
 // <span style="background-color:...">), tolerated between the words.
 const T = '(?:\\s|&nbsp;|<[^>]+>)*';
-const RX_SELLER_RANGE = new RegExp(`Pages${T}1${T}-${T}X`, 'i');
+// Also matches a range filled in on an earlier run ("Pages 1 - 17 have been
+// filled out by the seller"), so a wrong range can be corrected by re-running.
+const RX_SELLER_RANGE = new RegExp(`Pages${T}1${T}-${T}(?:X|\\d+)(?=${T}have\\s+been\\s+filled)`, 'i');
 const RX_AVID_RANGE = new RegExp(`Pages${T}X${T}-${T}X`, 'i');
 const RX_REMAINDER_LINE = /(<(p|div)\b[^>]*>(?:(?!<\/\2>)[\s\S])*The\s+remainder\s+of\s+the\s+PDF\s+package[\s\S]*?<\/\2>)/i;
 // Her real Zap draft (8 Star Catcher, 2026-10-22) has no <p>/<div>: lines are
