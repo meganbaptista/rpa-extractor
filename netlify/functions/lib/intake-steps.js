@@ -392,7 +392,9 @@ async function revdraft(ctx) {
 
   if (!effects.draft) {
     const pkg = address ? await R.findSentPackage(gmail, address) : null;
-    const pdf = await R.mergePdfs(await Promise.all(rev.ordered.map((f) => J.getDoc(store, job.id, f.n))));
+    const pdf = await R.mergePdfs(await Promise.all(rev.ordered.map((f) => J.getDoc(store, job.id, f.n))), {
+      render: ctx.core.renderPagesAsImages, pageCount: ctx.core.pdfPageCount, names: rev.ordered.map((f) => f.name),
+    });
     const inputs = rc.emailInputs(rev.items, rev.ordered);
     const greeting = pkg ? rc.greetingFrom(pkg.original) : '';
     const built = buildRevisionEmail({ greeting, ...inputs, totalPages: pdf.pages });
@@ -400,6 +402,7 @@ async function revdraft(ctx) {
       greeting ? `Greeting copied from your package email ("${greeting}").` : 'No greeting was found in your package email; add one.',
       'Only the items in your corrections email were checked; a new form in this delivery was not audited.',
     ];
+    if (pdf.rebuilt.length) notes.push(`Damaged file(s) rebuilt as page images so they could be attached: ${pdf.rebuilt.join(', ')}. Check they read clearly.`);
     if (!address) notes.push('The property address could not be read from the revised forms.');
     else if (!pkg) notes.push(`No sent "Seller Disclosure Package" email was found for ${address}, so this is not in the buyer thread and has no recipients.`);
     if (built.warnings.length) notes.push(`The buyer email was not written: ${built.warnings.join('; ')}.`);

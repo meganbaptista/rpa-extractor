@@ -92,6 +92,12 @@ const sendFiles = files.map((f) => ({ ...f, base64: 'AA==' }));
   ok('the buyer email builds, every item accounted for', email.warnings, []);
   ok('it says what is still to come', /Still to come from the seller's side:<\/b> an explanation of what the solar system powers\./.test(email.html), true);
 
+
+  // 1222 N Kings Rd #8: the fix is there but a seller has not signed.
+  const unsignedRead = () => ({ ...read(4), items: read(4).items.map((x) => (x.item === 2 ? { ...x, signed_by_all_sellers: false } : { ...x, signed_by_all_sellers: true })) });
+  const unsigned = await rc.checkRevisions({ items, files: sendFiles, callModel: async () => JSON.stringify(unsignedRead()) });
+  ok('a fix on a form not every seller signed -> check this one', [unsigned.items[1].status, /not every seller has signed/.test(unsigned.items[1].why)], ['unclear', true]);
+  ok('signed fixes stay fixed', [unsigned.items[0].status, unsigned.items[2].status], ['fixed', 'fixed']);
   const note = rc.checkNoteHtml({ verdicts: differ.items, correctionsDate: 'Thu, 22 Oct 2026 10:27', extra: ['Greeting copied from your package email ("Hello Omeed,"); add any other buyer.'] });
   ok('the red note lists every item and how it was judged',
     [/FIXED \(page 1 of the attachment\)/.test(note), /CHECK THIS ONE/.test(note), /two reads disagreed/.test(note), /delete through here/.test(note)], [true, true, true, true]);

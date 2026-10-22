@@ -30,6 +30,7 @@ const signature = require('./lib/signature');
 const { parseRequestBody } = require('./lib/parse-body');
 const { buildRevisionEmail } = require('./lib/buyer-email');
 const R = require('./lib/buyer-revision');
+const { core } = require('./disclosure-intake-check-background');
 
 exports.handler = async function (event) {
   rt.connect(event);
@@ -48,7 +49,8 @@ exports.handler = async function (event) {
     const pkg = await R.findSentPackage(gmail, b.address);
     if (!pkg) throw new Error(`no sent "Seller Disclosure Package" email mentions "${R.streetOf(b.address)}"`);
     const h = pkg.msg.headers || {};
-    const pdf = await R.mergePdfs(await Promise.all(b.docs.map((n) => J.getDoc(store, b.jobId, n))));
+    const pdf = await R.mergePdfs(await Promise.all(b.docs.map((n) => J.getDoc(store, b.jobId, n))),
+      { render: core.renderPagesAsImages, pageCount: core.pdfPageCount });
     const built = buildRevisionEmail({
       greeting: b.greeting, changes: b.changes, forms: b.forms, totalPages: pdf.pages,
       stillToCome: b.stillToCome || [], requested: b.requested,
@@ -58,7 +60,7 @@ exports.handler = async function (event) {
     const summary = {
       to: h.to, cc: h.cc || '', subject: h.subject, threadId: pkg.msg.threadId, repliesTo: h['message-id'] || '',
       otherSentPackages: pkg.others, pdfName: b.pdfName, pdfPages: pdf.pages, pdfParts: pdf.parts,
-      pdfMB: Math.round(pdf.bytes.length / 104857.6) / 10,
+      pdfMB: Math.round(pdf.bytes.length / 104857.6) / 10, rebuiltAsImages: pdf.rebuilt,
       dealFolder: deal.folder ? deal.folder.name : '(not found; the PDF will not be saved to Drive)',
       foldersChecked: deal.seen,
       warnings: built.warnings, preview: !!b.preview,

@@ -120,6 +120,12 @@ function agree(items, readA, readB) {
     const x = a.get(k + 1) || {}; const y = b.get(k + 1) || {};
     const fixedBoth = x.status === 'fixed' && y.status === 'fixed';
     const samePlace = Number(x.file) === Number(y.file) && Number(x.page) === Number(y.page);
+    // A fix on a form a seller has not signed is not done: the buyer side sends
+    // it back (1222 N Kings Rd #8: Omer Lavian's line blank on the first APD).
+    const unsigned = x.signed_by_all_sellers === false || y.signed_by_all_sellers === false;
+    if (fixedBoth && samePlace && unsigned) {
+      return { item: text, status: 'unclear', file: Number(x.file), page: Number(x.page), evidence: x.evidence || y.evidence || '', buyerLine: x.buyer_line || y.buyer_line || '', why: 'fixed, but not every seller has signed the form with the fix' };
+    }
     if (fixedBoth && samePlace) return { item: text, status: 'fixed', file: Number(x.file), page: Number(x.page), evidence: x.evidence || y.evidence || '', buyerLine: x.buyer_line || y.buyer_line || '' };
     if (x.status === 'open' && y.status === 'open') return { item: text, status: 'open', evidence: x.evidence || y.evidence || '', openPhrase: x.open_phrase || y.open_phrase || '' };
     const fx = x.status === 'fixed' ? x : (y.status === 'fixed' ? y : null);
@@ -158,6 +164,7 @@ Return ONLY JSON:
     "file": <file number, or null>,
     "page": <page number within that file, or null>,
     "evidence": "<what the page now says there, quoted as literally as you can>",
+    "signed_by_all_sellers": <true if EVERY seller named on that form has signed (and dated) it, false if any seller line is blank, null if the form has no seller signature lines>,
     "buyer_line": "<if fixed: ONE plain-English sentence for the BUYER saying what the seller changed, starting with 'The seller', e.g. 'The seller filled in where the 220 volt wiring is located (the garage).'>",
     "open_phrase": "<if open: a short plain-English phrase for what is still to come, e.g. 'where the 220 volt wiring is located'>"
   }],

@@ -4684,7 +4684,7 @@ module.exports._internal = { fetchAuditListByAddress, isBlankFollowUpOnly, isCla
 // Same functions the handler below uses, so the two paths cannot drift.
 module.exports.core = {
   loadDocuments, planBatches, identifyForms, reviewAnswers, combineIdentifyReview,
-  mergeBatchResults, reconcileAndCallback, sendCallback, pdfPageCount, mergeForms,
+  mergeBatchResults, reconcileAndCallback, sendCallback, pdfPageCount, mergeForms, renderPagesAsImages,
   normalizeAddress, blobsConfig, STATE_STORE, CALLBACK_URL_ENV, EMPTY_KEY_ANSWERS,
 };
 

@@ -47,17 +47,46 @@ async function findDealFolder(drive, address) {
   return { folder: null, files: [], seen };
 }
 
-/** PDFs (Buffers, in order) -> one PDF. */
-async function mergePdfs(bufs) {
+/**
+ * PDFs (Buffers, in order) -> one PDF.
+ *
+ * DAMAGED FILES. About one seller packet in six has broken internal object
+ * references, and pdf-lib cannot copy their pages ("Expected instance of
+ * PDFDict, but got instance of undefined"; 1222 N Kings Rd #8, 2026-10-22, the
+ * Amendment to Prior Disclosure and the RFR). pdfjs reads them fine, so with
+ * `render` (the intake's pdfjs page renderer) such a file's pages are rendered
+ * as images and added instead; `rebuilt` names them for the check note.
+ *   render(buf, pageNumbers, scale) -> [{ pageNumber, base64 png }]
+ *   pageCount(buf) -> number
+ */
+const RENDER_SCALE = 2;
+async function mergePdfs(bufs, { render, pageCount, names = [] } = {}) {
   const out = await PDFDocument.create();
   const parts = [];
-  for (const buf of bufs) {
-    const src = await PDFDocument.load(buf, { ignoreEncryption: true });
-    const pages = await out.copyPages(src, src.getPageIndices());
-    pages.forEach((p) => out.addPage(p));
-    parts.push(pages.length);
+  const rebuilt = [];
+  for (let i = 0; i < bufs.length; i++) {
+    const buf = bufs[i];
+    try {
+      const src = await PDFDocument.load(buf, { ignoreEncryption: true });
+      const pages = await out.copyPages(src, src.getPageIndices());
+      pages.forEach((p) => out.addPage(p));
+      parts.push(pages.length);
+    } catch (err) {
+      if (!render || !pageCount) throw err;
+      const n = await pageCount(buf);
+      if (!n) throw new Error(`${names[i] || `file ${i + 1}`} could not be read: ${err.message}`);
+      const imgs = await render(buf, Array.from({ length: n }, (_, k) => k + 1), RENDER_SCALE);
+      if (imgs.length !== n) throw new Error(`${names[i] || `file ${i + 1}`}: rendered ${imgs.length} of ${n} pages`);
+      for (const im of imgs.sort((a, b) => a.pageNumber - b.pageNumber)) {
+        const png = await out.embedPng(Buffer.from(im.base64, 'base64'));
+        const w = png.width / RENDER_SCALE; const h = png.height / RENDER_SCALE;
+        out.addPage([w, h]).drawImage(png, { x: 0, y: 0, width: w, height: h });
+      }
+      parts.push(n);
+      rebuilt.push(names[i] || `file ${i + 1}`);
+    }
   }
-  return { bytes: Buffer.from(await out.save()), pages: out.getPageCount(), parts };
+  return { bytes: Buffer.from(await out.save()), pages: out.getPageCount(), parts, rebuilt };
 }
 
 /** Save next to the package unless a file of that name is already there. */
