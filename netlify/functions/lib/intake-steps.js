@@ -397,7 +397,7 @@ async function revdraft(ctx) {
     const greeting = pkg ? rc.greetingFrom(pkg.original) : '';
     const built = buildRevisionEmail({ greeting, ...inputs, totalPages: pdf.pages });
     const notes = [
-      greeting ? `Greeting copied from your package email ("${greeting}"); add any other buyer.` : 'No greeting was found in your package email; add one.',
+      greeting ? `Greeting copied from your package email ("${greeting}").` : 'No greeting was found in your package email; add one.',
       'Only the items in your corrections email were checked; a new form in this delivery was not audited.',
     ];
     if (!address) notes.push('The property address could not be read from the revised forms.');
