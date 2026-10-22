@@ -577,7 +577,31 @@ async function updateDraftRaw(draftId, rawMime) {
   return data;
 }
 
+/**
+ * A NEW draft from a raw RFC 822 message (with attachments), optionally inside
+ * an existing thread. Multipart upload: the JSON part carries the threadId
+ * (the media-only upload cannot), the second part is the message, up to 35MB.
+ */
+async function createDraftRaw(rawMime, { threadId = '' } = {}) {
+  const headers = await authHeader();
+  const boundary = `mtc_draft_${Date.now()}`;
+  const meta = { message: threadId ? { threadId } : {} };
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n`
+      + `--${boundary}\r\nContent-Type: message/rfc822\r\n\r\n`, 'utf8'),
+    Buffer.from(rawMime, 'utf8'),
+    Buffer.from(`\r\n--${boundary}--`, 'utf8'),
+  ]);
+  const url = `${GMAIL_API.replace('/gmail/v1/users', '/upload/gmail/v1/users')}/${encodeURIComponent(subject())}`
+    + '/drafts?uploadType=multipart';
+  const res = await fetch(url, { method: 'POST', headers: { ...headers, 'Content-Type': `multipart/related; boundary=${boundary}` }, body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`gmail draft create failed (${res.status}): ${JSON.stringify(data).slice(0, 300)}`);
+  return data;
+}
+
 module.exports = {
+  createDraftRaw,
   // auth / low-level
   getAccessToken,
   subject,

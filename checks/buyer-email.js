@@ -5,7 +5,7 @@
 // The template below is her Zap's body (26701 Quail Creek draft, 2026-10-22),
 // with the highlight spans Gmail puts around the placeholders.
 
-const { fillBuyerEmail } = require('../netlify/functions/lib/buyer-email.js');
+const { fillBuyerEmail, buildRevisionEmail } = require('../netlify/functions/lib/buyer-email.js');
 
 let failed = 0;
 function ok(label, got, want) {
@@ -103,6 +103,38 @@ ok('a form code in still-to-come is refused', /form code AVID/.test(codeTodo.war
 ok('a gap is refused', /missing from the guide/.test(guideProblems([{ from: 1, to: 8, label: 'a' }, { from: 10, to: 49, label: 'b' }], 49).join(' ')), true);
 ok('a guide that does not reach the last page is refused (stale ranges)', /the PDF has 70 pages/.test(guideProblems(DR_GUIDE, 70).join(' ')), true);
 ok('the Donald Reed guide passes', guideProblems(DR_GUIDE, 49, DR_TODO), []);
+
+
+// THE REVISION EMAIL: her edited 8 Star Catcher reply (2026-10-22) is the template.
+const SC8 = {
+  greeting: 'Hello Shahrokh and Omeed,',
+  changes: [
+    { page: 8, label: 'The seller added a note that the HOA regularly maintains the vegetation clearance at the front of the property.' },
+    { page: 1, label: 'The seller filled in where the 220 volt wiring is located (the garage).' },
+    { page: 11, label: "The seller's solar questionnaire section 3A explanation section. The seller explained that the solar system is for the pool only." },
+  ],
+  forms: ['Transfer Disclosure Statement', 'Seller Property Questionnaire', 'Solar Advisory'],
+  totalPages: 11,
+  requested: 3,
+};
+const rev = buildRevisionEmail(SC8);
+ok('revision: no warnings', rev.warnings, []);
+ok('revision: her text, lines in page order', text(rev.html), 'Hello Shahrokh and Omeed, '
+  + 'The seller has sent over a few updates to their disclosures. The revised pages are attached: '
+  + 'Pages 1: The seller filled in where the 220 volt wiring is located (the garage). '
+  + 'Pages 8: The seller added a note that the HOA regularly maintains the vegetation clearance at the front of the property. '
+  + "Pages 11: The seller's solar questionnaire section 3A explanation section. The seller explained that the solar system is for the pool only. "
+  + 'These replace the matching Transfer Disclosure Statement, Seller Property Questionnaire, and Solar Advisory pages in the package I sent earlier.'.replace(/'/g, "'"));
+ok('revision: no DocuSign line', /DocuSign/i.test(rev.html), false);
+ok('revision: no still-to-come line when nothing is open', /Still to come/.test(rev.html), false);
+ok('revision: still-to-come when something is open',
+  /Still to come from the seller's side:<\/b> the trust advisory\./.test(buildRevisionEmail({ ...SC8, stillToCome: ['the trust advisory'] }).html.replace(/&#39;/g, "'")), true);
+const refuse = (label, opts, rx) => { const r2 = buildRevisionEmail({ ...SC8, ...opts }); ok(`revision refuses: ${label}`, [r2.html, rx.test(r2.warnings.join(' '))], ['', true]); };
+refuse('a form code in a change line', { changes: [{ page: 1, label: 'TDS 220 volt wiring filled in' }] }, /form code TDS/);
+refuse('a form code as a form name', { forms: ['TDS', 'SPQ'] }, /form code TDS/);
+refuse('a page past the end of the PDF', { totalPages: 10 }, /page 11 is not in the attached PDF/);
+refuse('fewer lines than she asked for', { requested: 4 }, /asked for 4 item/);
+refuse('no greeting', { greeting: '' }, /no greeting/);
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall buyer-email checks pass');
 process.exit(failed ? 1 : 0);

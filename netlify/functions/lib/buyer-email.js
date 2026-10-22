@@ -187,4 +187,74 @@ function joinList(items) {
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
-module.exports = { fillBuyerEmail, joinList, guideProblems, RX_FORM_CODE };
+/**
+ * THE REVISION EMAIL (Megan, 2026-10-22, 8 Star Catcher): when the listing
+ * side's revisions arrive, the buyer gets the revised pages as a REPLY in the
+ * "Seller Disclosure Package" thread. Her edited version is the template:
+ *
+ *   Hello Shahrokh and Omeed,
+ *   The seller has sent over a few updates to their disclosures. The revised pages are attached:
+ *       Pages 1: The seller filled in where the 220 volt wiring is located (the garage).
+ *       Pages 8: The seller added a note that the HOA regularly maintains ...
+ *   These replace the matching Transfer Disclosure Statement, Seller Property
+ *   Questionnaire, and Solar Advisory pages in the package I sent earlier.
+ *
+ * One line per CHANGE, pointing at the exact page of the attached PDF (not
+ * form-wide ranges); forms named IN FULL in the closing (codes are refused);
+ * no DocuSign line. There is no Zap draft to fill, so the whole body is built
+ * here; the caller appends her signature.
+ *   greeting:    "Hello Shahrokh and Omeed," (every buyer, by first name)
+ *   changes:     [{ page, label }] page = page number in the attached PDF
+ *   forms:       ['Transfer Disclosure Statement', ...] full names, package order
+ *   totalPages:  the attached PDF's page count
+ *   stillToCome: items still open from HER SENT corrections email (may be empty)
+ *   requested:   optional count of items in her sent corrections email; every
+ *                one must be a change line or a still-to-come item
+ * Refuses (html '', warnings) rather than build a wrong email.
+ */
+function buildRevisionEmail({ greeting, changes, forms, totalPages, stillToCome = [], requested }) {
+  const problems = [];
+  const todo = (stillToCome || []).map((x) => String(x || '').trim()).filter(Boolean);
+  if (!Array.isArray(changes) || !changes.length) problems.push('no change lines');
+  if (!Array.isArray(forms) || !forms.length) problems.push('no form names for the closing line');
+  if (!String(greeting || '').trim()) problems.push('no greeting');
+  for (const c of changes || []) {
+    const n = Number(c && c.page);
+    if (!Number.isInteger(n) || n < 1 || (totalPages && n > totalPages)) {
+      problems.push(`page ${c && c.page} is not in the attached PDF (${totalPages} pages)`);
+    }
+    if (!String((c && c.label) || '').trim()) problems.push(`page ${c && c.page} has no description`);
+  }
+  if (requested != null && (changes || []).length + todo.length < requested) {
+    problems.push(`her corrections email asked for ${requested} item(s) but only ${(changes || []).length + todo.length} are accounted for`);
+  }
+  const texts = [['greeting', greeting], ...(changes || []).map((c) => [`page ${c && c.page}`, c && c.label]),
+    ...(forms || []).map((f) => ['form name', f]), ...todo.map((t) => ['still to come', t])];
+  for (const [name, s] of texts) {
+    const code = String(s || '').match(RX_FORM_CODE);
+    if (code) problems.push(`the ${name} "${s}" uses the form code ${code[0]}; say it in plain English`);
+  }
+  if (problems.length) return { html: '', warnings: problems };
+
+  const line = (c) => `<div style="margin-left:40px"><b>Pages ${Number(c.page)}:</b> ${esc(String(c.label).trim())}</div>`;
+  const parts = [
+    `<div>${esc(String(greeting).trim())}</div><br>`,
+    '<div>The seller has sent over a few updates to their disclosures. The revised pages are attached:</div>',
+    changes.slice().sort((x, y) => x.page - y.page).map(line).join(''),
+    '<br>',
+  ];
+  if (todo.length) {
+    parts.push(`<div><b>Still to come from the seller's side:</b> ${esc(joinList(todo))}. `
+      + 'I will send these over as soon as they arrive.</div><br>');
+  }
+  parts.push(`<div>These replace the matching ${esc(serialList(forms))} pages in the package I sent earlier.</div><br>`);
+  return { html: parts.join(''), warnings: [] };
+}
+
+// "A, B, and C" (her closing line keeps the serial comma).
+function serialList(items) {
+  if (items.length <= 2) return items.join(' and ');
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
+}
+
+module.exports = { fillBuyerEmail, buildRevisionEmail, joinList, guideProblems, RX_FORM_CODE };
