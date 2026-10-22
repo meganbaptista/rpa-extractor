@@ -63,5 +63,14 @@ ok('pending AVID: no warnings', rp.warnings, []);
 const tp = fillBuyerEmail(TEMPLATE, { seller: { from: 1, to: 17 }, avid: { pending: true } });
 ok('pending AVID (div layout): line removed', /Agent Visual Inspection|Pages X/.test(tp.html), false);
 
+// 12273 Donald Reed's draft: <br> lines inside ONE outer <div>.
+const WRAPPED = '<div dir="ltr">Hello Armando,\n<br>\n<br>\n<span style="background-color:yellow"><b>Pages 1 - X </b></span>have been filled out by the seller. \n<br><br>\n'
+  + '<span style="background-color:yellow"><b>Pages X - X </b></span>is the Agent Visual Inspection. Both agents walk it.\n<br><br>\n'
+  + '<span style="background-color:yellow"><b>The remainder of the PDF package</b></span> are the California Association of Realtor standard disclosures. \n<br><br>\n'
+  + 'I am also including the booklets: \n<ul><li>x</li></ul>\nPlease let us know if you have any questions as I will send this out via Docusign. \n</div><div>-- Megan</div>';
+const rw = fillBuyerEmail(WRAPPED, { seller: { from: 1, to: 17 }, avid: { pending: true }, stillToCome: ['the NHD report'] });
+ok('wrapped draft: still-to-come right after the remainder sentence', rw.html.indexOf('Still to come') < rw.html.indexOf('I am also including'), true);
+ok('wrapped draft: AVID line removed, no warnings', [/Agent Visual/.test(rw.html), rw.warnings], [false, []]);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall buyer-email checks pass');
 process.exit(failed ? 1 : 0);

@@ -91,7 +91,14 @@ function fillBuyerEmail(html, { seller, avid, stillToCome = [], reportsLink = ''
     extra.push(`<p><a href="${esc(reportsLink)}">CLICK HERE FOR SELLER REPORTS</a></p>`);
   }
   if (extra.length) {
-    if (RX_REMAINDER_LINE.test(out)) out = out.replace(RX_REMAINDER_LINE, `$1${extra.join('')}`);
+    // Which layout: whichever comes FIRST after the sentence, a line break or
+    // the end of a paragraph. 12273 Donald Reed's draft is <br>-separated but
+    // wrapped in one outer <div>, so the paragraph rule put the lines after the
+    // DocuSign sentence at the very end.
+    const at = out.search(/The\s+remainder\s+of\s+the\s+PDF\s+package/i);
+    const after = at >= 0 ? out.slice(at) : '';
+    const brFirst = /<br\b/i.test(after) && (after.search(/<br\b/i) < (after.search(/<\/(p|div)>/i) + 1 || Infinity));
+    if (!brFirst && RX_REMAINDER_LINE.test(out)) out = out.replace(RX_REMAINDER_LINE, `$1${extra.join('')}`);
     else if (RX_REMAINDER_BR.test(out)) {
       const asLines = extra.map((x) => x.replace(/^<p>/, '<br><br>').replace(/<\/p>$/, '')).join('');
       out = out.replace(RX_REMAINDER_BR, `$1${asLines}$2`);
