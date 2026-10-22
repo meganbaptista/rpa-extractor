@@ -133,7 +133,7 @@ async function loadDocObjects(ctx) {
 async function plan(ctx) {
   const objs = await loadDocObjects(ctx);
   const batches = await ctx.core.planBatches(objs);
-  const lite = batches.map((b) => b.map((d) => ({ n: d._n, skipBooklet: d._skipBookletStatement === true })));
+  const lite = batches.map((b) => b.map((d) => ({ n: d._n, skipBooklet: d._skipBookletStatement === true, skipPages: d._skipPages || [] })));
   await J.putOut(ctx.store, ctx.job.id, 'plan', lite);
   ctx.log(`${lite.length} batch(es): ${lite.map((b) => b.length).join(', ')} file(s)`);
   const steps = [];
@@ -150,6 +150,7 @@ async function batchDocs(ctx, i) {
     const buf = await J.getDoc(ctx.store, ctx.job.id, b.n);
     const d = { name: byN.get(b.n).name, base64: buf.toString('base64') };
     if (b.skipBooklet) d._skipBookletStatement = true;
+    if (b.skipPages && b.skipPages.length) d._skipPages = b.skipPages;
     out.push(d);
   }
   return out;

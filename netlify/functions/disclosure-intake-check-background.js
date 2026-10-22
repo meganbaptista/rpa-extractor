@@ -1381,6 +1381,14 @@ const ANSWER_REVIEW_PROMPT =
   'changes, insurance issues, or litigation) and 14F(1) are fact-specific "are you aware of..." questions that can ' +
   'legitimately be No even in an HOA; do NOT auto-flag those, and flag 14E only if an explanation or another ' +
   'document shows such a matter actually exists.\n' +
+  '   - MAINTENANCE IS NOT A PROBLEM. Some questions ask about PROBLEMS, not about work done: SPQ 8A (defects in ' +
+  'systems), 11B (problems with pests), 11C (pest damage/odors), 11D (treatment or eradication of pests, or repair ' +
+  'of their damage), 13A (diseases or infestations of plants) and 13E (defects, leaks, cracks, repairs or other ' +
+  'problems with sprinklers/pool/spa). Do NOT say one of these should be Yes merely because the package mentions ' +
+  'ROUTINE SERVICE, MAINTENANCE, UPGRADES, REPLACEMENTS or REMODELING ("monthly pest control", "pool equipment ' +
+  'replaced", "sprinkler lines redone", "new water heater"). That is the seller looking after the house, not a ' +
+  'problem. Flag one of these items only when the package describes an ACTUAL problem: something broken, leaking, ' +
+  'cracked, failed, damaged, an infestation, termites, rodents, mold. (Megan, 2506 Westminster.)\n' +
   '   - Provided documents: SPQ Section 6 asks whether specific reports/booklets/advisories were provided (e.g. 6K). ' +
   'If that document is PHYSICALLY PRESENT in this package, the matching "provided?" box should be YES; flag it if it ' +
   'is not marked YES.\n' +
@@ -2269,6 +2277,14 @@ async function renderQAPageImages(buffer, name, opts = {}) {
     }
   }
 
+  // Pages decided across the whole delivery not to review (vendor copies of a
+  // form whose real copy is its own file; see markEqBookletStatements).
+  if (Array.isArray(opts.skipPages) && opts.skipPages.length) {
+    const before = qaNums.length;
+    qaNums = qaNums.filter((n) => !opts.skipPages.includes(n));
+    if (qaNums.length < before) selection += ` -vendor copy [${opts.skipPages.join(',')}]`;
+  }
+
   // Never send an unbounded page set to the review. A real Q&A set runs ~20-40 pages; a selection
   // far past that means a broken document, not a real audit. Cap it and log the overflow LOUD (so a
   // miss shows in the ledger) rather than risk a context-overflow 400 like the one that started this.
@@ -2502,6 +2518,7 @@ async function reviewAnswers(docs) {
       const { images, selection, status } = await renderQAPageImages(buf, d.name, {
         texts: d._texts,
         skipBookletStatement: d._skipBookletStatement === true,
+        skipPages: d._skipPages || [],
       });
       qaImages = qaImages.concat(images);
       if (selection) selections.push(selection);
@@ -3088,6 +3105,34 @@ function isMirrorDefectMismatch(f) {
   return (isSpq8A(here) && isTdsIIB(there)) || (isTdsIIB(here) && isSpq8A(there));
 }
 
+/**
+ * MAINTENANCE IS NOT AN ADMISSION OF A PROBLEM. 2506 Westminster (2026-10-21):
+ * "SPQ 13E is marked No, but the SPQ addendum discloses backyard sprinkler
+ * irrigation lines redone and pool equipment replaced in 2014" and "SPQ 11D is
+ * marked No, but the seller discloses monthly MOXI pest control". Megan: "just
+ * because they re-did the sprinklers and pool equipment doesn't mean there were
+ * issues"; "this is a reach, because 11D is asking for eradication". The prompt
+ * says so (rule d); this catches what still gets through. Borderline by design
+ * (11D's form text does say "treatment"), so it is ROUTED TO CHECK BEFORE
+ * SENDING, never dropped: Megan sees it and decides, the agent never does.
+ * A reason that names an actual problem (leak, termites, damage...) is chased.
+ */
+const PROBLEM_QUESTIONS = /^(8A|11B|11C|11D|13A|13E)$/i;
+const RX_UPKEEP = /\b(pest\s*control|exterminat\w*\s+service|service[ds]?|servicing|maintenance|maintained|routine|regular(ly)?|monthly|quarterly|weekly|bi-?weekly|annual(ly)?|preventi\w+|replaced|replacement|redone|re-?done|upgraded?|upgrades|new\b|installed|remodel\w*|renovat\w*|updated)\b/i;
+const RX_ACTUAL_PROBLEM = /\b(leak\w*|crack\w*|broken|break|fail\w*|damag\w*|defect\w*|infest\w*|termite\w*|rodent\w*|rats?|mice|mouse|roach\w*|bed\s*bugs?|mold|mildew|rot|dry\s*rot|flood\w*|malfunction\w*|not\s+working|stopped\s+working|backed?\s+up|clog\w*|settl\w*|problem\w*|issues?)\b/i;
+function isUpkeepNotProblem(f) {
+  if (!f || f.issue !== 'answer_contradicts_package') return false;
+  if (!/^spq$/i.test(String(f.form || '').trim())) return false;
+  if (!PROBLEM_QUESTIONS.test(String(f.item || '').replace(/\s+/g, ''))) return false;
+  if (String(f.should_be || '').toLowerCase() !== 'yes') return false;
+  // What the package said. Not the item's own wording ("problems with pests"),
+  // which would match RX_ACTUAL_PROBLEM on every flag.
+  const evidence = String(f.reason || '')
+    .replace(/\b(asks?|which\s+asks?|covers?|is\s+about)\b[^.;]*/gi, '')
+    .replace(/\bcould\s+you[^.;]*/gi, '');
+  return RX_UPKEEP.test(evidence) && !RX_ACTUAL_PROBLEM.test(evidence);
+}
+
 // THE EXPLANATION IS THERE, IT JUST DOES NOT SAY WHICH / WHEN / WHO / HOW.
 // 1707 S Stanley (2026-10-12): SPQ 8E(1) "does not identify which utilities or
 // meters are separate", SPQ 18F "does not state how any tenancy ended". Megan:
@@ -3344,6 +3389,9 @@ function combineIdentifyReview(idr, ans) {
 async function markEqBookletStatements(docs) {
   let standalone = false;
   const withBooklet = [];
+  // Statement pages per document, for the vendor-copy rule below.
+  const stmtByDoc = [];
+  let dedicated = null;
   for (const d of docs) {
     try {
       const buf = Buffer.from(d.base64 || '', 'base64');
@@ -3352,6 +3400,9 @@ async function markEqBookletStatements(docs) {
       if (texts.length > QA_REVIEW_ALL_MAX_PAGES) d._texts = texts;
       const eq = eqStatementLayout(texts);
       if (eq.standaloneStatementPages.length) standalone = true;
+      if (eq.standaloneStatementPages.length) stmtByDoc.push({ d, pages: eq.standaloneStatementPages });
+      // A file that IS the statement: it opens on the form.
+      if (!dedicated && eq.standaloneStatementPages.includes(1)) dedicated = d;
       // A booklet counts even when its statement page has no text layer. On
       // 2506 Westminster (2026-10-21) the guide's blank statement was an image
       // (p75 of 127), so it was never detected here, the skip never fired, and
@@ -3360,6 +3411,26 @@ async function markEqBookletStatements(docs) {
       if (eq.bookletStatementPages.length || eq.runs.length) withBooklet.push(d);
     } catch (err) {
       console.warn(`[disclosure-intake] earthquake-booklet scan skipped "${d.name}": ${err.message}`);
+    }
+  }
+  /**
+   * VENDOR COPIES. 2506 Westminster (2026-10-22): besides the booklet's blank,
+   * MyNHD bundled a third, BLANK statement as page 4 of its 5-page "Natural
+   * Hazard Disclosure Receipt". The seller's own, fully answered statement was
+   * its own file (04), so the nine "left unanswered" flags came from a form the
+   * seller was never meant to fill. When a document IS the statement (opens on
+   * it), a statement page tucked inside ANOTHER document is a vendor copy and
+   * is not reviewed. With no such file (a single combined packet), nothing is
+   * skipped: the embedded copy may be the only one.
+   */
+  if (dedicated) {
+    for (const { d, pages } of stmtByDoc) {
+      if (d === dedicated) continue;
+      const embedded = pages.filter((n) => n !== 1);
+      if (!embedded.length) continue;
+      d._skipPages = [...new Set([...(d._skipPages || []), ...embedded])];
+      console.log(`[disclosure-intake] earthquake statement is its own file (${dedicated.name}); the copy on `
+        + `page(s) ${embedded.join(', ')} of ${d.name} is a vendor copy and will not be reviewed`);
     }
   }
   if (standalone && withBooklet.length) {
@@ -4061,6 +4132,22 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // correct pairing). The review does not know that, and telling it would mean
   // more prompt text, which has displaced a real rule before. So: VERIFY.
   const { fhdsDefault, scanUnconfirmed } = routeUnconfirmedFlags(allFlags);
+  const upkeep = allFlags.filter(isUpkeepNotProblem);
+  for (const f of upkeep) {
+    f.original_issue = f.issue;
+    f.issue = 'upkeep_not_problem';
+    verify.push({
+      item: [f.form, f.item].filter(Boolean).join(' ') || 'this item',
+      short: `${String(f.reason || '').trim()} (probably maintenance or an upgrade, not a problem; not sent)`,
+      note: 'the package mentions work on this, but it reads as routine maintenance, an upgrade or a '
+        + 'replacement rather than a problem, so it was NOT put in the email. Request it only if you read it '
+        + `as an actual problem. The review reported: "${String(f.reason || '').trim()}"`,
+    });
+  }
+  if (upkeep.length) {
+    console.log(`[disclosure-intake] routed to VERIFY (NOT chased): ${upkeep.length} maintenance/upgrade `
+      + `flag(s): ${upkeep.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
+  }
   for (const f of fhdsDefault) {
     verify.push({
       item: [f.form, f.item].filter(Boolean).join(' ') || 'FHDS Section 3',
@@ -4109,6 +4196,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     && f.issue !== 'duplicate_form_copy'
     && f.issue !== 'cited_attachment_unseen'
     && f.issue !== 'fhds_default_option'
+    && f.issue !== 'upkeep_not_problem'
     && f.issue !== 'scan_unconfirmed'));
   for (const f of unseenAttachment) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
@@ -4429,7 +4517,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { renderQAPageImages, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
