@@ -22,6 +22,10 @@ const T = '(?:\\s|&nbsp;|<[^>]+>)*';
 const RX_SELLER_RANGE = new RegExp(`Pages${T}1${T}-${T}X`, 'i');
 const RX_AVID_RANGE = new RegExp(`Pages${T}X${T}-${T}X`, 'i');
 const RX_REMAINDER_LINE = /(<(p|div)\b[^>]*>(?:(?!<\/\2>)[\s\S])*The\s+remainder\s+of\s+the\s+PDF\s+package[\s\S]*?<\/\2>)/i;
+// Her real Zap draft (8 Star Catcher, 2026-10-22) has no <p>/<div>: lines are
+// separated by "<br></br><br></br>". Insert before the first break after the
+// remainder sentence.
+const RX_REMAINDER_BR = /(The\s+remainder\s+of\s+the\s+PDF\s+package[\s\S]*?)(\s*<br\s*\/?>)/i;
 
 const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const range = (r) => (r && r.from ? (r.to && r.to !== r.from ? `Pages ${r.from} - ${r.to}` : `Page ${r.from}`) : '');
@@ -64,7 +68,10 @@ function fillBuyerEmail(html, { seller, avid, stillToCome = [], reportsLink = ''
   }
   if (extra.length) {
     if (RX_REMAINDER_LINE.test(out)) out = out.replace(RX_REMAINDER_LINE, `$1${extra.join('')}`);
-    else warnings.push('could not find "The remainder of the PDF package" line; the extra lines were not added');
+    else if (RX_REMAINDER_BR.test(out)) {
+      const asLines = extra.map((x) => x.replace(/^<p>/, '<br><br>').replace(/<\/p>$/, '')).join('');
+      out = out.replace(RX_REMAINDER_BR, `$1${asLines}$2`);
+    } else warnings.push('could not find "The remainder of the PDF package" line; the extra lines were not added');
   }
   return { html: out, filled, warnings };
 }

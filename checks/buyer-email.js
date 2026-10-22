@@ -43,5 +43,17 @@ ok('a draft without placeholders is untouched and says why', [r3.html, r3.warnin
 
 ok('a single page reads "Page n"', /Page 7 is the Agent/.test(text(fillBuyerEmail(TEMPLATE, { seller: { from: 1, to: 6 }, avid: { from: 7, to: 7 } }).html)), true);
 
+// Her REAL Zap draft (8 Star Catcher, 2026-10-22): <br></br> lines, </span></b> misnested.
+const REAL = 'Hello Shahrokh and Omeed,\n<br></br><br></br>\n'
+  + '<span style="background-color:yellow"><b>Pages 1 - X </span></b>have been filled out by the seller disclosing the condition of the property. \n<br></br><br></br>\n'
+  + '<span style="background-color:yellow"><b>Pages X - X </span></b>is the Agent Visual Inspection. Both the listing agent and buyer\u2019s agent are required to walk the property.\n<br></br><br></br>\n'
+  + '<span style="background-color:yellow"><b>The remainder of the PDF package</span></b> are the California Association of Realtor standard disclosures. \n\n<br></br><br></br>\n'
+  + 'I am also including the California combined hazards booklets below for your review: \n<ul>\n  <li><a href="https://www.disclosuresource.com/downloads/HomeEnergyRating.pdf">Home Energy Rating Guide (click link to view)</a></li></ul>';
+const rr = fillBuyerEmail(REAL, { seller: { from: 1, to: 23 }, avid: { from: 24, to: 30 }, reportsLink: 'https://drive.google.com/drive/folders/X1' });
+ok('real draft: both ranges filled', [/Pages 1 - 23/.test(rr.html), /Pages 24 - 30/.test(rr.html)], [true, true]);
+ok('real draft: reports link after the remainder sentence', /standard disclosures\.\s*<br><br><a href="https:\/\/drive\.google\.com\/drive\/folders\/X1">CLICK HERE FOR SELLER REPORTS<\/a>\s*<br><\/br>/.test(rr.html), true);
+ok('real draft: no warnings', rr.warnings, []);
+ok('real draft: booklet list still follows', rr.html.indexOf('CLICK HERE') < rr.html.indexOf('I am also including'), true);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall buyer-email checks pass');
 process.exit(failed ? 1 : 0);
