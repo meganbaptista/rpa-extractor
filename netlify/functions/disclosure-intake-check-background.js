@@ -1387,6 +1387,12 @@ const ANSWER_REVIEW_PROMPT =
   'changes, insurance issues, or litigation) and 14F(1) are fact-specific "are you aware of..." questions that can ' +
   'legitimately be No even in an HOA; do NOT auto-flag those, and flag 14E only if an explanation or another ' +
   'document shows such a matter actually exists.\n' +
+  '   - SHARED WALLS: a condominium, townhouse or other attached unit (a unit number in the property address, or the ' +
+  'package or the seller\'s own answers describe a condo/townhouse) shares walls with its neighbors, so TDS C2 and ' +
+  'SPQ 15D (features shared in common with adjoining landowners, such as walls, fences and driveways) must be YES. ' +
+  'Flag each one marked No or left blank, saying it should be YES because the unit shares walls. Also flag TDS C2 ' +
+  'and SPQ 15D answered differently from each other: they ask the same question. (Megan, 1131 Alta Loma #415: a ' +
+  'buyer-side TC sent both back.)\n' +
   '   - MAINTENANCE IS NOT A PROBLEM. Some questions ask about PROBLEMS, not about work done: SPQ 8A (defects in ' +
   'systems), 11B (problems with pests), 11C (pest damage/odors), 11D (treatment or eradication of pests, or repair ' +
   'of their damage), 13A (diseases or infestations of plants) and 13E (defects, leaks, cracks, repairs or other ' +

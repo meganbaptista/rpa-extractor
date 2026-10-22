@@ -39,6 +39,7 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const usageLog = require('./lib/usage-log');
 const { callClaude: callClaudeShared } = require('./lib/claude');
 const { isBrushClearanceExempt } = require('./lib/property-type');
+const { sellerAnswerMandates } = require('./lib/seller-answer-rules');
 const { parseRequestBody } = require('./lib/parse-body');
 
 // Opus 4.8 — materiality is liability-sensitive judgment; use the top tier
@@ -277,6 +278,7 @@ function fireBrushMandate(fields, propertyAddress) {
       why: 'The property is in a High Fire Hazard area, which typically carries annual brush clearance requirements, so a "No" here reads as inconsistent and a buyer would question it.',
       ask: 'I noticed that you answered "No" to the property having annual brush clearance requirements. I show that the property is in a High Fire hazard zone, so typically this would require annual brush clearance. Do you want to revise this to be a Yes response?',
       keyword: /brush clearance|high fire hazard/i,
+      sectionRx: /17\s*g/i,
     };
   }
   return null;
@@ -285,8 +287,9 @@ function fireBrushMandate(fields, propertyAddress) {
 // True if the model already worked a mandate into its material findings, so we
 // don't force a duplicate. Matches on the locator code or the mandate keyword.
 function materialHasMandate(material, m) {
+  const rx = m.sectionRx || /17\s*g/i;
   return (material || []).some((x) =>
-    /17\s*g/i.test(String(x.section || '')) ||
+    rx.test(String(x.section || '')) ||
     m.keyword.test(`${x.topic || ''} ${x.ask || ''} ${x.why || ''}`));
 }
 
@@ -490,8 +493,12 @@ exports.handler = async function (event) {
   try {
     // 1) Get the seller's answers — from the body if provided, else PS API.
     let fields = [];
+    // The whole form IN ORDER, unanswered fields included: the answer rules
+    // pair each question with the explanation field that follows it.
+    let ordered = [];
     if (Array.isArray(formFields) && formFields.length) {
       fields = formFields.map(normalizeField).filter((f) => f && f.label);
+      ordered = fields;
       console.log(`[disclosure-review] using ${fields.length} fields passed in body`);
     } else if (runId) {
       const psKey = process.env.PS_API_KEY;
@@ -502,6 +509,7 @@ exports.handler = async function (event) {
         fetchFieldLabels(wfId, psKey),
       ]);
       fields = joinFields(values, labels);
+      ordered = Object.entries(labels).map(([id, label]) => ({ id, label, value: valueFromData(values[id]) }));
       console.log(`[disclosure-review] joined ${fields.length} answered fields from PS workflow ${wfId} run ${runId}`);
     } else {
       throw new Error('Request had neither formFields nor a workflowRunId');
@@ -516,6 +524,11 @@ exports.handler = async function (event) {
     // like "High Fire Hazard Area?" get dropped by the disclosure filter, so read
     // them before filtering. A mandate only exists when an inconsistency is real.
     const mandates = [fireBrushMandate(fields, propertyAddress)].filter(Boolean);
+    // The buyer-side audit's consistency rules (lib/seller-answer-rules.js):
+    // shared walls on a condo, HOA answers, TDS/SPQ answers that disagree, a Yes
+    // with no explanation, an explanation on a No. Megan, 2026-10-22, 1131 Alta
+    // Loma #415: buyer TCs were catching what this review let through.
+    mandates.push(...sellerAnswerMandates({ ordered, fields, address: propertyAddress, prior: mandates }));
     if (mandates.length) console.log(`[disclosure-review] ${mandates.length} deterministic mandate(s) forced into the review`);
 
     const disclosureFields = fields.filter((f) => isDisclosureField(f.label));
@@ -592,6 +605,7 @@ exports.handler = async function (event) {
 
 // Exposed for unit tests (not used by the handler).
 module.exports._internal = {
+  sellerAnswerMandates,
   normYesNo,
   fireHazardField,
   item17gAnswerField,
