@@ -1289,6 +1289,12 @@ const ANSWER_REVIEW_PROMPT =
   'on this page. NEVER carry a blank from one letter\'s conditional onto the adjacent ' +
   'letter; before flagging a conditional blank, confirm THAT letter\'s OWN parent is marked Yes AND the box on THAT ' +
   'letter\'s own line is truly empty. ' +
+  'FOLLOW-UP LINES ARE NOT THE QUESTION. When the main Yes/No box of an item IS marked, never report that item as ' +
+  'unanswered because a follow-up line under it is blank. In particular: SPQ 9A\'s "If yes, was federal flood ' +
+  'disaster assistance conditioned upon ... flood insurance" applies ONLY when the explanation describes FEDERAL ' +
+  'FLOOD disaster assistance; for any other relief, insurance or settlement it is correctly blank. SPQ 11D\'s "If so, ' +
+  'when and by whom" line is detail, not a Yes/No, and is covered when the item 11 explanation describes the ' +
+  'treatment. (Megan, 12273 Donald Reed.) ' +
   'Do NOT flag a conditional sub-item when its parent is No or blank, since ' +
   'it correctly stays blank;\n' +
   '(b) ANY sub-item marked YES whose OWN explanation is BLANK, ILLEGIBLE, or TOO VAGUE to understand (issue ' +
@@ -3063,15 +3069,26 @@ function reviseLineFor(f) {
   const ref = refOf(f);
   const why = reasonOf(f);
   const marked = f.marked || 'No';
+  /**
+   * SAY THE ITEM ONCE. 12273 Donald Reed (2026-10-22): every line read
+   * "SPQ 6G: 6G is marked Yes ...", "SPQ 10B: 10B (mold ...) is marked Yes".
+   * Megan: "these all say the section twice". When the reason itself opens
+   * with the item, it is joined to the reference instead of repeated:
+   * "SPQ 6G is marked Yes ...", "SPQ 10B (mold ...) is marked Yes ...".
+   */
+  const item = String(f.item || '').trim();
+  const lead = item && why ? why.match(new RegExp(`^(?:${String(f.form || '').trim()}\\s+)?${item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])\\s*`, 'i')) : null;
+  const joined = lead ? `${ref} ${why.slice(lead[0].length)}` : '';
+  const line = (fallback, ask) => (joined ? `${joined}. ${ask}` : `${ref}: ${fallback}. ${ask}`);
   if (f.issue === 'detail_incomplete') return `${ref}: ${why}. Could you fill that in, or mark it Unknown?`;
   if (f.issue === 'verify_mismatch') return `${ref}: ${why}.`;
   if (f.issue === 'entity_signer') return dashless(f.reason);
   if (f.issue === 'seller_signature_missing') {
     return `${f.form || 'This form'}: the seller's signature and date look to be missing. Could the seller sign and date it, or could you send the signed copy?`;
   }
-  if (f.issue === 'yes_no_explanation') return `${ref}: ${why || 'marked Yes with no explanation'}. Could the seller add a short explanation?`;
-  if (f.issue === 'unanswered') return `${ref}: ${why || 'this one was left blank'}. Could the seller answer it?`;
-  if (f.issue === 'explanation_unclear') return `${ref}: ${why || 'the explanation is a little unclear'}. Could the seller clarify?`;
+  if (f.issue === 'yes_no_explanation') return line(why || 'marked Yes with no explanation', 'Could the seller add a short explanation?');
+  if (f.issue === 'unanswered') return line(why || 'this one was left blank', 'Could the seller answer it?');
+  if (f.issue === 'explanation_unclear') return line(why || 'the explanation is a little unclear', 'Could the seller clarify?');
   /**
    * THE SELLER DID EXPLAIN IT, ON THE WRONG LINE. 2781 Westshire (2026-10-09):
    * the 7A alterations sat on the item 8 line, and 15E's explanation was
@@ -3179,7 +3196,17 @@ function isMirrorDefectMismatch(f) {
   const there = `${f.other_form || ''} ${f.source || ''} ${f.reason || ''}`;
   const isSpq8A = (t) => /\bspq\b[^a-z0-9]*8\s*a\b|\bspq\s+8a\b/i.test(t);
   const isTdsIIB = (t) => /\btds\b.{0,20}(section\s+)?(ii|2)\s*\(?b\)?\b/i.test(t);
-  return (isSpq8A(here) && isTdsIIB(there)) || (isTdsIIB(here) && isSpq8A(there));
+  /**
+   * TDS C1 IS NOT SPQ 10B. C1 asks about an environmental HAZARD on the property
+   * now; 10B asks about any mold problem PAST or present. A remediated past mold
+   * issue makes 10B Yes and C1 legitimately No. 12273 Donald Reed (2026-10-22):
+   * "TDS C1 is marked No, which does not match SPQ (On SPQ 10B ...)". Megan: "I
+   * dont agree". An unexplained 10B Yes is still chased under its own rule.
+   */
+  const isTdsC1 = (t) => /\btds\b[^a-z0-9]*c\s*1\b(?!\d)/i.test(t);
+  const isSpq10B = (t) => /\bspq\b[^a-z0-9]*(10\s*b|10b)\b/i.test(t);
+  return (isSpq8A(here) && isTdsIIB(there)) || (isTdsIIB(here) && isSpq8A(there))
+    || (isTdsC1(here) && isSpq10B(there)) || (isSpq10B(here) && isTdsC1(there));
 }
 
 /**
@@ -3204,6 +3231,31 @@ function isMirrorDefectMismatch(f) {
  */
 const isSpq19B = (f) => !!f && /^spq$/i.test(String(f.form || '').trim())
   && /^19\s*\(?\s*B\s*\)?$/i.test(String(f.item || '').trim());
+
+/**
+ * SPQ 6H (insurance claims) EXPLAINED BY A CLAIM, LAWSUIT OR SETTLEMENT.
+ * 12273 Donald Reed (2026-10-22): "6H is marked Yes but no insurance claim is
+ * described; the item 6 explanation describes only a settled landlord and
+ * tenant lawsuit". Megan: "i think that is the insurance claim". The seller
+ * explained it; the review read "insurance claim" too literally. Routed to
+ * CHECK BEFORE SENDING, not chased.
+ */
+const isClaimExplained6H = (f) => !!f && f.issue === 'yes_no_explanation'
+  && /^spq$/i.test(String(f.form || '').trim()) && /^6\s*H$/i.test(String(f.item || '').trim())
+  && /\b(lawsuit|suit|litigation|claim|settle\w*|insurance|damages)\b/i.test(String(f.reason || '').replace(/insurance\s+claims?\s+within[^;.]*/i, ''));
+
+/**
+ * A MARKED QUESTION WITH A BLANK FOLLOW-UP IS ANSWERED. 12273 Donald Reed
+ * (2026-10-22): "SPQ 9A and 11D were left unanswered" - both marked Yes; blank
+ * were 9A's federal-flood follow-up (not flood relief) and 11D's "when and by
+ * whom" line (explanation covers it). Megan: "both are answered". Prompt rule
+ * above; this drops what still gets through when the reason points at the
+ * follow-up line rather than the main box.
+ */
+const isBlankFollowUpOnly = (f) => !!f && f.issue === 'unanswered'
+  && /^spq$/i.test(String(f.form || '').trim())
+  && ((/^9\s*A$/i.test(String(f.item || '').trim()) && /flood|conditioned|follow|sub-?question|if\s+yes/i.test(String(f.reason || '')))
+    || (/^11\s*D$/i.test(String(f.item || '').trim()) && /when\s+and\s+by\s+whom|by\s+whom|follow|if\s+so/i.test(String(f.reason || ''))));
 
 const PROBLEM_QUESTIONS = /^(8A|11B|11C|11D|13A|13E)$/i;
 const RX_UPKEEP = /\b(pest\s*control|exterminat\w*\s+service|service[ds]?|servicing|maintenance|maintained|routine|regular(ly)?|monthly|quarterly|weekly|bi-?weekly|annual(ly)?|preventi\w+|replaced|replacement|redone|re-?done|upgraded?|upgrades|new\b|installed|remodel\w*|renovat\w*|updated)\b/i;
@@ -4220,6 +4272,16 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // correct pairing). The review does not know that, and telling it would mean
   // more prompt text, which has displaced a real rule before. So: VERIFY.
   const { fhdsDefault, scanUnconfirmed } = routeUnconfirmedFlags(allFlags);
+  for (const f of allFlags.filter(isClaimExplained6H)) {
+    f.original_issue = f.issue;
+    f.issue = 'claim_explained';
+    verify.push({
+      item: 'SPQ 6H',
+      short: `${String(f.reason || '').trim()} (the claim/lawsuit described is likely the 6H claim; not sent)`,
+      note: 'the item 6 explanation describes a claim, lawsuit or settlement, which is likely what 6H refers to, '
+        + `so it was NOT put in the email. The review reported: "${String(f.reason || '').trim()}"`,
+    });
+  }
   const upkeep = allFlags.filter(isUpkeepNotProblem);
   for (const f of upkeep) {
     f.original_issue = f.issue;
@@ -4281,12 +4343,15 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     console.log(`[disclosure-intake] dropped ${detailOnly.length} "explanation could say more" flag(s), the `
       + `explanation answers the question: ${detailOnly.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
   }
-  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f) && !isFactOnlyYes(f) && !isMirrorDefectMismatch(f) && !isSpq19B(f)
+  const followUps = allFlags.filter(isBlankFollowUpOnly);
+  if (followUps.length) console.log(`[disclosure-intake] dropped ${followUps.length} "unanswered" flag(s) about a blank follow-up line under a marked question`);
+  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f) && !isFactOnlyYes(f) && !isMirrorDefectMismatch(f) && !isSpq19B(f) && !isBlankFollowUpOnly(f)
     && f.issue !== 'explanation_on_addendum'
     && f.issue !== 'duplicate_form_copy'
     && f.issue !== 'cited_attachment_unseen'
     && f.issue !== 'fhds_default_option'
     && f.issue !== 'upkeep_not_problem'
+    && f.issue !== 'claim_explained'
     && f.issue !== 'scan_unconfirmed'));
   for (const f of unseenAttachment) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
@@ -4607,7 +4672,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { validateAddendumFlags, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
