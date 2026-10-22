@@ -321,6 +321,14 @@ async function getMessage(id) {
   };
 }
 
+// Every message in a thread, oldest first, shaped like getMessage. For the
+// revision check, which needs the corrections email WE sent in that thread.
+async function getThreadMessages(threadId) {
+  const data = await apiGet(`/threads/${encodeURIComponent(threadId)}`, { format: 'minimal' });
+  const msgs = await Promise.all((data.messages || []).map((m) => getMessage(m.id)));
+  return msgs.sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
+}
+
 // One attachment's bytes (Gmail returns base64url). For lib/inspection-filer.js.
 async function getAttachment(messageId, attachmentId) {
   const data = await apiGet(`/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`);
@@ -602,6 +610,7 @@ async function createDraftRaw(rawMime, { threadId = '' } = {}) {
 
 module.exports = {
   createDraftRaw,
+  getThreadMessages,
   // auth / low-level
   getAccessToken,
   subject,

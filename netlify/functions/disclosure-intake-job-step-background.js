@@ -20,6 +20,7 @@ const { parseRequestBody } = require('./lib/parse-body');
 const { canonicalAddress } = require('./lib/address');
 const strips = require('./lib/page-strips');
 const gmail = require('./lib/gmail');
+const drive = require('./lib/drive');
 const signature = require('./lib/signature');
 const intake = require('./disclosure-intake-check-background');
 
@@ -58,6 +59,7 @@ exports.handler = async function (event) {
     core: intake.core,
     strips,
     gmail,
+    drive,
     signature,
     alert: rt.intakeAlert,
     stateStore: rt.blobs(intake.core.STATE_STORE),

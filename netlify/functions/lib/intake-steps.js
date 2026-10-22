@@ -14,6 +14,9 @@
 // record when the step is marked done.
 
 const J = require('./intake-job');
+const rc = require('./revision-check');
+const R = require('./buyer-revision');
+const { buildRevisionEmail } = require('./buyer-email');
 
 const SHARE_LINK = /https?:\/\/(?:www\.)?(?:dropbox\.com\/(?:scl\/fo|scl\/fi|sh|s)\/[^\s"'<>)]+|drive\.google\.com\/(?:file\/d\/[A-Za-z0-9_-]+|open\?id=[A-Za-z0-9_-]+|uc\?[^\s"'<>)]*id=[A-Za-z0-9_-]+)[^\s"'<>)]*)/gi;
 
@@ -46,12 +49,13 @@ const isPdfOrZip = (a) => /\.(pdf|zip)$/i.test(a.filename || '')
 async function load(ctx) {
   const { store, job, core, gmail } = ctx;
   let documents = [];
+  let msg = null;
   if (job.source.localFiles) {
     const fs = require('fs');
     const path = require('path');
     documents = job.source.localFiles.map((p) => ({ name: path.basename(p), base64: fs.readFileSync(p).toString('base64') }));
   } else {
-    const msg = await gmail.getMessage(job.source.messageId);
+    msg = await gmail.getMessage(job.source.messageId);
     for (const a of msg.attachments.filter(isPdfOrZip)) {
       const buf = await gmail.getAttachment(msg.id, a.attachmentId);
       documents.push({ name: a.filename, base64: buf.toString('base64') });
@@ -70,11 +74,30 @@ async function load(ctx) {
   }
   ctx.log(`loaded ${meta.length} file(s), ${meta.reduce((s, d) => s + d.pages, 0)} page(s); `
     + `${report.filter((r) => !r.info).length} not reviewed`);
+  // A REPLY TO HER CORRECTIONS EMAIL is a revision: check the items she asked
+  // for and draft the buyer reply (revcheck, revdraft) instead of auditing it
+  // as a new package. A replay can preset job.source.revision.
+  let revision = job.source.revision || null;
+  if (!revision && msg && meta.length && gmail.getThreadMessages) {
+    try {
+      const found = rc.findCorrectionsEmail(await gmail.getThreadMessages(msg.threadId), msg);
+      if (found) {
+        revision = { correctionsId: found.msg.id, correctionsDate: (found.msg.headers && found.msg.headers.date) || '', items: found.items };
+        ctx.log(`revision: answers the corrections email of ${revision.correctionsDate} (${found.items.length} item(s))`);
+      }
+    } catch (err) {
+      // Retry the step; on the last try carry on as a new package (the full
+      // audit) rather than drop the delivery.
+      if (ctx.attempt < J.MAX_ATTEMPTS) throw new Error(`could not read the thread: ${err.message}`);
+      ctx.log(`could not read the thread on the last try, auditing as a new package: ${err.message}`);
+    }
+  }
   return (j) => {
     j.docs = meta;
     j.skipped = report.filter((r) => !r.info);
     j.archives = report.filter((r) => r.info);
-    J.addSteps(j, meta.length ? ['map', 'plan'] : ['finish']);
+    if (revision && meta.length) j.revision = revision;
+    J.addSteps(j, !meta.length ? ['finish'] : (revision ? ['revcheck', 'revdraft'] : ['map', 'plan']));
   };
 }
 
@@ -321,6 +344,94 @@ async function trialDraft(ctx, payload, address, acct, acctText) {
   return (draft && draft.id) || 'created';
 }
 
+// ---------------------------------------------------------------------------
+// REVISIONS (phase 3): the listing side's reply to her corrections email.
+// ---------------------------------------------------------------------------
+
+function revisionModel(content) {
+  const { callClaude } = require('./claude');
+  return callClaude({
+    fn: 'disclosure-revision',
+    model: process.env.INTAKE_MODEL || 'claude-opus-4-8',
+    content,
+    maxTokens: 16000,
+  });
+}
+
+/** Each item of her corrections email, checked by two reads (lib/revision-check.js). */
+async function revcheck(ctx) {
+  const { store, job } = ctx;
+  const files = [];
+  for (const d of job.docs) files.push({ n: d.n, name: d.name, pages: d.pages, base64: (await J.getDoc(store, job.id, d.n)).toString('base64') });
+  const r = await rc.checkRevisions({ items: job.revision.items, files, callModel: ctx.revisionModel || revisionModel });
+  await J.putOut(store, job.id, 'revcheck', r);
+  const count = (st) => r.items.filter((v) => v.status === st).length;
+  ctx.log(`${count('fixed')} fixed, ${count('open')} open, ${count('unclear')} to check`);
+  return null;
+}
+
+/**
+ * The buyer reply, with the check on top in red. SHADOW: a standalone
+ * "[TRIAL]" draft addressed to Megan only (Megan, 2026-10-22), nothing saved
+ * to Drive. LIVE: a reply in the package thread to its recipients, the PDF
+ * saved beside the package, and the label removed.
+ */
+async function revdraft(ctx) {
+  const { store, job, gmail } = ctx;
+  const live = job.mode === 'live';
+  const rev = await J.getOut(store, job.id, 'revcheck');
+  const effects = (await J.getOut(store, job.id, 'finish-effects')) || {};
+  const saveEffects = () => J.putOut(store, job.id, 'finish-effects', effects);
+  const address = ctx.canonicalAddress(rev.address || '') || rev.address || '';
+  const tally = ['fixed', 'open', 'unclear'].map((st) => rev.items.filter((v) => v.status === st).length);
+  const finished = (j) => {
+    j.address = address;
+    j.status = 'done';
+    j.outcome = `revision: ${tally[0]} fixed, ${tally[1]} still open, ${tally[2]} to check`;
+  };
+
+  if (!effects.draft) {
+    const pkg = address ? await R.findSentPackage(gmail, address) : null;
+    const pdf = await R.mergePdfs(await Promise.all(rev.ordered.map((f) => J.getDoc(store, job.id, f.n))));
+    const inputs = rc.emailInputs(rev.items, rev.ordered);
+    const greeting = pkg ? rc.greetingFrom(pkg.original) : '';
+    const built = buildRevisionEmail({ greeting, ...inputs, totalPages: pdf.pages });
+    const notes = [
+      greeting ? `Greeting copied from your package email ("${greeting}"); add any other buyer.` : 'No greeting was found in your package email; add one.',
+      'Only the items in your corrections email were checked; a new form in this delivery was not audited.',
+    ];
+    if (!address) notes.push('The property address could not be read from the revised forms.');
+    else if (!pkg) notes.push(`No sent "Seller Disclosure Package" email was found for ${address}, so this is not in the buyer thread and has no recipients.`);
+    if (built.warnings.length) notes.push(`The buyer email was not written: ${built.warnings.join('; ')}.`);
+    const note = rc.checkNoteHtml({ verdicts: rev.items, correctionsDate: job.revision.correctionsDate, extra: notes });
+    const html = ctx.signature.withSignature(note + (built.html || ''), await ctx.signature.liveSignature(gmail));
+    const pdfName = `Revised Disclosures - ${address || 'unknown address'}.pdf`;
+
+    let d;
+    if (live) {
+      if (address) {
+        const deal = await R.findDealFolder(ctx.drive, address);
+        effects.savedToDrive = await R.saveToDealFolder(ctx.drive, deal, pdfName, pdf.bytes);
+      }
+      d = await R.createRevisionDraft(gmail, {
+        pkg, html, pdfName, pdfBytes: pdf.bytes, labels: ['Buyer Disclosures', 'Edelyn'],
+        inThread: !!(pkg && built.html), to: '',
+      });
+    } else {
+      const me = String(process.env.GMAIL_IMPERSONATE_SUBJECT || process.env.GOOGLE_IMPERSONATE_SUBJECT || '').trim();
+      const labels = String(process.env.INTAKE_TRIAL_LABELS || 'Megan,Edelyn').split(',').map((x) => x.trim()).filter(Boolean);
+      d = await R.createRevisionDraft(gmail, {
+        pkg, html, pdfName, pdfBytes: pdf.bytes, labels, inThread: false, to: me, subjectPrefix: '[TRIAL] ',
+      });
+    }
+    effects.draft = d.draftId || 'created';
+    await saveEffects();
+    await J.putOut(store, job.id, 'revdraft', { draftId: d.draftId, headers: d.headers, labelled: d.labelled, pdfName, pdfPages: pdf.pages, warnings: built.warnings, notes });
+  }
+  if (live && !effects.label) { await removeLabel(ctx); effects.label = Date.now(); await saveEffects(); }
+  return finished;
+}
+
 async function removeLabel(ctx) {
   const { job, gmail } = ctx;
   if (!job.source.labelId || !gmail) return;
@@ -337,6 +448,8 @@ async function run(name, ctx) {
     case 'identify': return identify(ctx, i);
     case 'review': return review(ctx, i);
     case 'finish': return finish(ctx);
+    case 'revcheck': return revcheck(ctx);
+    case 'revdraft': return revdraft(ctx);
     default: throw new Error(`unknown step ${name}`);
   }
 }
