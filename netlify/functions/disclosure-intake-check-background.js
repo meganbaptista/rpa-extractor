@@ -2235,10 +2235,16 @@ async function renderQAPageImages(buffer, name, opts = {}) {
        * had found 7 items on 2026-10-02 found 0. The scanned pages now go
        * through the image classifier, as a wholly scanned file would.
        */
+      // A textless page INSIDE the earthquake guide booklet is the booklet's own
+      // (its blank statement, a figure). When a separate statement is in the
+      // delivery it must not reach the image classifier either; see
+      // markEqBookletStatements (2506 Westminster).
+      const eqBook = opts.skipBookletStatement ? eqStatementLayout(texts) : null;
       const scanned = texts
         .filter((t) => String(t.text || '').replace(/\s+/g, '').length < SCAN_PAGE_TEXT_MIN)
         .map((t) => t.num)
-        .filter((n) => n >= 1 && n <= pageCount && !qaNums.includes(n));
+        .filter((n) => n >= 1 && n <= pageCount && !qaNums.includes(n))
+        .filter((n) => !(eqBook && eqBook.inBooklet(n)));
       if (scanned.length) {
         const picked = await classifyQAPagesWindowed(buffer, pageCount, name, scanned);
         if (picked.length) qaNums = [...new Set([...qaNums, ...picked])].sort((x, y) => x - y);
@@ -3346,7 +3352,12 @@ async function markEqBookletStatements(docs) {
       if (texts.length > QA_REVIEW_ALL_MAX_PAGES) d._texts = texts;
       const eq = eqStatementLayout(texts);
       if (eq.standaloneStatementPages.length) standalone = true;
-      if (eq.bookletStatementPages.length) withBooklet.push(d);
+      // A booklet counts even when its statement page has no text layer. On
+      // 2506 Westminster (2026-10-21) the guide's blank statement was an image
+      // (p75 of 127), so it was never detected here, the skip never fired, and
+      // the image path reviewed the blank copy: nine false "left unanswered"
+      // flags while the seller's own copy (a separate file) was fully answered.
+      if (eq.bookletStatementPages.length || eq.runs.length) withBooklet.push(d);
     } catch (err) {
       console.warn(`[disclosure-intake] earthquake-booklet scan skipped "${d.name}": ${err.message}`);
     }
@@ -4418,7 +4429,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { renderQAPageImages, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
