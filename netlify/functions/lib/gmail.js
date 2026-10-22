@@ -257,7 +257,7 @@ function stripHtml(html) {
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-const HEADER_KEYS = ['From', 'To', 'Cc', 'Subject', 'Date', 'Reply-To', 'Message-ID', 'In-Reply-To', 'References',
+const HEADER_KEYS = ['From', 'To', 'Cc', 'Bcc', 'Subject', 'Date', 'Reply-To', 'Message-ID', 'In-Reply-To', 'References',
   // Gmail's own SPF/DKIM/DMARC verdict, read by lib/phishing-check.js.
   'Authentication-Results'];
 
@@ -551,6 +551,32 @@ async function fetchSignature() {
   return sig;
 }
 
+// ----------------------------------------------------------------------------
+// DRAFTS: find one, replace its contents (with attachments)
+// ----------------------------------------------------------------------------
+
+/** Drafts matching a Gmail search ("subject:... label:..."), newest first. */
+async function listDrafts(q, maxResults = 20) {
+  const data = await apiGet('/drafts', { q, maxResults: String(maxResults) });
+  return data.drafts || [];
+}
+
+/**
+ * Replace a draft's whole message with a raw RFC 822 one. Uses the UPLOAD
+ * endpoint, which takes messages up to 35MB: the JSON endpoint is far smaller,
+ * and a disclosure package attachment runs 10-20MB. The draft keeps its id;
+ * its message id changes, so the new one is returned for labelling.
+ */
+async function updateDraftRaw(draftId, rawMime) {
+  const headers = { ...(await authHeader()), 'Content-Type': 'message/rfc822' };
+  const url = `${GMAIL_API.replace('/gmail/v1/users', '/upload/gmail/v1/users')}/${encodeURIComponent(subject())}`
+    + `/drafts/${encodeURIComponent(draftId)}?uploadType=media`;
+  const res = await fetch(url, { method: 'PUT', headers, body: rawMime });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`gmail draft update failed (${res.status}): ${JSON.stringify(data).slice(0, 300)}`);
+  return data;
+}
+
 module.exports = {
   // auth / low-level
   getAccessToken,
@@ -569,6 +595,8 @@ module.exports = {
   findLabelledThread,
   senderNameOf,
   createDraft,
+  listDrafts,
+  updateDraftRaw,
   fetchSignature,
   getThreadLabelIds,
   // mutations
