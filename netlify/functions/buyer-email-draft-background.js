@@ -12,7 +12,9 @@
 // It never sends: Gmail drafts only, and the recipients the Zap set are kept.
 //
 // POST JSON (a background function: answers 202 at once):
-//   { key, runId, address, pdfName, extraPdfs?: [names], seller: {from,to}, avid: {from,to},
+//   { key, runId, address, pdfName, extraPdfs?: [names],
+//     guide?: [{from,to,label}]  (preferred: the plain-English page guide), or
+//     seller: {from,to}, avid: {from,to}|{pending:true}  (the Zap's blanks),
 //     reportsLink?, stillToCome?: [], labels?: ['Edelyn'], preview?: true }
 // `key` must equal meta/admin-key in the jobs store (set from a dev machine;
 // the site is at Netlify's env-variable limit, so not an env var).
@@ -25,6 +27,7 @@ const drive = require('./lib/drive');
 const { parseRequestBody } = require('./lib/parse-body');
 const { fillBuyerEmail } = require('./lib/buyer-email');
 const { buildMime } = require('./lib/mime');
+const { pdfPageCount } = require('./disclosure-intake-check-background').core;
 
 const streetOf = (address) => String(address || '').split(',')[0].trim();
 // Gmail's limit is 25MB for the whole message AFTER base64 (about x1.37).
@@ -67,10 +70,15 @@ exports.handler = async function (event) {
 
     const { draftId, msg, others } = await findDraft(b.address);
     const h = msg.headers || {};
+    const { file, folder } = await findPackagePdf(b.address, b.pdfName);
+    // The guide is checked against the FINAL PDF in the deal folder (Megan
+    // edits it after it is built), so a stale range is refused, not sent.
+    const pdf = await drive.download(file.id);
+    const totalPages = await pdfPageCount(pdf);
     const filled = fillBuyerEmail(msg.bodyHtml, {
+      guide: b.guide, totalPages,
       seller: b.seller, avid: b.avid, stillToCome: b.stillToCome || [], reportsLink: b.reportsLink || '',
     });
-    const { file, folder } = await findPackagePdf(b.address, b.pdfName);
     // Megan, 2026-10-22: the full NHD report, the Prelim and the vendor wildfire
     // report never go INSIDE the package ("pushing a 100 page PDF to a client is
     // asinine"); they ride along as their own PDFs.
@@ -79,7 +87,7 @@ exports.handler = async function (event) {
     const totalBytes = [file, ...extras].reduce((t, f) => t + Number(f.size || 0), 0);
     const summary = {
       draftId, subject: h.subject, to: h.to, cc: h.cc || '', otherMatchingDrafts: others,
-      pdf: `${folder.name} / ${file.name}`, pdfBytes: Number(file.size || 0),
+      pdf: `${folder.name} / ${file.name}`, pdfBytes: Number(file.size || 0), pdfPages: totalPages,
       extraPdfs: extras.map((f) => `${f.name} (${Math.round(Number(f.size || 0) / 104857.6) / 10}MB)`),
       estimatedMessageMB: Math.round((totalBytes * 1.37) / 104857.6) / 10,
       filled: filled.filled, warnings: filled.warnings, preview: !!b.preview,
@@ -95,7 +103,8 @@ exports.handler = async function (event) {
     }
 
     const attachments = [];
-    for (const f of [file, ...extras]) attachments.push({ filename: f.name, contentType: 'application/pdf', data: await drive.download(f.id) });
+    attachments.push({ filename: file.name, contentType: 'application/pdf', data: pdf });
+    for (const f of extras) attachments.push({ filename: f.name, contentType: 'application/pdf', data: await drive.download(f.id) });
     const raw = buildMime({
       headers: { To: h.to, Cc: h.cc, Bcc: h.bcc, Subject: h.subject },
       html: filled.html,

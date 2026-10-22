@@ -75,5 +75,34 @@ ok('wrapped draft: AVID line removed, no warnings', [/Agent Visual/.test(rw.html
 const again = fillBuyerEmail(rw.html, { seller: { from: 1, to: 8 } });
 ok('re-run corrects an already-filled seller range', [/Pages 1 - 8 /.test(again.html), /Pages 1 - 17/.test(again.html)], [true, false]);
 
+// --- page guide mode (Megan, 2026-10-22) --------------------------------------------
+const { guideProblems } = require('../netlify/functions/lib/buyer-email.js');
+const DR_GUIDE = [
+  { from: 1, to: 8, label: "The seller's disclosures about the condition of the property" },
+  { from: 9, to: 17, label: 'Property details and additional seller disclosures (square footage, property profile, MLS listing, trust advisory, water heater and smoke alarms, plumbing fixtures)' },
+  { from: 18, to: 43, label: 'Standard California Association of Realtors advisories and brokerage disclosures' },
+  { from: 44, to: 49, label: "Additional documents provided by the seller's agent" },
+];
+const DR_TODO = ['the natural hazard disclosure report', "the listing agent's visual inspection", 'a few updated answers'];
+for (const [name, draft] of [['Donald Reed layout', WRAPPED], ['Star Catcher layout', REAL], ['div layout', TEMPLATE]]) {
+  const g = fillBuyerEmail(draft, { guide: DR_GUIDE, totalPages: 49, stillToCome: DR_TODO });
+  const t = text(g.html);
+  ok(`${name}: guide written`, /Here is how the package is organized: Pages 1 - 8: The seller's disclosures about the condition of the property Pages 9 - 17:/.test(t), true);
+  ok(`${name}: placeholders and old lines gone`, /Pages 1 - X|Pages X - X|remainder of the PDF|Agent Visual Inspection/.test(g.html), false);
+  ok(`${name}: still-to-come in plain English after the guide`, /Pages 44 - 49: Additional documents provided by the seller's agent Still to come from the seller's side: the natural hazard disclosure report, the listing agent's visual inspection and a few updated answers\./.test(t), true);
+  ok(`${name}: what follows is untouched`, /I am also including/.test(g.html) && g.html.indexOf('Still to come') < g.html.indexOf('I am also including'), true);
+  ok(`${name}: no warnings`, g.warnings, []);
+}
+ok('greeting kept', /^Hello Armando,/.test(fillBuyerEmail(WRAPPED, { guide: DR_GUIDE, totalPages: 49 }).html.replace(/<div dir="ltr">/, '')), true);
+
+// The guards: refuse, change nothing.
+const codeLabel = fillBuyerEmail(WRAPPED, { guide: [{ from: 1, to: 8, label: 'TDS and SPQ' }, { from: 9, to: 49, label: 'Advisories' }], totalPages: 49 });
+ok('a form code in a label is refused', [codeLabel.html === WRAPPED, /form code TDS/.test(codeLabel.warnings.join(' '))], [true, true]);
+const codeTodo = fillBuyerEmail(WRAPPED, { guide: DR_GUIDE, totalPages: 49, stillToCome: ["the listing agent's AVID"] });
+ok('a form code in still-to-come is refused', /form code AVID/.test(codeTodo.warnings.join(' ')), true);
+ok('a gap is refused', /missing from the guide/.test(guideProblems([{ from: 1, to: 8, label: 'a' }, { from: 10, to: 49, label: 'b' }], 49).join(' ')), true);
+ok('a guide that does not reach the last page is refused (stale ranges)', /the PDF has 70 pages/.test(guideProblems(DR_GUIDE, 70).join(' ')), true);
+ok('the Donald Reed guide passes', guideProblems(DR_GUIDE, 49, DR_TODO), []);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall buyer-email checks pass');
 process.exit(failed ? 1 : 0);
