@@ -50,7 +50,31 @@ function fillBuyerEmail(html, { seller, avid, stillToCome = [], reportsLink = ''
     warnings.push('the "Pages 1 - X" placeholder was not found; the seller page range was not filled in');
   }
 
-  if (avid && RX_AVID_RANGE.test(out)) {
+  /**
+   * NO AVID YET (12273 Donald Reed, 2026-10-22: "we dont have our clients avid
+   * yet"; the listing side's had not arrived either). avid: { pending: true }
+   * removes the whole "Pages X - X is the Agent Visual Inspection ..." line
+   * instead of leaving a placeholder; the caller lists the AVIDs as still to come.
+   */
+  if (avid && avid.pending) {
+    const m = RX_AVID_RANGE.exec(out);
+    if (m) {
+      const spanStart = out.lastIndexOf('<span', m.index);
+      const start = spanStart >= 0 && m.index - spanStart < 120 ? spanStart : m.index;
+      const rest = out.slice(m.index);
+      const br = rest.search(/<br\s*\/?>(?:\s*<\/br>)?(?:\s*<br\s*\/?>(?:\s*<\/br>)?)?\s*/i);
+      const para = rest.search(/<\/(p|div)>/i);
+      let end;
+      if (br >= 0 && (para < 0 || br < para)) {
+        const tail = rest.slice(br).match(/^(?:\s*<br\s*\/?>(?:\s*<\/br>)?)+\s*/i);
+        end = m.index + br + (tail ? tail[0].length : 0);
+      } else if (para >= 0) {
+        end = m.index + para + rest.slice(para).match(/^<\/(p|div)>/i)[0].length;
+      }
+      if (end) { out = out.slice(0, start) + out.slice(end); filled.avid = 'removed'; }
+      else warnings.push('could not find the end of the AVID line; it was left as is');
+    }
+  } else if (avid && RX_AVID_RANGE.test(out)) {
     out = out.replace(RX_AVID_RANGE, esc(range(avid)));
     filled.avid = true;
   } else if (avid) {

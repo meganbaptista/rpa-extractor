@@ -55,5 +55,13 @@ ok('real draft: reports link after the remainder sentence', /standard disclosure
 ok('real draft: no warnings', rr.warnings, []);
 ok('real draft: booklet list still follows', rr.html.indexOf('CLICK HERE') < rr.html.indexOf('I am also including'), true);
 
+const rp = fillBuyerEmail(REAL, { seller: { from: 1, to: 17 }, avid: { pending: true }, stillToCome: ["the listing agent's AVID", 'a few updated answers'] });
+ok('pending AVID: the AVID line is removed', /Agent Visual Inspection|Pages X/.test(rp.html), false);
+ok('pending AVID: seller range still filled', /Pages 1 - 17/.test(rp.html), true);
+ok('pending AVID: remainder line still there, still-to-come after it', rp.html.indexOf('remainder') < rp.html.indexOf('Still to come'), true);
+ok('pending AVID: no warnings', rp.warnings, []);
+const tp = fillBuyerEmail(TEMPLATE, { seller: { from: 1, to: 17 }, avid: { pending: true } });
+ok('pending AVID (div layout): line removed', /Agent Visual Inspection|Pages X/.test(tp.html), false);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall buyer-email checks pass');
 process.exit(failed ? 1 : 0);
