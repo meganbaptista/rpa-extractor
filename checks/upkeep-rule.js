@@ -6,7 +6,7 @@
 //
 // The reasons below are the review's own wording on real packages, 2026-10-21.
 
-const { isUpkeepNotProblem } = require('../netlify/functions/disclosure-intake-check-background.js')._internal;
+const { isUpkeepNotProblem, isSpq19B } = require('../netlify/functions/disclosure-intake-check-background.js')._internal;
 
 let failed = 0;
 function ok(label, got, want) {
@@ -44,6 +44,12 @@ ok('a TDS item', isUpkeepNotProblem({ ...flag('13E', 'pool equipment replaced'),
 ok('a different issue type', isUpkeepNotProblem({ ...flag('13E', 'pool equipment replaced'), issue: 'yes_no_explanation' }), false);
 ok('should be No, not Yes', isUpkeepNotProblem(flag('13E', 'pool equipment replaced', { should_be: 'No' })), false);
 ok('no upkeep words at all', isUpkeepNotProblem(flag('13E', 'the TDS lists the pool as present')), false);
+
+// --- SPQ 19B is never chased (Megan, 10423 Oletha) -------------------------------
+ok('19B "update it to Yes" is dropped', isSpq19B(flag('19B', 'Text Overflow Addendum No. 1 through No. 5 attached to the SPQ is in the package')), true);
+ok('19 B with a space is dropped', isSpq19B(flag('19 B', 'x')), true);
+ok('19A is not', isSpq19B(flag('19A', 'x')), false);
+ok('TDS 19B is not', isSpq19B({ ...flag('19B', 'x'), form: 'TDS' }), false);
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall upkeep-rule checks pass');
 process.exit(failed ? 1 : 0);

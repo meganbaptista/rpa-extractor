@@ -2331,6 +2331,62 @@ async function renderQAPageImages(buffer, name, opts = {}) {
   };
 }
 
+/**
+ * A FORM AND ITS OVERFLOW PAGES ARE NEVER SPLIT ACROSS REVIEW REQUESTS.
+ *
+ * 10423 Oletha (2026-10-22, a Compass Glide packet): batching packed pages by
+ * size alone and cut between the TDS (pp81-83) and its two Text Overflow
+ * Addenda (pp84-85). The TDS was reviewed without its explanations, and every
+ * "See overflow paragraph 1/2" became "the package has no TDS overflow
+ * addendum" - five false chases. So pages are grouped into UNITS first: a
+ * form's own pages (same document, consecutive) plus any overflow addendum
+ * pages that directly follow it. Batches are cut between units; a unit is
+ * only split when it alone is over the limit. Scanned pages are still batched
+ * apart from digital ones (see SCAN_PAGE_TEXT_MIN).
+ */
+function reviewUnits(images) {
+  const docOf = (img) => String(img.name || '').replace(/\s+qa-p\d+$/, '');
+  const numOf = (img) => Number((String(img.name || '').match(/qa-p(\d+)$/) || [])[1] || 0);
+  const units = [];
+  let cur = null;
+  for (const img of images) {
+    const t = String(img.text || '');
+    const doc = docOf(img);
+    const n = numOf(img);
+    const adjacent = cur && cur.doc === doc && n === cur.last + 1;
+    const span = pageSpanOf(t);
+    const startsForm = !isOverflowAddendum(t) && ((span && span.m === 1) || hasQaTitle(t));
+    if (!adjacent || startsForm) {
+      cur = { doc, last: n, images: [img] };
+      units.push(cur);
+    } else {
+      cur.images.push(img);
+      cur.last = n;
+    }
+  }
+  return units.map((u) => u.images);
+}
+
+function packReviewBatches(qaImages) {
+  const batches = [];
+  for (const group of [qaImages.filter((img) => !img.scanned), qaImages.filter((img) => img.scanned)]) {
+    let cur = [], curSize = 0;
+    const flush = () => { if (cur.length) batches.push(cur); cur = []; curSize = 0; };
+    for (const unit of reviewUnits(group)) {
+      const unitSize = unit.reduce((t, img) => t + (img.base64 || '').length, 0);
+      if (cur.length && (cur.length + unit.length > QA_MAX_BATCH_IMAGES || curSize + unitSize > QA_MAX_BATCH_B64)) flush();
+      for (const img of unit) {
+        const sz = (img.base64 || '').length;
+        // Only a unit bigger than a whole batch is ever split.
+        if (cur.length && (cur.length >= QA_MAX_BATCH_IMAGES || curSize + sz > QA_MAX_BATCH_B64)) flush();
+        cur.push(img); curSize += sz;
+      }
+    }
+    flush();
+  }
+  return batches;
+}
+
 // Parse the answer-review JSON into the { responseFlags, keyAnswers } shape callers expect.
 function parseAnswerReview(raw, extraEntries = []) {
   const parsed = parseJson(raw);
@@ -2407,17 +2463,49 @@ function citeKey(form, x) {
 /** The line numbers a TDS citation names: "Line 4 & 5" -> [4, 5]. */
 const citeNumbers = (x) => (citeClean(x).match(/\d+/g) || []).map(Number);
 
+/**
+ * A TDS ENTRY CAN NAME ITS OWN SECTION. 10423 Oletha (2026-10-22, a Glide
+ * packet): the overflow addendum numbers its entries "1) II.B. Explanation of
+ * Defects" and "2) II.C.". citeKey files a bare TDS number under Section C, so
+ * entry 1 became "C", the four Section B defects found no "B" entry, and the
+ * explanation the review HAD found was downgraded and chased. The section a
+ * TDS entry names in its own label or text ("II.B", "II B", "Section B") wins
+ * over the bare-number default.
+ */
+const RX_TDS_SECTION = /\bII\s*\.?\s*\(?([ABC])\)?(?=[\s.:)\-]|$)|\bsection\s+(?:II\s*\.?\s*)?([ABC])\b/i;
+const labelOf = (x) => citeClean(x).replace(/[^A-Za-z0-9]+/g, '').toUpperCase();
+function entryKey(e) {
+  const form = String(e.form || '').toUpperCase();
+  if (form === 'TDS') {
+    const m = `${e.item || ''} ${String(e.text || '').slice(0, 60)}`.match(RX_TDS_SECTION);
+    if (m && /^\d+\)?\.?$|^\d+\)?\s*II/i.test(String(e.item || '').trim())) return (m[1] || m[2]).toUpperCase();
+    if (m && !/^\d/.test(String(e.item || '').trim())) return (m[1] || m[2]).toUpperCase();
+  }
+  return citeKey(e.form, e.item);
+}
+
 function validateAddendumFlags(flags, entries) {
   const byForm = new Map();
+  // The model cites an entry by its printed label ("1"); resolve that label to
+  // the section the entry itself names.
+  const byLabel = new Map();
   for (const e of entries) {
-    const key = `${e.form}|${citeKey(e.form, e.item)}`;
+    const k = entryKey(e);
+    const key = `${e.form}|${k}`;
     if (!byForm.has(key)) byForm.set(key, e);
+    const label = `${String(e.form || '').toUpperCase()}|${labelOf(e.item)}`;
+    if (!byLabel.has(label)) byLabel.set(label, k);
   }
   return flags.map((f) => {
     if (f.issue !== 'explanation_on_addendum') return f;
     const form = String(f.form || '').trim().toUpperCase();
     const wanted = addendumKey(f.item);
-    const cited = f.addendum_item ? citeKey(form, f.addendum_item) : '';
+    const cited = f.addendum_item
+      ? (byLabel.get(`${form}|${labelOf(f.addendum_item)}`)
+        || (form === 'TDS' && (String(f.addendum_item).match(RX_TDS_SECTION) || []).slice(1).find(Boolean)
+          ? String(f.addendum_item).match(RX_TDS_SECTION).slice(1).find(Boolean).toUpperCase() : '')
+        || citeKey(form, f.addendum_item))
+      : '';
     const entry = byForm.get(`${form}|${wanted}`);
     // On the TDS, a citation by line number must name THIS line: "Line 4 & 5"
     // explains C4 and C5, not C9.
@@ -2554,18 +2642,7 @@ async function reviewAnswers(docs) {
   // Batch the images under the request size/count cap, SCANNED PAGES APART from
   // digital ones, so every flag can be traced to whether it was read off a scan
   // (flags carry a form and an item, never a page). See SCAN_PAGE_TEXT_MIN.
-  const batches = [];
-  for (const group of [qaImages.filter((img) => !img.scanned), qaImages.filter((img) => img.scanned)]) {
-    let cur = [], curSize = 0;
-    for (const img of group) {
-      const sz = (img.base64 || '').length;
-      if (cur.length && (cur.length >= QA_MAX_BATCH_IMAGES || curSize + sz > QA_MAX_BATCH_B64)) {
-        batches.push(cur); cur = []; curSize = 0;
-      }
-      cur.push(img); curSize += sz;
-    }
-    if (cur.length) batches.push(cur);
-  }
+  const batches = packReviewBatches(qaImages);
 
   /**
    * A SCANNED FORM IS REVIEWED WITH THE TYPED EXPLANATIONS THAT ANSWER IT.
@@ -3117,6 +3194,17 @@ function isMirrorDefectMismatch(f) {
  * SENDING, never dropped: Megan sees it and decides, the agent never does.
  * A reason that names an actual problem (leak, termites, damage...) is chased.
  */
+/**
+ * SPQ 19B IS NEVER CHASED. It is the "(IF CHECKED) ADDITIONAL COMMENTS: the
+ * attached addendum contains an explanation" box. When the addenda are in the
+ * package the seller has done the substance, and asking them to tick the box
+ * is noise. 10423 Oletha (2026-10-22): "SPQ 19B is marked blank, but Text
+ * Overflow Addendum No. 1 through No. 5 ... is in the package. Could you update
+ * it to Yes?" - Megan: the incorrect note. 2506 Westminster raised it too.
+ */
+const isSpq19B = (f) => !!f && /^spq$/i.test(String(f.form || '').trim())
+  && /^19\s*\(?\s*B\s*\)?$/i.test(String(f.item || '').trim());
+
 const PROBLEM_QUESTIONS = /^(8A|11B|11C|11D|13A|13E)$/i;
 const RX_UPKEEP = /\b(pest\s*control|exterminat\w*\s+service|service[ds]?|servicing|maintenance|maintained|routine|regular(ly)?|monthly|quarterly|weekly|bi-?weekly|annual(ly)?|preventi\w+|replaced|replacement|redone|re-?done|upgraded?|upgrades|new\b|installed|remodel\w*|renovat\w*|updated)\b/i;
 const RX_ACTUAL_PROBLEM = /\b(leak\w*|crack\w*|broken|break|fail\w*|damag\w*|defect\w*|infest\w*|termite\w*|rodent\w*|rats?|mice|mouse|roach\w*|bed\s*bugs?|mold|mildew|rot|dry\s*rot|flood\w*|malfunction\w*|not\s+working|stopped\s+working|backed?\s+up|clog\w*|settl\w*|problem\w*|issues?)\b/i;
@@ -4186,12 +4274,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // produced a different running order every run. Sorting HERE, before the
   // revise/confirm split, means the email, the Process Street comment and
   // response_flags_text all share one order.
+  const box19B = allFlags.filter(isSpq19B);
+  if (box19B.length) console.log(`[disclosure-intake] dropped ${box19B.length} SPQ 19B flag(s): the box only says an addendum is attached`);
   const detailOnly = allFlags.filter(wantsDetailOnly);
   if (detailOnly.length) {
     console.log(`[disclosure-intake] dropped ${detailOnly.length} "explanation could say more" flag(s), the `
       + `explanation answers the question: ${detailOnly.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
   }
-  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f) && !isFactOnlyYes(f) && !isMirrorDefectMismatch(f)
+  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f) && !isFactOnlyYes(f) && !isMirrorDefectMismatch(f) && !isSpq19B(f)
     && f.issue !== 'explanation_on_addendum'
     && f.issue !== 'duplicate_form_copy'
     && f.issue !== 'cited_attachment_unseen'
@@ -4517,7 +4607,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { validateAddendumFlags, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
