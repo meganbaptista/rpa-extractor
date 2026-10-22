@@ -98,6 +98,27 @@ const sendFiles = files.map((f) => ({ ...f, base64: 'AA==' }));
   const unsigned = await rc.checkRevisions({ items, files: sendFiles, callModel: async () => JSON.stringify(unsignedRead()) });
   ok('a fix on a form not every seller signed -> check this one', [unsigned.items[1].status, /not every seller has signed/.test(unsigned.items[1].why)], ['unclear', true]);
   ok('signed fixes stay fixed', [unsigned.items[0].status, unsigned.items[2].status], ['fixed', 'fixed']);
+
+  // 1222 N Kings Rd #8: the reply held the amendment plus buyer-side forms.
+  const kFiles = [
+    { n: 0, name: '[APD] Amendment to Prior Disclosure.pdf', pages: 1, forms: ['Amendment to Prior Disclosure'] },
+    { n: 1, name: '[RFR] Receipt for Reports.pdf', pages: 2, forms: ['Receipt for Reports'] },
+    { n: 2, name: "[BIE] Buyer's Investigation Elections.pdf", pages: 1, forms: ["Buyer's Investigation Elections"] },
+  ];
+  const kOrdered = rc.packageOrder(kFiles);
+  const kVerdicts = [{ item: '5B', status: 'fixed', n: 0, page: 1, mergedPage: rc.mergedPage(kOrdered, 0, 1), buyerLine: 'The seller changed their answer to Yes.' }];
+  const plan = rc.attachmentPlan(kVerdicts, kOrdered);
+  ok('only the file with the fix is attached', plan.attached.map((f) => f.n), [0]);
+  ok('the rest are listed for Megan', plan.left.map((f) => f.n).sort(), [1, 2]);
+  ok('pages renumbered for the attachment', plan.verdicts[0].mergedPage, 1);
+  const sc8Plan = rc.attachmentPlan(same.items, same.ordered);
+  ok('Star Catcher: all three files carry a fix, pages unchanged', [sc8Plan.attached.length, sc8Plan.verdicts.map((v) => v.mergedPage)], [3, [1, 7, 11]]);
+  ok('nothing fixed -> everything attached for Megan to look at', rc.attachmentPlan([{ item: 'x', status: 'open', n: null, mergedPage: null }], kOrdered).attached.length, 3);
+  const amend = buildRevisionEmail({ greeting: 'Hello Dana,', changes: [{ page: 1, label: 'The seller changed their answer to Yes.' }], forms: ['Amendment to Prior Disclosure'], totalPages: 1 });
+  ok('amendment closing (her wording)', /This amendment updates the seller's disclosures in the package I sent earlier\./.test(amend.html), true);
+  ok('superseded banner sits above the items', /CHECK BEFORE SENDING[\s\S]*SUPERSEDED[\s\S]*asked for/.test(rc.checkNoteHtml({ verdicts: kVerdicts, banner: 'SUPERSEDED: a later reply arrived' })), true);
+  const two = buildRevisionEmail({ greeting: 'Hello Dana,', changes: [{ page: 1, label: 'The seller changed 5B to Yes.' }, { page: 1, label: 'The seller checked 19B.' }], forms: ['Amendment to Prior Disclosure'], totalPages: 1 });
+  ok('two changes on one page -> one "Pages 1:" line', (two.html.match(/Pages 1:/g) || []).length, 1);
   const note = rc.checkNoteHtml({ verdicts: differ.items, correctionsDate: 'Thu, 22 Oct 2026 10:27', extra: ['Greeting copied from your package email ("Hello Omeed,"); add any other buyer.'] });
   ok('the red note lists every item and how it was judged',
     [/FIXED \(page 1 of the attachment\)/.test(note), /CHECK THIS ONE/.test(note), /two reads disagreed/.test(note), /delete through here/.test(note)], [true, true, true, true]);

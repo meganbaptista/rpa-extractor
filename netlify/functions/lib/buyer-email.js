@@ -240,15 +240,38 @@ function buildRevisionEmail({ greeting, changes, forms, totalPages, stillToCome 
   const parts = [
     `<div>${esc(String(greeting).trim())}</div><br>`,
     '<div>The seller has sent over a few updates to their disclosures. The revised pages are attached:</div>',
-    changes.slice().sort((x, y) => x.page - y.page).map(line).join(''),
+    // Two changes on the same page read as one line (1222 N Kings Rd #8: both
+    // fixes on the one-page amendment gave "Pages 1:" twice).
+    mergeSamePage(changes).map(line).join(''),
     '<br>',
   ];
   if (todo.length) {
     parts.push(`<div><b>Still to come from the seller's side:</b> ${esc(joinList(todo))}. `
       + 'I will send these over as soon as they arrive.</div><br>');
   }
-  parts.push(`<div>These replace the matching ${esc(serialList(forms))} pages in the package I sent earlier.</div><br>`);
+  parts.push(`<div>${esc(closingLine(forms))}</div><br>`);
   return { html: parts.join(''), warnings: [] };
+}
+
+function mergeSamePage(changes) {
+  const byPage = new Map();
+  for (const c of changes.slice().sort((x, y) => x.page - y.page)) {
+    const t = String(c.label).trim();
+    byPage.set(c.page, byPage.has(c.page) ? `${byPage.get(c.page)} ${t}` : t);
+  }
+  return [...byPage].map(([page, label]) => ({ page, label }));
+}
+
+// An AMENDMENT adds to the questionnaire rather than replacing its pages
+// (Megan, 2026-10-22, 1222 N Kings Rd #8: "This amendment updates the seller's
+// disclosures in the package I sent earlier.").
+function closingLine(forms) {
+  const amend = forms.filter((f) => /amendment/i.test(f));
+  const other = forms.filter((f) => !/amendment/i.test(f));
+  if (!amend.length) return `These replace the matching ${serialList(other)} pages in the package I sent earlier.`;
+  const a = amend.length === 1 ? 'This amendment updates' : 'These amendments update';
+  if (!other.length) return `${a} the seller's disclosures in the package I sent earlier.`;
+  return `These replace the matching ${serialList(other)} pages in the package I sent earlier, and the ${amend.length === 1 ? 'amendment updates' : 'amendments update'} the seller's disclosures.`;
 }
 
 // "A, B, and C" (her closing line keeps the serial comma).

@@ -201,7 +201,7 @@ async function checkRevisions({ items, files, callModel }) {
   const verdicts = agree(items, readA, readB).map((v) => {
     const doc = v.file ? files[v.file - 1] : null;
     const page = doc ? mergedPage(ordered, doc.n, v.page) : null;
-    const out = { ...v, mergedPage: page };
+    const out = { ...v, n: doc ? doc.n : null, mergedPage: page };
     // A page the model gave that is not in the file cannot be relied on.
     if (v.status === 'fixed' && !page) return { ...out, status: 'unclear', why: `page ${v.page} of file ${v.file} does not exist` };
     // A buyer line with a form code is useless to the buyer; send it to Megan.
@@ -212,6 +212,22 @@ async function checkRevisions({ items, files, callModel }) {
   });
   const address = String(readA.property_address || readB.property_address || '').trim();
   return { items: verdicts, ordered, address, reads: [readA, readB] };
+}
+
+/**
+ * ONLY THE FILES THAT CARRY A FIX go to the buyer (Megan, 2026-10-22): a reply
+ * can also hold buyer-side forms (RFR, investigation elections) that are not
+ * seller revisions. Returns the attached files in package order, the verdicts
+ * with their pages renumbered for that attachment, and what was left out.
+ * Nothing fixed at all -> everything is attached (for Megan to look at).
+ */
+function attachmentPlan(verdicts, ordered) {
+  const used = new Set(verdicts.filter((v) => v.n != null && v.mergedPage).map((v) => v.n));
+  const attached = used.size ? ordered.filter((f) => used.has(f.n)) : ordered;
+  const left = ordered.filter((f) => !attached.includes(f));
+  // v.page is the page within its own file; renumber against the attachment.
+  const renumbered = verdicts.map((v) => (v.n != null && v.mergedPage ? { ...v, mergedPage: mergedPage(attached, v.n, v.page) } : v));
+  return { attached, left, verdicts: renumbered };
 }
 
 /**
@@ -236,7 +252,7 @@ function emailInputs(verdicts, ordered) {
 const escHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** The red "CHECK BEFORE SENDING" note at the top of the draft. */
-function checkNoteHtml({ verdicts, correctionsDate, greetingNote, extra = [] }) {
+function checkNoteHtml({ verdicts, correctionsDate, greetingNote, extra = [], banner = '' }) {
   const line = (v) => {
     const where = v.mergedPage ? ` (page ${v.mergedPage} of the attachment)` : '';
     if (v.status === 'fixed') return `<li>FIXED${where}: ${escHtml(v.item)}<br><i>Now reads: ${escHtml(v.evidence)}</i></li>`;
@@ -245,6 +261,7 @@ function checkNoteHtml({ verdicts, correctionsDate, greetingNote, extra = [] }) 
   };
   return '<div style="color:#c62828">'
     + '<p style="margin:0 0 6px 0"><strong>CHECK BEFORE SENDING (delete from here to the line below)</strong></p>'
+    + (banner ? `<p style="margin:0 0 6px 0;font-size:16px"><strong>${escHtml(banner)}</strong></p>` : '')
     + `<p style="margin:0 0 6px 0">Your corrections email${correctionsDate ? ` (${escHtml(correctionsDate)})` : ''} asked for ${verdicts.length} item(s):</p>`
     + `<ul style="margin:0 0 6px 0;padding-left:22px">${verdicts.map(line).join('')}</ul>`
     + [greetingNote, ...extra].filter(Boolean).map((t) => `<p style="margin:0 0 6px 0">${escHtml(t)}</p>`).join('')
@@ -252,6 +269,6 @@ function checkNoteHtml({ verdicts, correctionsDate, greetingNote, extra = [] }) 
 }
 
 module.exports = {
-  correctionItems, findCorrectionsEmail, looksLikeCorrections, greetingFrom, formRank, packageOrder, mergedPage,
+  correctionItems, findCorrectionsEmail, looksLikeCorrections, attachmentPlan, greetingFrom, formRank, packageOrder, mergedPage,
   agree, checkRevisions, emailInputs, checkNoteHtml, PROMPT,
 };

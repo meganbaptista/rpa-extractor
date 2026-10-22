@@ -392,21 +392,40 @@ async function revdraft(ctx) {
 
   if (!effects.draft) {
     const pkg = address ? await R.findSentPackage(gmail, address) : null;
-    const pdf = await R.mergePdfs(await Promise.all(rev.ordered.map((f) => J.getDoc(store, job.id, f.n))), {
-      render: ctx.core.renderPagesAsImages, pageCount: ctx.core.pdfPageCount, names: rev.ordered.map((f) => f.name),
+    // Only the files that carry a fix go to the buyer (Megan, 2026-10-22).
+    const plan = rc.attachmentPlan(rev.items, rev.ordered);
+    const pdf = await R.mergePdfs(await Promise.all(plan.attached.map((f) => J.getDoc(store, job.id, f.n))), {
+      render: ctx.core.renderPagesAsImages, pageCount: ctx.core.pdfPageCount, names: plan.attached.map((f) => f.name),
     });
-    const inputs = rc.emailInputs(rev.items, rev.ordered);
+    const inputs = rc.emailInputs(plan.verdicts, plan.attached);
     const greeting = pkg ? rc.greetingFrom(pkg.original) : '';
     const built = buildRevisionEmail({ greeting, ...inputs, totalPages: pdf.pages });
-    const notes = [
-      greeting ? `Greeting copied from your package email ("${greeting}").` : 'No greeting was found in your package email; add one.',
-      'Only the items in your corrections email were checked; a new form in this delivery was not audited.',
-    ];
+    const notes = [];
+    let banner = '';
+    // Several replies with revisions in one thread (1222 N Kings Rd #8: a 3:17
+    // reply with one seller's signature, a 3:39 reply signed by both). Megan:
+    // the older draft says it is superseded; a newer one says what it replaces.
+    try {
+      const sentAt = Number(job.source.receivedAt || 0);
+      const deliveries = (await gmail.getThreadMessages(job.source.threadId))
+        .filter((m) => !(m.labelIds || []).includes('SENT') && m.id !== job.source.messageId
+          && Number(m.internalDate) > Date.parse(job.revision.correctionsDate || 0) && (m.attachments || []).some(isPdfOrZip));
+      const when = (m) => new Date(Number(m.internalDate)).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const later = deliveries.filter((m) => Number(m.internalDate) > sentAt);
+      const earlier = deliveries.filter((m) => Number(m.internalDate) < sentAt);
+      if (later.length) banner = (`SUPERSEDED: a later reply with revisions arrived (${later.map(when).join(', ')}). Use the draft for that one, not this.`);
+      else if (earlier.length) notes.push(`This replaces the draft for the earlier reply (${earlier.map(when).join(', ')}).`);
+    } catch (err) {
+      ctx.log(`could not compare with other replies in the thread: ${err.message}`);
+    }
+    notes.push(greeting ? `Greeting copied from your package email ("${greeting}").` : 'No greeting was found in your package email; add one.');
+    notes.push('Only the items in your corrections email were checked; a new form in this delivery was not audited.');
+    if (plan.left.length) notes.push(`Not attached (no fix in them): ${plan.left.map((f) => f.name).join(', ')}.`);
     if (pdf.rebuilt.length) notes.push(`Damaged file(s) rebuilt as page images so they could be attached: ${pdf.rebuilt.join(', ')}. Check they read clearly.`);
     if (!address) notes.push('The property address could not be read from the revised forms.');
     else if (!pkg) notes.push(`No sent "Seller Disclosure Package" email was found for ${address}, so this is not in the buyer thread and has no recipients.`);
     if (built.warnings.length) notes.push(`The buyer email was not written: ${built.warnings.join('; ')}.`);
-    const note = rc.checkNoteHtml({ verdicts: rev.items, correctionsDate: job.revision.correctionsDate, extra: notes });
+    const note = rc.checkNoteHtml({ verdicts: plan.verdicts, correctionsDate: job.revision.correctionsDate, extra: notes, banner });
     const html = ctx.signature.withSignature(note + (built.html || ''), await ctx.signature.liveSignature(gmail));
     const pdfName = `Revised Disclosures - ${address || 'unknown address'}.pdf`;
 
