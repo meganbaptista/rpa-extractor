@@ -90,7 +90,7 @@ const sendFiles = files.map((f) => ({ ...f, base64: 'AA==' }));
   ok('forms for the closing, package order', inputs.forms, ['Transfer Disclosure Statement', 'Seller Property Questionnaire', 'Solar Advisory']);
   const email = buildRevisionEmail({ greeting: 'Hello Omeed,', ...inputs, totalPages: 11 });
   ok('the buyer email builds, every item accounted for', email.warnings, []);
-  ok('it says what is still to come', /Still to come from the seller's side:<\/b> an explanation of what the solar system powers\./.test(email.html), true);
+  ok('it says what is still to come', /Still to come from the seller:<\/b><ul><li>An explanation of what the solar system powers<\/li><\/ul>/.test(email.html), true);
 
 
   // 1222 N Kings Rd #8: the fix is there but a seller has not signed.

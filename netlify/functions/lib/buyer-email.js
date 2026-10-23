@@ -103,9 +103,11 @@ function fillWithGuide(html, { guide, totalPages, stillToCome = [], reportsLink 
   }
 
   const items = guide.map((g) => `<li><b>${esc(range(g))}:</b> ${esc(g.label)}</li>`).join('');
-  const parts = [`<b>Here is how the package is organized:</b><ul>${items}</ul>`];
+  // OPTION A (Megan, 2026-10-23: "lets do option a moving forward"): short
+  // labels, and what is still to come as its own list, so it scans at a glance.
+  const parts = [`<b>What's in the package:</b><ul>${items}</ul>`];
   const todo = (stillToCome || []).map((x) => String(x || '').trim()).filter(Boolean);
-  if (todo.length) parts.push(`<b>Still to come from the seller's side:</b> ${esc(joinList(todo))}. I will send these over as soon as they arrive.`);
+  if (todo.length) parts.push(stillToComeList(todo));
   if (reportsLink) parts.push(`<a href="${esc(reportsLink)}">CLICK HERE FOR SELLER REPORTS</a>`);
   const block = brLayout ? parts.join('<br><br>') : parts.map((x) => `<div>${x}</div><br>`).join('');
   return { html: out.slice(0, start) + block + out.slice(end), filled: { guide: true }, warnings: [] };
@@ -202,6 +204,13 @@ function fillBuyerEmail(html, opts = {}) {
   return { html: out, filled, warnings };
 }
 
+/** "Still to come from the seller:" as a bulleted list, each item capitalised (Option A). */
+function stillToComeList(todo) {
+  const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
+  return `<b>Still to come from the seller:</b><ul>${todo.map((x) => `<li>${esc(cap(x))}</li>`).join('')}</ul>`
+    + "I'll send these over as soon as they arrive.";
+}
+
 function joinList(items) {
   if (items.length <= 1) return items.join('');
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
@@ -266,8 +275,7 @@ function buildRevisionEmail({ greeting, changes, forms, totalPages, stillToCome 
     '<br>',
   ];
   if (todo.length) {
-    parts.push(`<div><b>Still to come from the seller's side:</b> ${esc(joinList(todo))}. `
-      + 'I will send these over as soon as they arrive.</div><br>');
+    parts.push(`<div>${stillToComeList(todo)}</div><br>`);
   }
   parts.push(`<div>${esc(closingLine(forms))}</div><br>`);
   return { html: parts.join(''), warnings: [] };

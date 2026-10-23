@@ -87,9 +87,9 @@ const DR_TODO = ['the natural hazard disclosure report', "the listing agent's vi
 for (const [name, draft] of [['Donald Reed layout', WRAPPED], ['Star Catcher layout', REAL], ['div layout', TEMPLATE]]) {
   const g = fillBuyerEmail(draft, { guide: DR_GUIDE, totalPages: 49, stillToCome: DR_TODO });
   const t = text(g.html);
-  ok(`${name}: guide written`, /Here is how the package is organized: Pages 1 - 8: The seller's disclosures about the condition of the property Pages 9 - 17:/.test(t), true);
+  ok(`${name}: guide written`, /What's in the package: Pages 1 - 8: The seller's disclosures about the condition of the property Pages 9 - 17:/.test(t), true);
   ok(`${name}: placeholders and old lines gone`, /Pages 1 - X|Pages X - X|remainder of the PDF|Agent Visual Inspection/.test(g.html), false);
-  ok(`${name}: still-to-come in plain English after the guide`, /Pages 44 - 49: Additional documents provided by the seller's agent Still to come from the seller's side: the natural hazard disclosure report, the listing agent's visual inspection and a few updated answers\./.test(t), true);
+  ok(`${name}: still-to-come in plain English after the guide`, /Pages 44 - 49: Additional documents provided by the seller's agent Still to come from the seller: The natural hazard disclosure report The listing agent's visual inspection A few updated answers I'll send these over as soon as they arrive\./.test(t), true);
   ok(`${name}: what follows is untouched`, /I am also including/.test(g.html) && g.html.indexOf('Still to come') < g.html.indexOf('I am also including'), true);
   ok(`${name}: no warnings`, g.warnings, []);
 }
@@ -128,7 +128,7 @@ ok('revision: her text, lines in page order', text(rev.html), 'Hello Shahrokh an
 ok('revision: no DocuSign line', /DocuSign/i.test(rev.html), false);
 ok('revision: no still-to-come line when nothing is open', /Still to come/.test(rev.html), false);
 ok('revision: still-to-come when something is open',
-  /Still to come from the seller's side:<\/b> the trust advisory\./.test(buildRevisionEmail({ ...SC8, stillToCome: ['the trust advisory'] }).html.replace(/&#39;/g, "'")), true);
+  /Still to come from the seller:<\/b><ul><li>The trust advisory<\/li><\/ul>/.test(buildRevisionEmail({ ...SC8, stillToCome: ['the trust advisory'] }).html.replace(/&#39;/g, "'")), true);
 const refuse = (label, opts, rx) => { const r2 = buildRevisionEmail({ ...SC8, ...opts }); ok(`revision refuses: ${label}`, [r2.html, rx.test(r2.warnings.join(' '))], ['', true]); };
 refuse('a form code in a change line', { changes: [{ page: 1, label: 'TDS 220 volt wiring filled in' }] }, /form code TDS/);
 refuse('a form code as a form name', { forms: ['TDS', 'SPQ'] }, /form code TDS/);
@@ -140,6 +140,11 @@ refuse('no greeting', { greeting: '' }, /no greeting/);
 const greeted = fillBuyerEmail(TEMPLATE, { guide: [{ from: 1, to: 9, label: "The seller's disclosures" }, { from: 10, to: 20, label: 'Advisories' }], totalPages: 20, greeting: 'Hello Christopher and Dana,' });
 ok('greeting replaced, guide still filled', [/^<div>Hello Christopher and Dana,<\/div>/.test(greeted.html), greeted.filled.guide, greeted.filled.greeting, greeted.warnings], [true, true, true, []]);
 ok('a non-greeting is refused, draft untouched', fillBuyerEmail(TEMPLATE, { guide: [{ from: 1, to: 20, label: 'x' }], totalPages: 20, greeting: 'Jesse and Gayle' }).html, TEMPLATE);
+
+// Option A (Megan, 2026-10-23): still-to-come is its own bulleted list, items capitalised.
+const optA = fillBuyerEmail(TEMPLATE, { guide: [{ from: 1, to: 8, label: "The seller's disclosures about the condition of the home" }, { from: 9, to: 20, label: 'Standard advisories' }], totalPages: 20, stillToCome: ['trust advisory', 'a few updated answers'] });
+ok('Option A: heading', /<b>What's in the package:<\/b><ul>/.test(optA.html), true);
+ok('Option A: still to come as a list', /<b>Still to come from the seller:<\/b><ul><li>Trust advisory<\/li><li>A few updated answers<\/li><\/ul>I'll send these over as soon as they arrive\./.test(optA.html.replace(/&#39;/g, "'")), true);
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall buyer-email checks pass');
 process.exit(failed ? 1 : 0);
