@@ -1,0 +1,47 @@
+[
+ {
+  "form": "SOLAR",
+  "item": "1C",
+  "issue": "answer_contradicts_package",
+  "discrepancy_type": "document",
+  "marked": "Yes",
+  "should_be": "",
+  "reason": "the seller states the system is about 7 years old and was installed 5/2018, but the permit report shows the photovoltaic system permit was finaled in March 2015",
+  "other_form": "",
+  "document": "the Permit Timeline Report (permit 1502-077, photovoltaic system finaled Mar 30, 2015)",
+  "source": "",
+  "addendum_item": "",
+  "pass_count": 1,
+  "pass_total": 2
+ },
+ {
+  "form": "SPQ",
+  "item": "7F",
+  "issue": "answer_contradicts_package",
+  "discrepancy_type": "incorrect",
+  "marked": "No",
+  "should_be": "",
+  "reason": "7F is marked No, yet its follow-up asking whether Improvements were performed by a contractor is marked Yes; either 7F should be corrected or the follow-up left blank",
+  "other_form": "",
+  "document": "",
+  "source": "",
+  "addendum_item": "",
+  "pass_count": 2,
+  "pass_total": 2
+ },
+ {
+  "form": "SOLAR",
+  "item": "3B(1)",
+  "issue": "answer_contradicts_package",
+  "discrepancy_type": "document",
+  "marked": "5/2018",
+  "should_be": "",
+  "reason": "the seller lists installation as 5/2018 and an age of 7 years in 1C, but the only solar permit on record was finaled March 30, 2015",
+  "other_form": "",
+  "document": "the BuildFax Permit Timeline Report (photovoltaic permit 1502-077, finaled March 30, 2015)",
+  "source": "",
+  "addendum_item": "",
+  "pass_count": 1,
+  "pass_total": 2
+ }
+]

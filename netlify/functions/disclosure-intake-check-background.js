@@ -3111,17 +3111,50 @@ function reviseLineFor(f) {
       + `Could the seller update it so it sits with ${f.item ? f.item : 'the right item'}?`;
   }
   const t = f.discrepancy_type || (f.other_form ? 'inconsistent' : f.document ? 'document' : f.source ? 'transaction' : 'incorrect');
+  /**
+   * "UPDATE IT TO YES" ONLY WHEN THAT IS THE FIX. 2647 E Wilson (2026-10-23):
+   * "SOLAR 1C is marked Yes ... Could you update it to Yes?", "SOLAR 3B(1) is
+   * marked 5/2018 ... update it to Yes?", and "SPQ 7F is marked No, but 7F is
+   * marked No, yet ...". The ask defaulted to Yes whenever the review named no
+   * fix, and the review's own reason repeated the item. Now: name a Yes/No fix
+   * only when it is one and differs from the mark; otherwise ask to confirm.
+   */
+  const yn = (v) => (/^\s*yes\s*$/i.test(String(v || '')) ? 'Yes' : /^\s*no\s*$/i.test(String(v || '')) ? 'No' : '');
+  const markedYN = yn(marked) || (/^\s*(blank|left blank|unanswered|)\s*$/i.test(String(marked || '')) ? 'blank' : 'other');
+  const askFix = (defaultYes) => {
+    const want = yn(f.should_be) || (defaultYes ? 'Yes' : '');
+    return want && markedYN !== 'other' && markedYN !== want ? `Could you update it to ${want}?` : 'Could the seller confirm or correct it?';
+  };
+  const itemRx = item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const whyOnce = item ? why.replace(new RegExp(`^(?:${String(f.form || '').trim()}\\s+)?${itemRx}\\s+is\\s+marked\\s+[^,;]+[,;]?\\s*(?:but|yet)?\\s*`, 'i'), '') : why;
   if (t === 'inconsistent' && f.other_form) {
     return `${ref} is marked ${marked}, which does not match ${dashless(f.other_form)}${why ? ` (${why})` : ''}. Could you update it so the two agree?`;
   }
   if (t === 'document' && f.document) {
-    return `${ref} is marked ${marked}, but ${dashless(f.document)} is in the package. Could you update it to ${f.should_be || 'Yes'}?`;
+    const ask = askFix(true);
+    // Not a plain Yes/No fix: say what the document shows, not just that it exists.
+    if (/confirm/.test(ask) && whyOnce) return `${ref}: ${whyOnce} (${dashless(f.document)}). ${ask}`;
+    return `${ref} is marked ${marked}, but ${dashless(f.document)} is in the package. ${ask}`;
   }
   if (t === 'transaction' && f.source) {
     return `${ref} is marked ${marked}, but ${dashless(f.source)} ${verbFor(f.source)} otherwise. Could you update it to match?`;
   }
-  return `${ref} is marked ${marked}, but ${why}. Could you update it to ${f.should_be || 'Yes'}?`;
+  const ask = askFix(false);
+  if (/confirm/.test(ask)) return `${ref}: ${whyOnce || why}. ${ask}`;
+  return `${ref} is marked ${marked}, but ${whyOnce || why}. ${ask}`;
 }
+
+/**
+ * A FOLLOW-UP ANSWERED UNDER A PARENT MARKED NO. Megan's rule: a sub-question
+ * only applies when its parent is Yes. 2647 E Wilson (2026-10-23): SPQ 7F
+ * (acquired within 18 months) No, its "If yes, ... by a contractor?" line
+ * checked Yes. The parent's No stands; the stray mark is harmless. Routed to
+ * CHECK BEFORE SENDING, never to the agent.
+ */
+const isOrphanFollowUp = (f) => !!f && f.issue === 'answer_contradicts_package'
+  && /^\s*no\s*$/i.test(String(f.marked || ''))
+  && /follow-?up|"?if yes/i.test(String(f.reason || ''))
+  && /(?:marked|answered|checked)\s+yes/i.test(String(f.reason || ''));
 
 /** "TDS C12, TDS C14, SPQ 6G" -> "TDS C12 and C14, and SPQ 6G". */
 function joinRefs(flags) {
@@ -4322,6 +4355,16 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
         + `so it was NOT put in the email. The review reported: "${String(f.reason || '').trim()}"`,
     });
   }
+  for (const f of allFlags.filter(isOrphanFollowUp)) {
+    f.original_issue = f.issue;
+    f.issue = 'orphan_follow_up';
+    verify.push({
+      item: [f.form, f.item].filter(Boolean).join(' ') || 'this item',
+      short: `${String(f.reason || '').trim()} (a follow-up answered under a No; the No stands, not sent)`,
+      note: 'a sub-question only applies when its parent is Yes, so a mark on the follow-up under a No is harmless '
+        + `and was NOT put in the email. The review reported: "${String(f.reason || '').trim()}"`,
+    });
+  }
   const upkeep = allFlags.filter(isUpkeepNotProblem);
   for (const f of upkeep) {
     f.original_issue = f.issue;
@@ -4392,6 +4435,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     && f.issue !== 'fhds_default_option'
     && f.issue !== 'upkeep_not_problem'
     && f.issue !== 'claim_explained'
+    && f.issue !== 'orphan_follow_up'
     && f.issue !== 'scan_unconfirmed'));
   for (const f of unseenAttachment) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
@@ -4712,7 +4756,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { isOrphanFollowUp, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
