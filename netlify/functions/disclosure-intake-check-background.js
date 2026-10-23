@@ -3246,9 +3246,17 @@ const isSpq19B = (f) => !!f && /^spq$/i.test(String(f.form || '').trim())
  * explained it; the review read "insurance claim" too literally. Routed to
  * CHECK BEFORE SENDING, not chased.
  */
-const isClaimExplained6H = (f) => !!f && f.issue === 'yes_no_explanation'
+// 2026-10-23, Donald Reed again: the strip of the question's own title ran to
+// the next period, and the review wrote ONE long sentence ("6H (insurance
+// claims within the past 5 years) is marked Yes, but the only item 6
+// explanation describes a settled landlord and tenant lawsuit ..."), so the
+// word "lawsuit" was stripped with it and the line went to the agent. Strip
+// only the title, and accept the "unclear" wording too. Megan: "the lawsuit is
+// the insurance claim".
+const RX_6H_TITLE = /insurance\s+claims?\s+(?:with)?in\s+the\s+(?:past|last)\s+\w+\s+years?\)?/ig;
+const isClaimExplained6H = (f) => !!f && (f.issue === 'yes_no_explanation' || f.issue === 'explanation_unclear')
   && /^spq$/i.test(String(f.form || '').trim()) && /^6\s*H$/i.test(String(f.item || '').trim())
-  && /\b(lawsuit|suit|litigation|claim|settle\w*|insurance|damages)\b/i.test(String(f.reason || '').replace(/insurance\s+claims?\s+within[^;.]*/i, ''));
+  && /\b(lawsuit|suit|litigation|claim|settle\w*|damages)\b/i.test(String(f.reason || '').replace(RX_6H_TITLE, ''));
 
 /**
  * A MARKED QUESTION WITH A BLANK FOLLOW-UP IS ANSWERED. 12273 Donald Reed
@@ -3715,6 +3723,28 @@ function mergeBatchResults(batches, outcomes) {
 // Step 2 — reconcile the accumulated received set against the deal's audit list.
 // Opus matches shorthand to forms and reasons about conditional/"if any" items.
 // ----------------------------------------------------------------------------
+// The codes Megan's compliance lists use. 12273 Donald Reed (2026-10-23): the
+// model called BHAA "not a standard CAR form code" in CHECK BEFORE SENDING.
+const LIST_CODE_GLOSSARY = [
+  'BHAA = Buyer\'s Homeowners\' Association Advisory', 'WFDA = Wildfire Disaster Advisory', 'MCA = Market Conditions Advisory',
+  'SBSA = Statewide Buyer and Seller Advisory', 'DIA = Disclosure Information Advisory', 'PSD = Parking and Storage Disclosure',
+  'TA = Trust Advisory', 'RCSD-S / RCSD-B = Representative Capacity Signature Disclosure (seller / buyer)',
+  'ESD = Exempt Seller Disclosure', 'FHDS = Fire Hardening and Defensible Space disclosure', 'DSDT = Defensible Space Decision Tree',
+  'WHSD = Water Heater and Smoke Detector statement', 'WCMD = Water-Conserving Plumbing Fixtures and Carbon Monoxide Detector notice',
+  'SFLS = Square Footage and Lot Size disclosure', 'LPD = Lead-Based Paint Disclosure', 'AVID = Agent Visual Inspection Disclosure',
+  'AAA = Additional Agent Acknowledgement', 'ABA = Affiliated Business Arrangement disclosure', 'RFR = Receipt for Reports',
+  'WBSA = Wooden Balconies and Stairs Addendum', 'SOLAR = Solar Advisory and Questionnaire', 'NHD = Natural Hazard Disclosure',
+].join('; ');
+
+// A model remark ABOUT a code ("'BHAA' is not a standard CAR form code") is not
+// a check anyone can act on. Kept in verify (Megan decides) but said usefully.
+const RX_CODE_REMARK = /not (?:a |an )?(?:standard|valid|recognized|known|real)\b[^.]*\b(?:form|code)|unknown (?:form )?code|unrecognized (?:form )?code/i;
+function rewriteCodeRemarks(verify) {
+  return (verify || []).map((v) => (v && RX_CODE_REMARK.test(String(v.note || ''))
+    ? { ...v, note: 'could not match this to a received form; check by hand whether it arrived' }
+    : v));
+}
+
 async function reconcile(auditList, received) {
   const receivedText = received.map((f) => `- ${f.code ? f.code + ' — ' : ''}${f.name}`).join('\n') || '(nothing identified yet)';
   const prompt =
@@ -3726,6 +3756,10 @@ async function reconcile(auditList, received) {
     'Rules:\n' +
     '- Use your knowledge of CAR forms to match the list\'s shorthand (TDS, SPQ, SBSA, LA AVID, BA AVID, LPD, WCMD, ' +
     'SFLS, MCA, DIA, NHD, RFR, etc.) to the received forms.\n' +
+    '- Every code on the list is a real form; NEVER say a code is not a standard or valid C.A.R. form, and never put ' +
+    'such a remark anywhere. Codes this list uses: ' + LIST_CODE_GLOSSARY + '. If you cannot match an item, put it in ' +
+    '"still_needed" when it is clearly absent, otherwise in "verify" with the note "could not match this to a received ' +
+    'form".\n' +
     '- Conditionals: items marked "if any", "only SFR required", "once completed", "Contingency Release(s)", or that ' +
     'are inherently later/escrow items, are "not_applicable" unless clearly required and absent.\n' +
     '- NHD is a PRESENT/MISSING item, never "verify". If a Natural Hazard Disclosure report (any provider — FANHD, ' +
@@ -4067,7 +4101,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
       + `"${COOPERATING_BROKER_LABEL}" (they are the listing side's, not ours): ${affiliateClaimed.join(', ')}`);
   }
 
-  let verify = Array.isArray(result.verify) ? result.verify : [];
+  let verify = rewriteCodeRemarks(Array.isArray(result.verify) ? result.verify : []);
   const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
 
   // Resolve the compliance list's "Confirm X marked YES" items ourselves from the
@@ -4678,7 +4712,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
