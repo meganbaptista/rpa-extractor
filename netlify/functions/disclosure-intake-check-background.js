@@ -3144,17 +3144,6 @@ function reviseLineFor(f) {
   return `${ref} is marked ${marked}, but ${whyOnce || why}. ${ask}`;
 }
 
-/**
- * A FOLLOW-UP ANSWERED UNDER A PARENT MARKED NO. Megan's rule: a sub-question
- * only applies when its parent is Yes. 2647 E Wilson (2026-10-23): SPQ 7F
- * (acquired within 18 months) No, its "If yes, ... by a contractor?" line
- * checked Yes. The parent's No stands; the stray mark is harmless. Routed to
- * CHECK BEFORE SENDING, never to the agent.
- */
-const isOrphanFollowUp = (f) => !!f && f.issue === 'answer_contradicts_package'
-  && /^\s*no\s*$/i.test(String(f.marked || ''))
-  && /follow-?up|"?if yes/i.test(String(f.reason || ''))
-  && /(?:marked|answered|checked)\s+yes/i.test(String(f.reason || ''));
 
 /** "TDS C12, TDS C14, SPQ 6G" -> "TDS C12 and C14, and SPQ 6G". */
 function joinRefs(flags) {
@@ -4355,16 +4344,6 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
         + `so it was NOT put in the email. The review reported: "${String(f.reason || '').trim()}"`,
     });
   }
-  for (const f of allFlags.filter(isOrphanFollowUp)) {
-    f.original_issue = f.issue;
-    f.issue = 'orphan_follow_up';
-    verify.push({
-      item: [f.form, f.item].filter(Boolean).join(' ') || 'this item',
-      short: `${String(f.reason || '').trim()} (a follow-up answered under a No; the No stands, not sent)`,
-      note: 'a sub-question only applies when its parent is Yes, so a mark on the follow-up under a No is harmless '
-        + `and was NOT put in the email. The review reported: "${String(f.reason || '').trim()}"`,
-    });
-  }
   const upkeep = allFlags.filter(isUpkeepNotProblem);
   for (const f of upkeep) {
     f.original_issue = f.issue;
@@ -4435,7 +4414,6 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     && f.issue !== 'fhds_default_option'
     && f.issue !== 'upkeep_not_problem'
     && f.issue !== 'claim_explained'
-    && f.issue !== 'orphan_follow_up'
     && f.issue !== 'scan_unconfirmed'));
   for (const f of unseenAttachment) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
@@ -4756,7 +4734,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { isOrphanFollowUp, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.

@@ -22,8 +22,7 @@ ok('SOLAR 1C (an age, not a Yes/No) asks to confirm, never "update it to Yes"', 
 ok('SOLAR 1C does not claim a mark the field cannot have', /is marked Yes/.test(line(c1)), false);
 ok('SOLAR 3B(1) (a date) asks to confirm', [/update it to Yes/.test(line(b31)), /confirm or correct/.test(line(b31))], [false, true]);
 ok('SPQ 7F does not repeat "7F is marked No"', (line(f7).match(/marked No/g) || []).length <= 1, true);
-ok('SPQ 7F (follow-up under a No) is routed to CHECK BEFORE SENDING', I.isOrphanFollowUp(f7), true);
-ok('1C and 3B(1) are not orphan follow-ups', [I.isOrphanFollowUp(c1), I.isOrphanFollowUp(b31)], [false, false]);
+// Megan KEPT 7F in her final email to the agent (2026-10-23), so it is not routed away.
 
 const f = (o) => ({ issue: 'answer_contradicts_package', form: 'SPQ', ...o });
 ok('a real Yes fix still names it (7E, built 1960)', line(f({ item: '7E', discrepancy_type: 'incorrect', marked: 'No', should_be: 'Yes', reason: 'the property was built in 1960' })), 'SPQ 7E is marked No, but the property was built in 1960. Could you update it to Yes?');
