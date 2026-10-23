@@ -147,7 +147,84 @@ function replaceGreeting(html, greeting) {
   return { html: html.replace(rx, esc(g)), warnings: [] };
 }
 
+/**
+ * THE CALM LAYOUT, the standard since 2026-10-23 (Megan, on the Scenic email:
+ * "it still feels so busy" ... "yes lets make that the new standard"). Twenty
+ * bullets in four lists became three bullets and four short lines. The Zap's
+ * own intro, booklet list and closing are rewritten, so the body between the
+ * greeting and the signature is rebuilt here; kept from the Zap draft: the
+ * recipients and subject (untouched by this function), the greeting, the
+ * booklet LINKS (read out of the draft, so the URLs stay hers) and everything
+ * from the "-- " signature marker down.
+ *   guide:       [{ from, to, label }] usually three ranges (seller's
+ *                disclosures / documents, forms and visual inspections /
+ *                advisories and our brokerage's forms)
+ *   attached:    plain names of the separate PDFs
+ *   reportsLink: her Drive Seller Reports folder, when reports came by link
+ *   stillToCome: short plain phrases, joined into one sentence
+ */
+const BOOKLET_SHORT = [
+  [/energy/i, 'Energy rating'], [/earthquake/i, 'Earthquake safety'],
+  [/environmental/i, 'Environmental hazards'], [/mold/i, 'Mold'], [/lead/i, 'Lead'],
+];
+function bookletLinks(html) {
+  const out = [];
+  for (const m of String(html || '').matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)) {
+    const text = m[2].replace(/<[^>]+>/g, ' ');
+    const hit = BOOKLET_SHORT.find(([rx]) => rx.test(text));
+    if (hit && !/seller reports/i.test(text) && !out.some((o) => o.name === hit[1])) out.push({ name: hit[1], href: m[1] });
+  }
+  return out;
+}
+function calmLayout(html, { guide, totalPages, stillToCome = [], reportsLink = '', attached = [], greeting = '' }) {
+  let out = String(html || '');
+  if (greeting) {
+    const gg = replaceGreeting(out, greeting);
+    if (gg.warnings.length) return { html: out, filled: { guide: false }, warnings: gg.warnings };
+    out = gg.html;
+  }
+  const problems = guideProblems(guide, totalPages, stillToCome);
+  for (const a of attached || []) {
+    const code = String(a || '').match(RX_FORM_CODE);
+    if (code) problems.push(`the attachment "${a}" uses the form code ${code[0]}; rename the file in plain English`);
+  }
+  const g = /\b(Hello|Hi|Dear)\b[^<>,]{1,80},/.exec(out);
+  const sig = /(?:<div><br\s*\/?><\/div>\s*)?--\s*<br/i.exec(out);
+  if (!g) problems.push('no "Hello <name>," greeting found in the draft');
+  if (!sig || (g && sig.index < g.index)) problems.push('no "-- " signature marker found after the greeting');
+  if (problems.length) return { html: out, filled: { guide: false }, warnings: problems };
+  const todo = (stillToCome || []).map((x) => String(x || '').trim()).filter(Boolean);
+  const files = (attached || []).map((x) => String(x || '').trim()).filter(Boolean);
+  const links = bookletLinks(out.slice(g.index, sig.index));
+  const P = (x) => `<div>${x}</div><br>`;
+  const parts = [
+    P("Attached are the seller's disclosures for your review and signature. Please read them as a guide to the property as you make your decisions."),
+    `<div><b>What's in the package:</b></div><ul>${guide.map((r) => `<li><b>${esc(range(r))}:</b> ${esc(r.label)}</li>`).join('')}</ul>`,
+  ];
+  if (files.length || reportsLink) {
+    const a = files.length ? ` ${esc(serialList(files))} ${files.length === 1 ? 'is' : 'are'} attached separately.` : '';
+    const l = reportsLink ? ` The seller's other reports are <a href="${esc(reportsLink)}">here</a>.` : '';
+    parts.push(P(`<b>Reports:</b>${a}${l}`));
+  }
+  if (todo.length) parts.push(P(`<b>Still to come from the seller:</b> ${esc(serialList(todo))}. I'll send these as soon as they arrive.`));
+  if (links.length) parts.push(P(`<b>California hazard booklets:</b> ${links.map((b) => `<a href="${esc(b.href)}">${esc(b.name)}</a>`).join(' &middot; ')}`));
+  parts.push(P("I'll send everything through DocuSign for signature once you've had a chance to review. Let me know if you have any questions!"));
+  const head = out.slice(0, g.index + g[0].length);
+  const opened = (head.match(/<div\b/gi) || []).length - (head.match(/<\/div>/gi) || []).length;
+  const body = `<br><br>${parts.join('')}${'</div>'.repeat(Math.max(0, opened))}`;
+  return { html: head + body + out.slice(sig.index), filled: { guide: true, layout: 'calm' }, warnings: [] };
+}
+
 function fillBuyerEmail(html, opts = {}) {
+  if (opts.layout !== 'classic' && Array.isArray(opts.guide) && opts.guide.length) {
+    const r = calmLayout(html, opts);
+    if (!r.warnings.length) return r;
+    // A draft without the shape the calm layout needs (a greeting and a "-- "
+    // signature marker) falls back to the previous layout, which only replaces
+    // the Zap's placeholder lines. Content problems (form codes, page gaps)
+    // are reported by both, so nothing unsafe gets through either way.
+    if (!r.warnings.every((w) => /greeting found|signature marker/.test(w))) return { ...r, html };
+  }
   if (opts.greeting) {
     const g = replaceGreeting(html, opts.greeting);
     if (g.warnings.length) return { html, filled: {}, warnings: g.warnings };
@@ -328,4 +405,4 @@ function serialList(items) {
   return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 }
 
-module.exports = { attachmentLabel, fillBuyerEmail, buildRevisionEmail, joinList, guideProblems, RX_FORM_CODE };
+module.exports = { calmLayout, bookletLinks, attachmentLabel, fillBuyerEmail, buildRevisionEmail, joinList, guideProblems, RX_FORM_CODE };

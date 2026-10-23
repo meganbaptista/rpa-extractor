@@ -155,5 +155,32 @@ ok('attachments listed after the guide', /<b>Also attached as separate files:<\/
 const coded = fillBuyerEmail(TEMPLATE, { guide: [{ from: 1, to: 20, label: 'x' }], totalPages: 20, attached: ['NHD Report'] });
 ok('an attachment named with a form code is refused, draft untouched', [coded.html, /form code NHD/.test(coded.warnings.join(' '))], [TEMPLATE, true]);
 
+// THE CALM LAYOUT (standard since 2026-10-23, Megan: "it still feels so busy"):
+// a real Zap draft has a greeting and a "-- " signature; everything between is rebuilt.
+const ZAP = '<div dir="ltr"> <div> Hello Jesse, <br> <br>  Attached is a package of important disclosures ... <br><br>'
+  + `${hl('Pages 1 - X')} have been filled out by the seller.<br><br>${hl('The remainder of the PDF package')} are standard.<br><br>`
+  + ' I am also including the California combined hazards booklets below for your review: <ul>'
+  + '<li><a href="https://www.disclosuresource.com/downloads/HomeEnergyRating.pdf">Home Energy Rating Guide (click link to view)</a></li>'
+  + '<li><a href="https://www.ssc.ca.gov/hog.pdf">California Homeowner\u00b4s Guide to Earthquake Safety (click link to view)</a></li>'
+  + '<li><a href="https://www.cdph.ca.gov/ResEnviroHaz2011.pdf">Department of Health Services Residential Environmental Hazards (click link to view)</a></li>'
+  + '<li><a href="https://propertyid.com/moldfaq.pdf">Department of Health Services Mold FAQ (click link to view)</a></li>'
+  + '<li><a href="https://propertyid.com/lead.pdf">EPA Lead in Your Home (click link to view)</a></li></ul>'
+  + ' Please let us know if you have any questions as I will send this out via Docusign. <br><br> </div> <div><br></div>-- <br><div dir="ltr">Megan Baptista<br>Transaction Concierge</div></div>';
+const CALM = { guide: [{ from: 1, to: 10, label: "The seller's disclosures about the condition of the home" }, { from: 11, to: 32, label: 'Documents from the seller, additional forms and our agent\'s visual inspection' }, { from: 33, to: 68, label: "Standard advisories and our brokerage's forms" }],
+  totalPages: 68, attached: ['Seller Report - City Report', 'Preliminary Title Report'], reportsLink: 'https://drive.google.com/drive/folders/X', stillToCome: ['the trust forms', 'the listing agent\'s visual inspection'] };
+const calm = fillBuyerEmail(ZAP, CALM);
+const ct = text(calm.html).replace(/&#39;/g, "'").replace(/&middot;/g, '·');
+ok('calm: no warnings', calm.warnings, []);
+ok('calm: greeting kept, Zap intro replaced', [/^Hello Jesse, Attached are the seller's disclosures/.test(ct), /package of important disclosures/.test(ct)], [true, false]);
+ok('calm: three page ranges', (calm.html.match(/<li><b>Pages/g) || []).length, 3);
+ok('calm: reports line names the attachments and the link', /Reports: Seller Report - City Report and Preliminary Title Report are attached separately\. The seller's other reports are here\s*\./.test(ct), true);
+ok('calm: still to come is one sentence', /Still to come from the seller: the trust forms and the listing agent's visual inspection\. I'll send these as soon as they arrive\./.test(ct), true);
+ok('calm: her booklet URLs kept, on one line', [/California hazard booklets: Energy rating · Earthquake safety · Environmental hazards · Mold · Lead/.test(ct), (calm.html.match(/disclosuresource|ssc\.ca\.gov|cdph|propertyid/g) || []).length], [true, 5]);
+ok('calm: signature untouched', calm.html.endsWith('-- <br><div dir="ltr">Megan Baptista<br>Transaction Concierge</div></div>'), true);
+ok('calm: placeholders gone', /Pages 1 - X|remainder of the PDF/.test(calm.html), false);
+ok('calm: refilling an already-filled draft gives the same result', fillBuyerEmail(calm.html, CALM).html, calm.html);
+ok('calm: greeting option works', /^Hello Jesse and Gayle, Attached/.test(text(fillBuyerEmail(ZAP, { ...CALM, greeting: 'Hello Jesse and Gayle,' }).html).replace(/&#39;/g, "'")), true);
+ok('calm: a form code in a label still refuses, draft untouched', fillBuyerEmail(ZAP, { ...CALM, guide: [{ from: 1, to: 68, label: 'TDS and SPQ' }] }).html, ZAP);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall buyer-email checks pass');
 process.exit(failed ? 1 : 0);
