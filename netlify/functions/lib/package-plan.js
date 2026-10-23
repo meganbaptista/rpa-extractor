@@ -111,7 +111,8 @@ function classifyFile(file) {
  *   address,
  *   files:  [{ n, name, pages, forms: [{ name, code, pages: [1-based] }] }]   (audited docs, map step)
  *   extras: [{ key, name, pages? }]            (kept but not audited: reports by name)
- *   dropIns: { profile, mls, ourAvid, ourBrokerage: [{ label, src, pages }] }  (null when absent)
+ *   dropIns: { profile, mls, ourAvid, ourBrokerage: [{ label, src, pages }], forms: [{ code, label, src, pages }] }
+ *            (lib/package-dropins.js; null when absent)
  *   flags:  { wrongProperty: [{ n, why }] }    (from the assembler's text checks)
  *   longReportPages: 20                        (a seller report longer than this is attached separately)
  * }
@@ -120,12 +121,29 @@ function classifyFile(file) {
 function planPackage(input) {
   const out = { units: [], attachments: [], leftOut: [], warnings: [] };
   const longPages = input.longReportPages || 20;
-  const wrong = new Map(((input.flags || {}).wrongProperty || []).map((w) => [w.n, w.why]));
+  // Wrong-property files, extras, or pages inside a file (5733 E Stillwater #2:
+  // the NHD report AND the NHD statement inside the combined PDF were for 5722).
+  const wrongAll = (input.flags || {}).wrongProperty || [];
+  const wrong = new Map(wrongAll.filter((w) => w.n != null && !w.pages).map((w) => [w.n, w.why]));
+  const wrongExtras = new Map(wrongAll.filter((w) => w.key != null).map((w) => [w.key, w.why]));
+  const wrongPages = new Map();
+  for (const w of wrongAll.filter((x) => x.n != null && x.pages)) for (const p of w.pages) wrongPages.set(`${w.n}:${p}`, w.why);
   // Whole files (or extras) that repeat pages already in another delivered file
   // (5733 E Stillwater #2: four separate attachments were copies of pages inside
   // the combined PDF). Found by the assembler's text comparison; placed once.
   const dupFiles = new Map(((input.flags || {}).duplicates || []).filter((x) => x.n != null).map((x) => [x.n, x.of]));
   const dupExtras = new Map(((input.flags || {}).duplicates || []).filter((x) => x.key != null).map((x) => [x.key, x.of]));
+  const dupList = (input.flags || {}).duplicates || [];
+  // Pages that are only signature lines (Stillwater p100: the termite work
+  // order's "X____ BUYER" lines, mapped onto the next document): they stay with
+  // the document before them.
+  const tails = new Set(((input.flags || {}).tails || []).map((t) => `${t.n}:${t.page}`));
+  // Purchase-agreement documents the contract audit was waiting on, found in the
+  // delivery (Stillwater: FHDA, WFA, our brokerage's ABA, MCA, all fully signed):
+  // filed as "FX - <name>" at the top of the deal folder, never in the package.
+  const fxPages = new Map();
+  for (const f of (input.flags || {}).fx || []) for (const p of f.pages) fxPages.set(`${f.n}:${p}`, f.name);
+  out.fx = [];
   const seenCodes = new Set();
   let nhdStatementPlaced = false;
   let nhdReport = null;
@@ -168,6 +186,12 @@ function planPackage(input) {
     const loose = range(file.pages).filter((p) => !claimed.has(p));
     if (loose.length) units.push({ name: '', code: '', pages: loose, split: 'pages no form claimed' });
     units.sort((a, b) => a.pages[0] - b.pages[0]);
+    // Signature-only tail pages go back to the document before them.
+    for (let i = 1; i < units.length; i++) {
+      const u = units[i]; const prevU = units[i - 1];
+      while (u.pages.length && tails.has(`${file.n}:${u.pages[0]}`) && u.pages[0] === prevU.pages[prevU.pages.length - 1] + 1) prevU.pages.push(u.pages.shift());
+      if (!u.pages.length) { units.splice(i, 1); i--; }
+    }
     // MERGE what the map split: consecutive pieces of the same titled document
     // (Wilson's permit report came back as 4), and an unidentified run that
     // sits right next to a report (Stillwater's restoration report pages 31-36
@@ -194,6 +218,23 @@ function planPackage(input) {
     for (const u of units) {
       const c = classify(u);
       const label = u.name || u.code || '(untitled)';
+      const fxName = u.pages.map((p) => fxPages.get(`${file.n}:${p}`)).find(Boolean);
+      if (fxName) {
+        out.fx.push({ name: fxName, src: { type: 'file', n: file.n, pages: [...u.pages] } });
+        out.leftOut.push({ what: `${file.name}, p${span(u.pages)} (${label})`, why: `purchase-agreement document: filed as "${fxName}", not part of the disclosures` });
+        out.warnings.push(`"${fxName}" filed from ${file.name} p${span(u.pages)}: check every signature is there and tick it on the compliance list`);
+        account(file.n, u.pages, `filed (${fxName})`);
+        prev = null;
+        continue;
+      }
+      const wrongWhy = u.pages.map((p) => wrongPages.get(`${file.n}:${p}`)).find(Boolean);
+      if (wrongWhy) {
+        out.leftOut.push({ what: `${file.name}, p${span(u.pages)} (${label})`, why: `wrong property: ${wrongWhy}; ask the listing side for the right one` });
+        out.warnings.push(`${label} (${file.name} p${span(u.pages)}): ${wrongWhy}; left out, ask the listing side for the right one`);
+        account(file.n, u.pages, 'left out (wrong property)');
+        prev = null;
+        continue;
+      }
       if (c.leave) {
         out.leftOut.push({ what: `${file.name}, p${span(u.pages)} (${label})`, why: c.leave });
         if (c.warn) out.warnings.push(`${label} (${file.name} p${span(u.pages)}): ${c.leave}`);
@@ -226,18 +267,21 @@ function planPackage(input) {
 
   // Reports kept but not audited (skipped by name): long ones attached separately.
   for (const x of input.extras || []) {
+    if (wrongExtras.has(x.key)) { out.leftOut.push({ what: x.name, why: `wrong property: ${wrongExtras.get(x.key)}` }); out.warnings.push(`${x.name}: ${wrongExtras.get(x.key)}; left out and flagged`); continue; }
     if (dupExtras.has(x.key)) { out.leftOut.push({ what: x.name, why: `duplicate of ${dupExtras.get(x.key)} (already in the package once)` }); continue; }
+    if (x.fromDealFolder) out.warnings.push(`"${x.name}" is from the deal folder, not this delivery: added with the seller's reports, check it belongs`);
     const fc = classifyFile({ name: x.name, pages: x.pages || 0, forms: [] });
     if (fc && fc.leave) { out.leftOut.push({ what: x.name, why: fc.leave }); continue; }
-    if (fc && fc.attach) { out.attachments.push({ name: fc.attach, src: { type: 'extra', key: x.key } }); continue; }
+    if (fc && fc.attach) { out.attachments.push({ name: fc.attach, src: x.src || { type: 'extra', key: x.key } }); continue; }
     const long = RX.homeInspection.test(x.name) || (x.pages || 0) > longPages;
-    if (long) out.attachments.push({ name: sellerReportName(x.name), src: { type: 'extra', key: x.key } });
-    else out.units.push({ section: SECTION.REPORTS, order: 0, kind: 'REPORT', code: '', label: x.name, src: { type: 'extra', key: x.key }, pages: null, file: x.name, seq: out.units.length });
+    if (long) out.attachments.push({ name: sellerReportName(x.name), src: x.src || { type: 'extra', key: x.key } });
+    else out.units.push({ section: SECTION.REPORTS, order: 0, kind: 'REPORT', code: '', label: x.name.replace(/\.pdf$/i, ''), src: x.src || { type: 'extra', key: x.key }, pages: null, file: x.name, seq: out.units.length });
   }
 
   // Long seller reports inside the delivery go out as separate attachments too.
   for (const u of out.units.filter((v) => v.kind === 'REPORT' && v.pages && (v.pages.length > longPages || RX.homeInspection.test(v.label) || RX.homeWarranty.test(v.label)))) {
     if (RX.homeWarranty.test(u.label)) u.label = 'Home Warranty';
+    else u.label = reportTitle(u, dupList, input.files || []) || u.label;
     out.attachments.push({ name: sellerReportName(u.label), src: { ...u.src, pages: u.pages } });
     out.leftOut.push({ what: `${u.file}, p${span(u.pages)} (${u.label})`, why: `${u.label === 'Home Warranty' ? 'home warranty' : 'long seller report'}: attached separately as "${sellerReportName(u.label)}"` });
     u.section = null;
@@ -258,6 +302,13 @@ function planPackage(input) {
   if (d.mls && !hasListingMls) out.units.push({ section: SECTION.FORMS, order: 0, kind: 'MLS', label: 'MLS CLIENT TO SIGN (drop-in)', src: d.mls, seq: out.units.length });
   else if (d.mls) out.leftOut.push({ what: 'our MLS CLIENT TO SIGN', why: 'the listing side sent their own MLS printout (never two copies)' });
   if (d.ourAvid) out.units.push({ section: SECTION.AVIDS, order: 1, kind: 'OUR_AVID', label: "Our agent's AVID (drop-in, blank is correct)", src: d.ourAvid, seq: out.units.length });
+  // Standard forms the compliance list wants that the listing side did not send,
+  // from the deal's Audit Disclosures template (BHAA, LPD, WFDA ...; never DIA).
+  for (const f of d.forms || []) {
+    const c = classify({ code: f.code, name: f.label, pages: f.pages || [1] });
+    if (c.leave) continue;
+    out.units.push({ section: c.section || SECTION.ADVISORIES, order: c.order || 0, kind: c.kind || f.code, code: f.code, label: f.label, src: f.src, pages: f.pages || null, file: 'Audit Disclosures template', seq: out.units.length });
+  }
   for (const b of d.ourBrokerage || []) out.units.push({ section: SECTION.OURS, order: 0, kind: 'OURS', label: b.label, src: b.src, pages: b.pages, seq: out.units.length });
 
   // Order: section, then within section the rulebook's sub-order.
@@ -266,6 +317,8 @@ function planPackage(input) {
     if (u.kind === 'NHD_STATEMENT') return 0;
     if (u.kind === 'FHDS') return 1;
     if (u.kind === 'SFLS' || u.kind === 'PROFILE' || u.kind === 'MLS') return 2 + (u.kind === 'SFLS' ? 0 : u.kind === 'PROFILE' ? 0.1 : 0.2);
+    // The booklet acknowledgement closes the additional forms (her Stillwater order).
+    if (u.kind === 'CIA' || /consumer information acknowledg/i.test(u.label || '')) return 4;
     return 3;
   };
   const avidRank = (u) => (u.kind === 'OUR_AVID' ? 1 : 0);
@@ -277,6 +330,34 @@ function planPackage(input) {
   out.accounted = accounted;
   out.guide = guideSections(out.units);
   return out;
+}
+
+/**
+ * A better name for a separate seller report than the map's page title: what
+ * the delivered copies of the same pages were called (Stillwater: the map said
+ * "Photo Report" for pages that came separately as "Mitigation Letter" and
+ * "Roman Restoration"; Megan named it "Restoration Report").
+ */
+const REPORT_NAMES = [
+  [/restor|mitigation|remediation|water damage/i, 'Restoration Report'],
+  [/home inspection|property inspection|pre-?listing inspection/i, 'Home Inspection'],
+  [/termite|wood destroying|pest/i, 'Termite Report'],
+  [/roof/i, 'Roof Report'],
+  [/sewer|lateral/i, 'Sewer Report'],
+  [/chimney/i, 'Chimney Report'],
+  [/mold/i, 'Mold Report'],
+  [/permit/i, 'Permit Report'],
+];
+function reportTitle(u, dups, files) {
+  if (!u.pages || u.src.type !== 'file') return '';
+  const names = [u.label];
+  const fileName = new Map(files.map((f) => [f.n, f.name]));
+  for (const d of dups) {
+    if (d.ofN !== u.src.n || !d.pages || !d.pages.some((p) => u.pages.includes(p))) continue;
+    names.unshift(d.n != null ? fileName.get(d.n) || '' : d.name || '');
+  }
+  for (const [rx, title] of REPORT_NAMES) if (names.some((n) => rx.test(n))) return title;
+  return '';
 }
 
 function sellerReportName(name) {
