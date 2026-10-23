@@ -25,7 +25,7 @@ const rt = require('./lib/intake-runtime');
 const gmail = require('./lib/gmail');
 const drive = require('./lib/drive');
 const { parseRequestBody } = require('./lib/parse-body');
-const { fillBuyerEmail } = require('./lib/buyer-email');
+const { fillBuyerEmail, attachmentLabel } = require('./lib/buyer-email');
 const { buildMime } = require('./lib/mime');
 const { pdfPageCount } = require('./disclosure-intake-check-background').core;
 
@@ -75,15 +75,18 @@ exports.handler = async function (event) {
     // edits it after it is built), so a stale range is refused, not sent.
     const pdf = await drive.download(file.id);
     const totalPages = await pdfPageCount(pdf);
+    // The separate PDFs, named in the email (looked up before filling so the
+    // list names exactly what is attached).
+    const extras = [];
+    for (const name of (Array.isArray(b.extraPdfs) ? b.extraPdfs : [])) extras.push((await findPackagePdf(b.address, name)).file);
     const filled = fillBuyerEmail(msg.bodyHtml, {
       guide: b.guide, totalPages, greeting: b.greeting || '',
+      attached: extras.map((f) => attachmentLabel(f.name, b.address)),
       seller: b.seller, avid: b.avid, stillToCome: b.stillToCome || [], reportsLink: b.reportsLink || '',
     });
     // Megan, 2026-10-22: the full NHD report, the Prelim and the vendor wildfire
     // report never go INSIDE the package ("pushing a 100 page PDF to a client is
     // asinine"); they ride along as their own PDFs.
-    const extras = [];
-    for (const name of (Array.isArray(b.extraPdfs) ? b.extraPdfs : [])) extras.push((await findPackagePdf(b.address, name)).file);
     const totalBytes = [file, ...extras].reduce((t, f) => t + Number(f.size || 0), 0);
     const summary = {
       draftId, subject: h.subject, to: h.to, cc: h.cc || '', otherMatchingDrafts: others,

@@ -5,7 +5,7 @@
 // The template below is her Zap's body (26701 Quail Creek draft, 2026-10-22),
 // with the highlight spans Gmail puts around the placeholders.
 
-const { fillBuyerEmail, buildRevisionEmail } = require('../netlify/functions/lib/buyer-email.js');
+const { fillBuyerEmail, buildRevisionEmail, attachmentLabel } = require('../netlify/functions/lib/buyer-email.js');
 
 let failed = 0;
 function ok(label, got, want) {
@@ -145,6 +145,15 @@ ok('a non-greeting is refused, draft untouched', fillBuyerEmail(TEMPLATE, { guid
 const optA = fillBuyerEmail(TEMPLATE, { guide: [{ from: 1, to: 8, label: "The seller's disclosures about the condition of the home" }, { from: 9, to: 20, label: 'Standard advisories' }], totalPages: 20, stillToCome: ['trust advisory', 'a few updated answers'] });
 ok('Option A: heading', /<b>What's in the package:<\/b><ul>/.test(optA.html), true);
 ok('Option A: still to come as a list', /<b>Still to come from the seller:<\/b><ul><li>Trust advisory<\/li><li>A few updated answers<\/li><\/ul>I'll send these over as soon as they arrive\./.test(optA.html.replace(/&#39;/g, "'")), true);
+
+// The separate attachments are named in the email (5733 E Stillwater #2, 2026-10-23).
+const A = '5733 E Stillwater Ave #2, Orange, CA 92869';
+ok('attachment label drops .pdf', attachmentLabel('Seller Report - Restoration Report.pdf', A), 'Seller Report - Restoration Report');
+ok('attachment label drops the address', attachmentLabel(`Preliminary Title Report - ${A}.pdf`, A), 'Preliminary Title Report');
+const att = fillBuyerEmail(TEMPLATE, { guide: [{ from: 1, to: 20, label: "The seller's disclosures about the condition of the home" }], totalPages: 20, attached: ['Seller Report - Restoration Report', 'Preliminary Title Report'] });
+ok('attachments listed after the guide', /<b>Also attached as separate files:<\/b><ul><li>Seller Report - Restoration Report<\/li><li>Preliminary Title Report<\/li><\/ul>/.test(att.html), true);
+const coded = fillBuyerEmail(TEMPLATE, { guide: [{ from: 1, to: 20, label: 'x' }], totalPages: 20, attached: ['NHD Report'] });
+ok('an attachment named with a form code is refused, draft untouched', [coded.html, /form code NHD/.test(coded.warnings.join(' '))], [TEMPLATE, true]);
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall buyer-email checks pass');
 process.exit(failed ? 1 : 0);

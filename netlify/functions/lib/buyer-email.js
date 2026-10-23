@@ -56,6 +56,18 @@ const range = (r) => (r && r.from ? (r.to && r.to !== r.from ? `Pages ${r.from} 
  * Refuses (returns the draft untouched, with warnings) when a label or a
  * still-to-come item contains a form code, or the ranges do not add up.
  */
+/**
+ * "Seller Report - Restoration Report.pdf" -> "Seller Report - Restoration Report";
+ * "Preliminary Title Report - 5733 E Stillwater ..., CA 92869.pdf" -> "Preliminary Title Report".
+ * The address is in the subject already.
+ */
+function attachmentLabel(filename, address) {
+  let n = String(filename || '').replace(/\.pdf$/i, '').trim();
+  const a = String(address || '').trim();
+  if (a && n.toLowerCase().endsWith(` - ${a.toLowerCase()}`)) n = n.slice(0, -(a.length + 3)).trim();
+  return n;
+}
+
 function guideProblems(guide, totalPages, stillToCome) {
   const problems = [];
   let next = 0;
@@ -75,9 +87,13 @@ function guideProblems(guide, totalPages, stillToCome) {
   return problems;
 }
 
-function fillWithGuide(html, { guide, totalPages, stillToCome = [], reportsLink = '' }) {
+function fillWithGuide(html, { guide, totalPages, stillToCome = [], reportsLink = '', attached = [] }) {
   const out = String(html || '');
   const problems = guideProblems(guide, totalPages, stillToCome);
+  for (const a of attached || []) {
+    const code = String(a || '').match(RX_FORM_CODE);
+    if (code) problems.push(`the attachment "${a}" uses the form code ${code[0]}; rename the file in plain English`);
+  }
   if (problems.length) return { html: out, filled: { guide: false }, warnings: problems };
 
   const seller = RX_SELLER_RANGE.exec(out) || /Pages(?:\s|&nbsp;|<[^>]+>)*1(?:\s|&nbsp;|<[^>]+>)*-/i.exec(out);
@@ -108,6 +124,10 @@ function fillWithGuide(html, { guide, totalPages, stillToCome = [], reportsLink 
   const parts = [`<b>What's in the package:</b><ul>${items}</ul>`];
   const todo = (stillToCome || []).map((x) => String(x || '').trim()).filter(Boolean);
   if (todo.length) parts.push(stillToComeList(todo));
+  // THE SEPARATE ATTACHMENTS, NAMED (Megan, 5733 E Stillwater #2, 2026-10-23:
+  // "dont we need to address the 3 seller reports attached? same with prelim?").
+  const files = (attached || []).map((x) => String(x || '').trim()).filter(Boolean);
+  if (files.length) parts.push(`<b>Also attached as separate files:</b><ul>${files.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`);
   if (reportsLink) parts.push(`<a href="${esc(reportsLink)}">CLICK HERE FOR SELLER REPORTS</a>`);
   const block = brLayout ? parts.join('<br><br>') : parts.map((x) => `<div>${x}</div><br>`).join('');
   return { html: out.slice(0, start) + block + out.slice(end), filled: { guide: true }, warnings: [] };
@@ -308,4 +328,4 @@ function serialList(items) {
   return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 }
 
-module.exports = { fillBuyerEmail, buildRevisionEmail, joinList, guideProblems, RX_FORM_CODE };
+module.exports = { attachmentLabel, fillBuyerEmail, buildRevisionEmail, joinList, guideProblems, RX_FORM_CODE };
