@@ -179,7 +179,7 @@ Return ONLY JSON:
     "page": <page number within that file, or null>,
     "evidence": "<what the page now says there, quoted as literally as you can>",
     "signed_by_all_sellers": <true if EVERY seller named on that form has signed (and dated) it, false if any seller line is blank, null if the form has no seller signature lines>,
-    "buyer_line": "<if fixed: ONE plain-English sentence for the BUYER saying what the seller changed, starting with 'The seller', e.g. 'The seller filled in where the 220 volt wiring is located (the garage).'>",
+    "buyer_line": "<if fixed: ONE short sentence for the BUYER, written the way you would explain it to a first-time home buyer: what changed and whether it tells them anything new about the home. Use everyday words, not the form's wording (never 'documents prepared during their ownership', 'addendum', 'paragraph'). Start with 'The seller'. Examples: 'The seller filled in where the 220 volt wiring is (the garage).' / 'The seller now notes there are reports from their time owning the home: the air conditioning work certificates and a mold inspection report.' For a pure paperwork fix (checking a box, adding a date, initials, a signature) write 'The seller made a paperwork correction (nothing new about the home).'>",
     "open_phrase": "<if open: a short plain-English phrase for what is still to come, e.g. 'where the 220 volt wiring is located'>"
   }],
   "files": [{ "file": <n>, "forms": ["<each form in the file by its FULL printed title, in order, e.g. Transfer Disclosure Statement>"] }]
