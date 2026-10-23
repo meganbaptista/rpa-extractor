@@ -1036,7 +1036,16 @@ async function fetchToBuffer(url, name) {
 // ----------------------------------------------------------------------------
 async function loadDocuments(documents, report = null) {
   const out = [];
-  const skip = (name, reason, info = false) => { if (Array.isArray(report)) report.push(info ? { name, reason, info: true } : { name, reason }); };
+  // A skipped file's bytes ride along NON-ENUMERABLY (never serialised into a
+  // record or payload), so the job can still file it for the buyer package:
+  // 5733 E Stillwater #2 (2026-10-23) skipped two home inspections and a
+  // termite report by name and kept no copy, so Megan had to fetch them.
+  const skip = (name, reason, info = false, buf = null) => {
+    if (!Array.isArray(report)) return;
+    const r = info ? { name, reason, info: true } : { name, reason };
+    if (buf) Object.defineProperty(r, 'bytes', { value: buf, enumerable: false });
+    report.push(r);
+  };
   for (const d of (documents || [])) {
     if (!d) continue;
     const name = d.name || d.filename || 'document.pdf';
@@ -1111,8 +1120,8 @@ async function loadDocuments(documents, report = null) {
       // zip branch above has always filtered them; the single-attachment path did
       // not, so anything emailed as a loose attachment (the common case) bypassed
       // the blocklist entirely and was billed in full.
-      if (isBlockedName(name)) { console.log(`[disclosure-intake] ${name} blocked (non-disclosure), skipping`); skip(name, 'not reviewed by rule (booklet, report or record, by its file name)'); continue; }
-      if (buf.length > MAX_DOC_BYTES) { console.warn(`[disclosure-intake] ${name} too large (${buf.length}B), skipping`); skip(name, `too large to review (${Math.round(buf.length / 1048576)}MB)`); continue; }
+      if (isBlockedName(name)) { console.log(`[disclosure-intake] ${name} blocked (non-disclosure), skipping`); skip(name, 'not reviewed by rule (booklet, report or record, by its file name)', false, buf); continue; }
+      if (buf.length > MAX_DOC_BYTES) { console.warn(`[disclosure-intake] ${name} too large (${buf.length}B), skipping`); skip(name, `too large to review (${Math.round(buf.length / 1048576)}MB)`, false, buf); continue; }
       out.push({ name, base64: buf.toString('base64') });
     } catch (err) {
       console.warn(`[disclosure-intake] failed to load ${name}: ${err.message}`);
@@ -1393,6 +1402,12 @@ const ANSWER_REVIEW_PROMPT =
   'Flag each one marked No or left blank, saying it should be YES because the unit shares walls. Also flag TDS C2 ' +
   'and SPQ 15D answered differently from each other: they ask the same question. (Megan, 1131 Alta Loma #415: a ' +
   'buyer-side TC sent both back.)\n' +
+  '   - NOT WORTH CHASING (Megan, 2647 E Wilson; she cut these from the email to the agent): (1) SPQ 7A vs 7B: ' +
+  'work done for energy or water efficiency (tankless water heater, solar, insulation, efficient fixtures) is ' +
+  'disclosed under 7B; when 7B is Yes, do NOT say 7A should be Yes for that same work. (2) The SOLAR form\'s system ' +
+  'age and installation date are the seller\'s estimates: never flag them because a permit, BuildFax or other record ' +
+  'shows a different date. (3) SOLAR 3B(2)(A), the net metering tier or rate: whatever the seller wrote is their ' +
+  'answer; never ask them to clarify it.\n' +
   '   - MAINTENANCE IS NOT A PROBLEM. Some questions ask about PROBLEMS, not about work done: SPQ 8A (defects in ' +
   'systems), 11B (problems with pests), 11C (pest damage/odors), 11D (treatment or eradication of pests, or repair ' +
   'of their damage), 13A (diseases or infestations of plants) and 13E (defects, leaks, cracks, repairs or other ' +
@@ -3270,6 +3285,27 @@ function isMirrorDefectMismatch(f) {
 const isSpq19B = (f) => !!f && /^spq$/i.test(String(f.form || '').trim())
   && /^19\s*\(?\s*B\s*\)?$/i.test(String(f.item || '').trim());
 
+/**
+ * MEGAN'S WILSON CUTS (2647 E Wilson, 2026-10-23: removed from her email to
+ * the agent; "I just dont want to look like a psycho TC"). Routed to CHECK
+ * BEFORE SENDING, never chased. Matched on what the finding is ABOUT, not on
+ * one sentence, because the review never words it the same way twice.
+ */
+const RX_EFFICIENCY = /\b7\s*B\b|tankless|solar|energy|efficien|insulat|low[- ]flow|dual[- ]pane/i;
+const is7ACoveredBy7B = (f) => !!f && /^spq$/i.test(String(f.form || '').trim()) && /^7\s*A$/i.test(String(f.item || '').trim())
+  && f.issue === 'answer_contradicts_package' && RX_EFFICIENCY.test(`${f.reason || ''} ${f.document || ''}`);
+const RX_RECORD = /\bpermit|\brecords?\b|finaled|buildfax|county|assessor/i;
+const RX_DATEISH = /\b(?:19|20)\d\d\b|\b\d{1,2}\/\d{2,4}\b|years? old|\bage\b|install/i;
+const isSolarDateVsRecord = (f) => !!f && /^solar$/i.test(String(f.form || '').trim())
+  && f.issue === 'answer_contradicts_package' && RX_RECORD.test(`${f.reason || ''} ${f.document || ''}`) && RX_DATEISH.test(String(f.reason || ''));
+const isMeteringTierWording = (f) => !!f && /^solar$/i.test(String(f.form || '').trim())
+  && /^3\s*B\s*\(?2\)?\s*\(?A\)?$/i.test(String(f.item || '').trim());
+const WILSON_CUTS = [
+  [is7ACoveredBy7B, 'work that 7B (energy or water efficiency) already covers'],
+  [isSolarDateVsRecord, 'a seller estimate of the solar system\'s age or install date vs a permit record'],
+  [isMeteringTierWording, 'the seller\'s wording of the net metering tier'],
+];
+
 /** 17F/17G answer finding on a condo (brushExempt = unit-numbered address). See reconcileAndCallback. */
 const isCondoBrushFlag = (f, brushExempt) => !!brushExempt && !!f && /^spq$/i.test(String(f.form || '').trim())
   && /^17\s*\(?[FG]\)?$/i.test(String(f.item || '').trim())
@@ -4356,6 +4392,18 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
    * ordinance)". The condo exemption above covered only the fire-zone check.
    * Megan's rule: the association, not the unit owner, clears the brush.
    */
+  for (const f of allFlags) {
+    const cut = WILSON_CUTS.find(([test]) => f.issue !== 'not_worth_chasing' && test(f));
+    if (!cut) continue;
+    f.original_issue = f.issue;
+    f.issue = 'not_worth_chasing';
+    verify.push({
+      item: [f.form, f.item].filter(Boolean).join(' '),
+      short: `${String(f.reason || '').trim()} (${cut[1]}; not sent)`,
+      note: `this is ${cut[1]}, which Megan does not chase with the agent, so it was NOT put in the email. `
+        + `The review reported: "${String(f.reason || '').trim()}"`,
+    });
+  }
   for (const f of allFlags.filter((x) => isCondoBrushFlag(x, brushExempt))) {
     f.original_issue = f.issue;
     f.issue = 'condo_brush_exempt';
@@ -4447,6 +4495,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     && f.issue !== 'upkeep_not_problem'
     && f.issue !== 'claim_explained'
     && f.issue !== 'condo_brush_exempt'
+    && f.issue !== 'not_worth_chasing'
     && f.issue !== 'scan_unconfirmed'));
   for (const f of unseenAttachment) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
@@ -4767,7 +4816,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.

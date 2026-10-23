@@ -103,5 +103,31 @@ ok('Yes/No is read strictly ("N/A" is not "No")', [R.yesNo('N/A'), R.yesNo('No')
 const all = [m415, run({ c2: 'Yes', c2x: 'Fences', '15d': 'No', '15dx': 'Fences' }, 'x'), run({ ...condo, '14d': 'No' }), run({ '7a': 'Yes' }, 'x'), run({ '11a': 'No', '11ax': 'dog' }, 'x')].flat();
 ok('no em dashes in any ask', all.some((m) => /—/.test(m.ask + m.why + m.emailHeading)), false);
 
+
+// Missing property details + 7E vs Year Built (her form's real wording, 2026-10-23).
+const F = (label, value = '') => ({ label, value });
+const detailForm = (o = {}) => [
+  F('Year Built', o.year || ''), F('Is the property\'s water heater powered by Gas (most common), Solar, or Electric?', o.wh ?? 'Gas'),
+  F('Is there exhaust fans on your property (typically in bathrooms or kitchens)', o.fans || 'Yes'), F('Where are the exhaust fans? (typically in bathrooms & above kitchen stove)', o.fansWhere ?? 'Bathrooms'),
+  F('Is there 220 Volt Wiring in the property? (These plugs are meant for ovens, dryers ...)', o.v220 || 'No'), F('Where is the 220 Volt Wiring? (i.e ovens, dryers, car charger)', o.v220Where ?? ''),
+  F('Is there a fireplace(s)?', o.fire || 'No'), F('Where is the fireplace(s)? (i.e living room, bedroom)', o.fireWhere ?? ''),
+  F('What type of roof does the property have?', o.roof ?? 'Tile'), F('Approximately how old is the roof? (if you do not know, type "unaware")', o.roofAge ?? 'unaware'),
+  F('C1: Substances, materials, or products which may be an environmental hazard?', o.c1 ?? 'No'),
+  F('7E: Was the property built before 1978?', o.e7 || ''),
+];
+const dm = (o) => R.detailsMissing(detailForm(o));
+ok('details: all answered -> nothing', dm({}), null);
+ok('details: 220 volt Yes with a blank location -> asked', /where the 220 volt wiring is/.test((dm({ v220: 'Yes' }) || {}).ask || ''), true);
+ok('details: 220 volt No with a blank location -> fine', dm({ v220: 'No' }), null);
+ok('details: fireplace Yes, blank location + blank roof type -> both in one ask', /where the fireplace is and the roof type/.test((dm({ fire: 'Yes', roof: '' }) || {}).ask || ''), true);
+ok('details: blank roof type, but the TDS section was never filled -> fine', dm({ roof: '', c1: '' }), null);
+ok('details: "unaware" roof age is an answer', dm({ roofAge: 'unaware' }), null);
+const y7 = (year, e7) => { const o = detailForm({ year, e7 }); return R.yearBuilt7E(R.questions(o), o.filter((x) => x.value)); };
+ok('7E: built 1955, answered No -> should be Yes', /would be "Yes"/.test((y7('1955', 'No') || {}).ask || ''), true);
+ok('7E: built 1991, answered Yes -> should be No', /would be "No"/.test((y7('1991', 'Yes') || {}).ask || ''), true);
+ok('7E: built 1972, answered Yes -> fine', y7('1972', 'Yes'), null);
+ok('7E: no year built on file -> fine', y7('', 'No'), null);
+ok('new asks have no em dashes', /\u2014/.test(`${(dm({ v220: 'Yes', roof: '' }) || {}).ask}${(y7('1955', 'No') || {}).ask}`), false);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall seller-answer-rules checks pass');
 process.exit(failed ? 1 : 0);

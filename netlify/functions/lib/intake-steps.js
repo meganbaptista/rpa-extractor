@@ -113,10 +113,22 @@ async function load(ctx) {
   }
   ctx.log(`loaded ${meta.length} file(s), ${meta.reduce((s, d) => s + d.pages, 0)} page(s); `
     + `${report.filter((r) => !r.info).length} not reviewed`);
+  // FILES NOT AUDITED ARE STILL KEPT (reports skipped by name, files too large
+  // to review), as doc/<id>/x<k>, so the buyer package can be built from the
+  // job alone. Not reviewed, not counted in page accounting.
+  const extras = [];
+  for (const r of report) {
+    if (!r.bytes) continue;
+    const key = `x${extras.length}`;
+    await J.putDoc(store, job.id, key, r.bytes);
+    extras.push({ key, name: r.name, bytes: r.bytes.length, reason: r.reason });
+  }
+  if (extras.length) ctx.log(`kept ${extras.length} file(s) not audited: ${extras.map((e) => e.name).join(', ')}`);
   return (j) => {
     j.docs = meta;
     j.skipped = report.filter((r) => !r.info);
     j.archives = report.filter((r) => r.info);
+    j.extras = extras;
     if (revision && meta.length) j.revision = revision;
     J.addSteps(j, !meta.length ? ['finish'] : (revision ? ['revcheck', 'revdraft'] : ['map', 'plan']));
   };

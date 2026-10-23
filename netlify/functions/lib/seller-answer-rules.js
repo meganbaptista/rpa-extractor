@@ -208,6 +208,78 @@ function explainedButNo(qs) {
 }
 
 /**
+ * MISSING PROPERTY DETAILS (the TDS Section II A lines the buyer side chases:
+ * 220 volt wiring, exhaust fans, fireplace and gas starter locations; roof
+ * type and age; water heater type). Her form asks "Is there X?" then "Where is
+ * X?"; the "Where" field only shows after a Yes, so a Yes with a blank Where is
+ * a real gap. The roof and water heater questions are flagged only when the
+ * seller filled out the TDS section at all (C1/C2 answered), so a branch of the
+ * form the seller never saw cannot trigger it.
+ */
+const DETAIL_PAIRS = [
+  [/^is there 220 volt wiring/i, /^where is the 220 volt wiring/i, 'where the 220 volt wiring is'],
+  [/^is there exhaust fans?/i, /^where are the exhaust fans/i, 'where the exhaust fans are'],
+  [/^is there a fireplace/i, /^where is the fireplace/i, 'where the fireplace is'],
+  [/^is there a gas starter/i, /^where is the gas starter/i, 'where the fireplace gas starter is'],
+];
+const DETAIL_SINGLES = [
+  [/^what type of roof/i, 'the roof type'],
+  [/^approximately how old is the roof/i, 'the roof age (or "unaware")'],
+  [/water heater powered by gas/i, 'whether the water heater is gas, solar or electric'],
+];
+function detailsMissing(ordered) {
+  const byLabel = (rx) => (ordered || []).find((f) => rx.test(String(f.label || '').trim()));
+  const missing = [];
+  for (const [askRx, whereRx, what] of DETAIL_PAIRS) {
+    const ask = byLabel(askRx); const where = byLabel(whereRx);
+    if (ask && where && yesNo(ask.value) === 'yes' && !String(where.value || '').trim()) missing.push(what);
+  }
+  const tdsFilled = (ordered || []).some((f) => /^C[12]\s*:/i.test(String(f.label || '')) && yesNo(f.value));
+  if (tdsFilled) {
+    for (const [rx, what] of DETAIL_SINGLES) {
+      const f = byLabel(rx);
+      if (f && !String(f.value || '').trim()) missing.push(what);
+    }
+  }
+  if (!missing.length) return null;
+  return {
+    rule: 'detailsMissing',
+    topic: 'Property details',
+    section: 'TDS II A',
+    sectionRx: /\bII\s*A\b|220|exhaust|fireplace|roof|water heater/i,
+    emailHeading: 'A few property details',
+    seller_wrote: '(blank)',
+    why: 'The Transfer Disclosure Statement prints these details, and the buyer\'s side sends back blank lines.',
+    ask: `A few property details were left blank: ${serial(missing)}. Could you fill ${missing.length === 1 ? 'that' : 'those'} in? If you're not sure, "Unknown" is fine.`,
+    keyword: /property details were left blank/i,
+  };
+}
+
+/** SPQ 7E (built before 1978) against the Year Built the team entered. */
+function yearBuilt7E(qs, fields) {
+  const yb = (fields || []).find((f) => /^year built$/i.test(String(f.label || '').trim()));
+  const year = yb ? Number(String(yb.value || '').match(/\b(1[89]\d\d|20\d\d)\b/)?.[1]) : NaN;
+  const q = find(qs, '7E', /built before 1978/);
+  if (!year || !q) return null;
+  const should = year < 1978 ? 'yes' : 'no';
+  if (q.answer === should) return null;
+  const want = should === 'yes' ? 'Yes' : 'No';
+  return {
+    rule: 'yearBuilt7E',
+    topic: 'Built before 1978',
+    section: 'SPQ 7E',
+    sectionRx: /\b7\s*E\b/i,
+    emailHeading: 'Built before 1978 (SPQ 7E)',
+    seller_wrote: q.answer === 'yes' ? 'Yes' : 'No',
+    why: `The property was built in ${year}, so the before-1978 answer reads as a mistake (it also decides whether a lead-based paint disclosure is required).`,
+    ask: `The property records show it was built in ${year}, so the question about whether the property was built before 1978 would be "${want}". Could we update it to "${want}"?`,
+    keyword: /built before 1978/i,
+  };
+}
+
+const serial = (xs) => (xs.length <= 2 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')}, and ${xs[xs.length - 1]}`);
+
+/**
  * Every rule that fires, as review mandates.
  *   ordered:  the form's fields in order with answers (explanations included)
  *   fields:   all answered fields (property information included), for the HOA flag
@@ -215,7 +287,7 @@ function explainedButNo(qs) {
  */
 function sellerAnswerMandates({ ordered, fields, address, prior = [] }) {
   const qs = questions(ordered);
-  const first = [sharedWalls(qs, address), hoaConsistency(qs, fields)].filter(Boolean);
+  const first = [sharedWalls(qs, address), hoaConsistency(qs, fields), detailsMissing(ordered), yearBuilt7E(qs, fields)].filter(Boolean);
   // Shared walls already asks about C2/15D on a condo; otherwise a C2/15D
   // disagreement is its own question.
   const mirror = mirrorMismatch(qs.filter((q) => !first.some((m) => m.sectionRx.test(locatorOf(q.code)))));
@@ -228,4 +300,4 @@ function sellerAnswerMandates({ ordered, fields, address, prior = [] }) {
   return [...first, yesNoExplanation(rest), explainedButNo(rest)].filter(Boolean);
 }
 
-module.exports = { sellerAnswerMandates, questions, codeOf, yesNo, sharedWalls, hoaConsistency, mirrorMismatch, yesNoExplanation, explainedButNo };
+module.exports = { detailsMissing, yearBuilt7E, sellerAnswerMandates, questions, codeOf, yesNo, sharedWalls, hoaConsistency, mirrorMismatch, yesNoExplanation, explainedButNo };
