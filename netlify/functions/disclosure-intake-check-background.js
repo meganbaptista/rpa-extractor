@@ -1412,6 +1412,14 @@ const ANSWER_REVIEW_PROMPT =
   'lead-based-paint question (SPQ 7E) must match it — built 1978 or later means 7E should be NO; built before 1978 ' +
   'means 7E should be YES (and an LPD is required). Flag a contradicting answer. If the year built is NOT in the ' +
   'package, skip this check.\n' +
+  'ALSO check TDS Section I (COORDINATION WITH OTHER DISCLOSURE FORMS, "Substituted Disclosures", near the top of ' +
+  'TDS page 1). It has three boxes: "Inspection reports completed pursuant to the contract of sale or receipt for ' +
+  'deposit", "Additional inspection reports or disclosures: ____", and "No substituted disclosures for this ' +
+  'transfer". At least ONE must be checked. If NONE of the three is checked, return a flag with "form":"TDS", ' +
+  '"item":"Section I", "issue":"unanswered", "marked":"blank", and "reason":"none of the Section I (Substituted ' +
+  'Disclosures) boxes is checked; one of them, usually \'No substituted disclosures for this transfer\', should be". ' +
+  'If "Additional inspection reports or disclosures" is checked but its line is blank, flag it "detail_incomplete". ' +
+  '(Megan, 2647 E Wilson, 2026-10-23.)\n' +
   'ALSO check TDS Section II (the Seller\'s Information checklist of features the property HAS). Go through EVERY row ' +
   'of this checklist in order and do not skip any. For any item the ' +
   'seller marked the property HAS but left its REQUIRED DETAIL blank, raise a "detail_incomplete" flag: in ' +
@@ -3223,7 +3231,9 @@ function isMirrorDefectMismatch(f) {
   const here = `${f.form || ''} ${f.item || ''}`;
   const there = `${f.other_form || ''} ${f.source || ''} ${f.reason || ''}`;
   const isSpq8A = (t) => /\bspq\b[^a-z0-9]*8\s*a\b|\bspq\s+8a\b/i.test(t);
-  const isTdsIIB = (t) => /\btds\b.{0,20}(section\s+)?(ii|2)\s*\(?b\)?\b/i.test(t);
+  // 5733 E Stillwater #2 (2026-10-23): the review wrote "TDS B is marked No", no
+  // "II", and the mismatch went to the agent. Section B on its own counts.
+  const isTdsIIB = (t) => /\btds\b.{0,20}(section\s+)?(ii|2)\s*\(?b\)?\b/i.test(t) || /\btds\s+(?:section\s+)?b\b/i.test(t);
   /**
    * TDS C1 IS NOT SPQ 10B. C1 asks about an environmental HAZARD on the property
    * now; 10B asks about any mold problem PAST or present. A remediated past mold
@@ -3259,6 +3269,11 @@ function isMirrorDefectMismatch(f) {
  */
 const isSpq19B = (f) => !!f && /^spq$/i.test(String(f.form || '').trim())
   && /^19\s*\(?\s*B\s*\)?$/i.test(String(f.item || '').trim());
+
+/** 17F/17G answer finding on a condo (brushExempt = unit-numbered address). See reconcileAndCallback. */
+const isCondoBrushFlag = (f, brushExempt) => !!brushExempt && !!f && /^spq$/i.test(String(f.form || '').trim())
+  && /^17\s*\(?[FG]\)?$/i.test(String(f.item || '').trim())
+  && (f.issue === 'answer_contradicts_package' || /should be yes|update it to yes|agree/i.test(String(f.reason || '')));
 
 /**
  * SPQ 6H (insurance claims) EXPLAINED BY A CLAIM, LAWSUIT OR SETTLEMENT.
@@ -4334,6 +4349,23 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // correct pairing). The review does not know that, and telling it would mean
   // more prompt text, which has displaced a real rule before. So: VERIFY.
   const { fhdsDefault, scanUnconfirmed } = routeUnconfirmedFlags(allFlags);
+  /**
+   * 17F/17G (BRUSH CLEARANCE) ON A CONDO IS NEVER CHASED, whatever the review
+   * compares it with. 5733 E Stillwater Ave #2 (2026-10-23): "SPQ 17G is marked
+   * No, which does not match FHDS (Section 3A ... vegetation management
+   * ordinance)". The condo exemption above covered only the fire-zone check.
+   * Megan's rule: the association, not the unit owner, clears the brush.
+   */
+  for (const f of allFlags.filter((x) => isCondoBrushFlag(x, brushExempt))) {
+    f.original_issue = f.issue;
+    f.issue = 'condo_brush_exempt';
+    verify.push({
+      item: [f.form, f.item].filter(Boolean).join(' '),
+      short: `${String(f.reason || '').trim()} (a condo: the association clears the brush, so No is normally right; not sent)`,
+      note: 'this is a unit-numbered (condo) address, where brush clearance belongs to the association and a No on '
+        + `17F/17G is normally correct, so it was NOT put in the email. The review reported: "${String(f.reason || '').trim()}"`,
+    });
+  }
   for (const f of allFlags.filter(isClaimExplained6H)) {
     f.original_issue = f.issue;
     f.issue = 'claim_explained';
@@ -4414,6 +4446,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     && f.issue !== 'fhds_default_option'
     && f.issue !== 'upkeep_not_problem'
     && f.issue !== 'claim_explained'
+    && f.issue !== 'condo_brush_exempt'
     && f.issue !== 'scan_unconfirmed'));
   for (const f of unseenAttachment) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
@@ -4734,7 +4767,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
