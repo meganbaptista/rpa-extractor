@@ -38,6 +38,12 @@ const OUR_OUTPUT = /^(disclosures - |audit disclosures|seller report - |buyer re
 const REPORT = /termite|wood destroying|pest|inspection|permit|roof|sewer|chimney|mold|home warranty|restoration|mitigation|survey|report/i;
 const NOT_A_SELLER_REPORT = /prelim|title|natural hazard|\bnhd\b|escrow|\bemd\b|comm\b|commission|page 17|mls|property profile|realist|matrix|tax|trust|grant deed|vesting|buyer/i;
 const NEVER_FROM_TEMPLATE = new Set(['DIA', 'DSDT']);
+// The only standard forms we add from the template when the listing side did
+// not send them: the ones Megan has approved adding (Scenic: BHAA, LPD; Wilson:
+// WFDA; SBSA is the same kind of advisory). Wilson's list also wanted MCA and a
+// Trust Advisory, and her approved package did NOT add them: so a wanted form
+// outside this list is only noted, never added.
+const TEMPLATE_OK = new Set(['BHAA', 'LPD', 'WFDA', 'SBSA']);
 
 // Template forms that are C.A.R. standards (anything else on the template,
 // after the C.A.R. forms, is the brokerage's own pages or local area forms).
@@ -107,6 +113,7 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
     if (wantedCodes) {
       for (const code of wantedCodes.map((c) => String(c).toUpperCase())) {
         if (delivered.has(code) || NEVER_FROM_TEMPLATE.has(code)) continue;
+        if (!TEMPLATE_OK.has(code)) continue;
         const f = forms.find((x) => String(x.code || '').toUpperCase() === code);
         if (!f) { warnings.push(`the compliance list wants ${code}, the listing side did not send it, and the template does not have it`); continue; }
         dropIns.forms.push({ code, label: `${f.name || code} (template)`, src, pages: f.pages });

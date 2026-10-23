@@ -330,7 +330,8 @@ async function finish(ctx) {
   }
   return (j) => {
     j.address = address;
-    j.status = 'done';
+    // The buyer package (lib/package-job.js) runs next and closes the job.
+    J.addSteps(j, ['package']);
     j.outcome = payload
       ? `${payload.overall_status}: ${payload.still_needed_count} to request, ${payload.response_flags_count} answer flag(s)`
       : 'finished';
@@ -527,6 +528,7 @@ async function run(name, ctx) {
     case 'identify': return identify(ctx, i);
     case 'review': return review(ctx, i);
     case 'finish': return finish(ctx);
+    case 'package': return require('./package-job').packageStep(ctx);
     case 'revcheck': return revcheck(ctx);
     case 'revdraft': return revdraft(ctx);
     default: throw new Error(`unknown step ${name}`);

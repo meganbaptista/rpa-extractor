@@ -4823,7 +4823,7 @@ module.exports._internal = { is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTie
 module.exports.core = {
   loadDocuments, planBatches, identifyForms, reviewAnswers, combineIdentifyReview,
   mergeBatchResults, reconcileAndCallback, sendCallback, pdfPageCount, mergeForms, renderPagesAsImages,
-  normalizeAddress, blobsConfig, STATE_STORE, CALLBACK_URL_ENV, EMPTY_KEY_ANSWERS,
+  pdfPageTexts, normalizeAddress, blobsConfig, STATE_STORE, CALLBACK_URL_ENV, EMPTY_KEY_ANSWERS,
 };
 
 exports.handler = async function (event) {
