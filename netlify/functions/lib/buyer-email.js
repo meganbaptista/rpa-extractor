@@ -111,7 +111,27 @@ function fillWithGuide(html, { guide, totalPages, stillToCome = [], reportsLink 
   return { html: out.slice(0, start) + block + out.slice(end), filled: { guide: true }, warnings: [] };
 }
 
+/**
+ * GREETING (Megan, 2026-10-23, 10600 Eastborne: the Zap wrote "Hello Jesse,"
+ * on an email to Jesse AND Gayle). Replaces only the first "Hello <names>,"
+ * the Zap wrote; refused (draft untouched) when there is none.
+ */
+function replaceGreeting(html, greeting) {
+  const g = String(greeting || '').trim();
+  if (!g) return { html, warnings: [] };
+  if (!/^(Hello|Hi|Dear)\b[^<>]{1,80},$/.test(g)) return { html, warnings: [`"${g}" does not look like a greeting ("Hello Jesse and Gayle,")`] };
+  const rx = /\b(Hello|Hi|Dear)\b[^<>,]{1,80},/;
+  if (!rx.test(html)) return { html, warnings: ['no "Hello <name>," greeting found in the draft; the greeting was not changed'] };
+  return { html: html.replace(rx, esc(g)), warnings: [] };
+}
+
 function fillBuyerEmail(html, opts = {}) {
+  if (opts.greeting) {
+    const g = replaceGreeting(html, opts.greeting);
+    if (g.warnings.length) return { html, filled: {}, warnings: g.warnings };
+    const rest = fillBuyerEmail(g.html, { ...opts, greeting: '' });
+    return rest.warnings.length ? { ...rest, html } : { ...rest, filled: { ...rest.filled, greeting: true } };
+  }
   if (Array.isArray(opts.guide) && opts.guide.length) return fillWithGuide(html, opts);
   const { seller, avid, stillToCome = [], reportsLink = '' } = opts;
   let out = String(html || '');

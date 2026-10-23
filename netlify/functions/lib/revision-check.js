@@ -58,6 +58,19 @@ function looksLikeCorrections(m) {
 }
 
 /**
+ * Items Megan said she will handle herself ("Earthquake Booklet Receipt - I can
+ * add this on my end", 12273 Donald Reed, 2026-10-22) are not the seller's to
+ * fix: they are never checked against the revision and never go in the buyer's
+ * "still to come" line. Returns { seller: [...], ours: [...] }.
+ */
+const RX_OURS = /\b(?:i|we)\s+(?:can|will|'ll)\s+(?:add|provide|prepare|send|handle|take care of)\b[^.]*\b(?:on (?:my|our) end|myself|ourselves)\b|\bon (?:my|our) end\b/i;
+function splitOurs(items) {
+  const seller = []; const ours = [];
+  for (const it of items || []) (RX_OURS.test(it) ? ours : seller).push(it);
+  return { seller, ours };
+}
+
+/**
  * The corrections email this revision answers: the newest message WE sent in
  * the thread before the revision arrived that reads as a corrections email and
  * has at least one bullet item. Returns { msg, items } or null (then the
@@ -154,6 +167,7 @@ For EACH item, find the page of the attached files where it is addressed and jud
 - "fixed": the requested answer, explanation, box, signature or form is now present on that page and answers what was asked.
 - "open": it has not been addressed (still blank, unchanged, or the form is not attached).
 Read handwriting and checkmarks carefully at full resolution. A question whose answer stays the same but now has the explanation that was asked for IS fixed.
+Files named "[reply <time>] ..." came in separate replies. The corrections may be spread across them: check every file. When the SAME form appears in more than one reply, judge the LATEST reply's copy (it replaces the earlier one) and point to that copy.
 
 Return ONLY JSON:
 {
@@ -269,6 +283,6 @@ function checkNoteHtml({ verdicts, correctionsDate, greetingNote, extra = [], ba
 }
 
 module.exports = {
-  correctionItems, findCorrectionsEmail, looksLikeCorrections, attachmentPlan, greetingFrom, formRank, packageOrder, mergedPage,
+  correctionItems, findCorrectionsEmail, looksLikeCorrections, attachmentPlan, splitOurs, greetingFrom, formRank, packageOrder, mergedPage,
   agree, checkRevisions, emailInputs, checkNoteHtml, PROMPT,
 };

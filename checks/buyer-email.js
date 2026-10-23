@@ -136,5 +136,10 @@ refuse('a page past the end of the PDF', { totalPages: 10 }, /page 11 is not in 
 refuse('fewer lines than she asked for', { requested: 4 }, /asked for 4 item/);
 refuse('no greeting', { greeting: '' }, /no greeting/);
 
+// Greeting (10600 Eastborne, 2026-10-23: "Hello Jesse," on an email to Jesse and Gayle).
+const greeted = fillBuyerEmail(TEMPLATE, { guide: [{ from: 1, to: 9, label: "The seller's disclosures" }, { from: 10, to: 20, label: 'Advisories' }], totalPages: 20, greeting: 'Hello Christopher and Dana,' });
+ok('greeting replaced, guide still filled', [/^<div>Hello Christopher and Dana,<\/div>/.test(greeted.html), greeted.filled.guide, greeted.filled.greeting, greeted.warnings], [true, true, true, []]);
+ok('a non-greeting is refused, draft untouched', fillBuyerEmail(TEMPLATE, { guide: [{ from: 1, to: 20, label: 'x' }], totalPages: 20, greeting: 'Jesse and Gayle' }).html, TEMPLATE);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall buyer-email checks pass');
 process.exit(failed ? 1 : 0);

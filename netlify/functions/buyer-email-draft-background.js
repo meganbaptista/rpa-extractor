@@ -76,7 +76,7 @@ exports.handler = async function (event) {
     const pdf = await drive.download(file.id);
     const totalPages = await pdfPageCount(pdf);
     const filled = fillBuyerEmail(msg.bodyHtml, {
-      guide: b.guide, totalPages,
+      guide: b.guide, totalPages, greeting: b.greeting || '',
       seller: b.seller, avid: b.avid, stillToCome: b.stillToCome || [], reportsLink: b.reportsLink || '',
     });
     // Megan, 2026-10-22: the full NHD report, the Prelim and the vendor wildfire

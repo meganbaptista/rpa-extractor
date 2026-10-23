@@ -119,6 +119,9 @@ const sendFiles = files.map((f) => ({ ...f, base64: 'AA==' }));
   ok('superseded banner sits above the items', /CHECK BEFORE SENDING[\s\S]*SUPERSEDED[\s\S]*asked for/.test(rc.checkNoteHtml({ verdicts: kVerdicts, banner: 'SUPERSEDED: a later reply arrived' })), true);
   const two = buildRevisionEmail({ greeting: 'Hello Dana,', changes: [{ page: 1, label: 'The seller changed 5B to Yes.' }, { page: 1, label: 'The seller checked 19B.' }], forms: ['Amendment to Prior Disclosure'], totalPages: 1 });
   ok('two changes on one page -> one "Pages 1:" line', (two.html.match(/Pages 1:/g) || []).length, 1);
+  // 12273 Donald Reed: items she said she will add herself are not the seller's.
+  const split = rc.splitOurs(['NHD Statement', 'Earthquake Booklet Receipt - I can add this on my end', 'Orange County Local Area Disclosures - I can add this on my end', 'TDS disclosure date is blank. Could the seller answer it?', 'We will add the AVID ourselves']);
+  ok('"I can add this on my end" items are hers, not the seller\'s', [split.seller, split.ours.length], [['NHD Statement', 'TDS disclosure date is blank. Could the seller answer it?'], 3]);
   const note = rc.checkNoteHtml({ verdicts: differ.items, correctionsDate: 'Thu, 22 Oct 2026 10:27', extra: ['Greeting copied from your package email ("Hello Omeed,"); add any other buyer.'] });
   ok('the red note lists every item and how it was judged',
     [/FIXED \(page 1 of the attachment\)/.test(note), /CHECK THIS ONE/.test(note), /two reads disagreed/.test(note), /delete through here/.test(note)], [true, true, true, true]);

@@ -46,21 +46,59 @@ const isPdfOrZip = (a) => /\.(pdf|zip)$/i.test(a.filename || '')
 
 // ---------------------------------------------------------------------------
 
+const replyTime = (m) => new Date(Number(m.internalDate)).toLocaleString('en-US',
+  { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
 async function load(ctx) {
   const { store, job, core, gmail } = ctx;
   let documents = [];
   let msg = null;
+  // A REPLY TO HER CORRECTIONS EMAIL is a revision: check the items she asked
+  // for and draft the buyer reply (revcheck, revdraft) instead of auditing it
+  // as a new package. A replay can preset job.source.revision.
+  let revision = job.source.revision || null;
   if (job.source.localFiles) {
     const fs = require('fs');
     const path = require('path');
     documents = job.source.localFiles.map((p) => ({ name: path.basename(p), base64: fs.readFileSync(p).toString('base64') }));
   } else {
     msg = await gmail.getMessage(job.source.messageId);
-    for (const a of msg.attachments.filter(isPdfOrZip)) {
-      const buf = await gmail.getAttachment(msg.id, a.attachmentId);
-      documents.push({ name: a.filename, base64: buf.toString('base64') });
+    let replies = [msg];
+    if (!revision && gmail.getThreadMessages) {
+      try {
+        const thread = await gmail.getThreadMessages(msg.threadId);
+        const found = rc.findCorrectionsEmail(thread, msg);
+        if (found) {
+          const split = rc.splitOurs(found.items);
+          revision = { correctionsId: found.msg.id, correctionsDate: (found.msg.headers && found.msg.headers.date) || '', items: split.seller, ours: split.ours };
+          // EVERY listing-side reply with files since her corrections email, up
+          // to this one: corrections often come in more than one email (12273
+          // Donald Reed, 2026-10-23: two emails, one thread), and a re-sent form
+          // supersedes the earlier copy (1222 N Kings Rd #8). The check sees
+          // them all, each file labelled with its reply's time.
+          const since = Number(found.msg.internalDate);
+          replies = thread.filter((m) => !(m.labelIds || []).includes('SENT') && Number(m.internalDate) > since
+            && Number(m.internalDate) <= Number(msg.internalDate) && (m.attachments || []).some(isPdfOrZip));
+          if (!replies.some((m) => m.id === msg.id)) replies.push(msg);
+          revision.replies = replies.map((m) => ({ id: m.id, at: Number(m.internalDate) }));
+          ctx.log(`revision: answers the corrections email of ${revision.correctionsDate} (${found.items.length} item(s)); ${replies.length} reply(ies) with files since`);
+        }
+      } catch (err) {
+        // Retry the step; on the last try carry on as a new package (the full
+        // audit) rather than drop the delivery.
+        if (ctx.attempt < J.MAX_ATTEMPTS) throw new Error(`could not read the thread: ${err.message}`);
+        ctx.log(`could not read the thread on the last try, auditing as a new package: ${err.message}`);
+        replies = [msg];
+      }
     }
-    documents.push(...shareLinks(msg.bodyHtml, msg.bodyText));
+    for (const m of replies) {
+      const label = replies.length > 1 ? `[reply ${replyTime(m)}] ` : '';
+      for (const a of (m.attachments || []).filter(isPdfOrZip)) {
+        const buf = await gmail.getAttachment(m.id, a.attachmentId);
+        documents.push({ name: `${label}${a.filename}`, base64: buf.toString('base64') });
+      }
+      documents.push(...shareLinks(m.bodyHtml, m.bodyText).map((l) => ({ ...l, name: `${label}${l.name}` })));
+    }
   }
 
   const report = [];
@@ -74,24 +112,6 @@ async function load(ctx) {
   }
   ctx.log(`loaded ${meta.length} file(s), ${meta.reduce((s, d) => s + d.pages, 0)} page(s); `
     + `${report.filter((r) => !r.info).length} not reviewed`);
-  // A REPLY TO HER CORRECTIONS EMAIL is a revision: check the items she asked
-  // for and draft the buyer reply (revcheck, revdraft) instead of auditing it
-  // as a new package. A replay can preset job.source.revision.
-  let revision = job.source.revision || null;
-  if (!revision && msg && meta.length && gmail.getThreadMessages) {
-    try {
-      const found = rc.findCorrectionsEmail(await gmail.getThreadMessages(msg.threadId), msg);
-      if (found) {
-        revision = { correctionsId: found.msg.id, correctionsDate: (found.msg.headers && found.msg.headers.date) || '', items: found.items };
-        ctx.log(`revision: answers the corrections email of ${revision.correctionsDate} (${found.items.length} item(s))`);
-      }
-    } catch (err) {
-      // Retry the step; on the last try carry on as a new package (the full
-      // audit) rather than drop the delivery.
-      if (ctx.attempt < J.MAX_ATTEMPTS) throw new Error(`could not read the thread: ${err.message}`);
-      ctx.log(`could not read the thread on the last try, auditing as a new package: ${err.message}`);
-    }
-  }
   return (j) => {
     j.docs = meta;
     j.skipped = report.filter((r) => !r.info);
@@ -413,13 +433,14 @@ async function revdraft(ctx) {
       const when = (m) => new Date(Number(m.internalDate)).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
       const later = deliveries.filter((m) => Number(m.internalDate) > sentAt);
       const earlier = deliveries.filter((m) => Number(m.internalDate) < sentAt);
-      if (later.length) banner = (`SUPERSEDED: a later reply with revisions arrived (${later.map(when).join(', ')}). Use the draft for that one, not this.`);
-      else if (earlier.length) notes.push(`This replaces the draft for the earlier reply (${earlier.map(when).join(', ')}).`);
+      if (later.length) banner = `SUPERSEDED: a later reply with revisions arrived (${later.map(when).join(', ')}). Its draft checks every reply together; use that one, not this.`;
+      else if (earlier.length) notes.push(`This checks every reply since your corrections email together (${[...earlier, { internalDate: sentAt }].map(when).join(', ')}); it replaces any draft made for the earlier one${earlier.length > 1 ? 's' : ''}.`);
     } catch (err) {
       ctx.log(`could not compare with other replies in the thread: ${err.message}`);
     }
     notes.push(greeting ? `Greeting copied from your package email ("${greeting}").` : 'No greeting was found in your package email; add one.');
     notes.push('Only the items in your corrections email were checked; a new form in this delivery was not audited.');
+    if ((job.revision.ours || []).length) notes.push(`Yours to add (you said so in your email, not checked and not in the buyer email): ${job.revision.ours.join('; ')}.`);
     if (plan.left.length) notes.push(`Not attached (no fix in them): ${plan.left.map((f) => f.name).join(', ')}.`);
     if (pdf.rebuilt.length) notes.push(`Damaged file(s) rebuilt as page images so they could be attached: ${pdf.rebuilt.join(', ')}. Check they read clearly.`);
     if (!address) notes.push('The property address could not be read from the revised forms.');
