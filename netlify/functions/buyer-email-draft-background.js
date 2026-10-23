@@ -118,7 +118,12 @@ exports.handler = async function (event) {
     const labelNames = Array.isArray(b.labels) && b.labels.length ? b.labels : ['Buyer Disclosures', 'Edelyn'];
     const ids = (await Promise.all(labelNames.map((n) => gmail.labelId(n)))).filter(Boolean);
     if (newMsgId && ids.length) await gmail.modifyMessage(newMsgId, { add: ids });
-    await save({ ok: true, ...summary, rawBytes: raw.length, labelled: labelNames.filter((_, i) => ids[i]) });
+    // READ IT BACK. 2026-10-23 Scenic: an update made 11s after a deploy ran
+    // on the old code, and a fresh preview (built, not read) looked right.
+    // What the draft really holds is saved, so "updated" is checked, not assumed.
+    let readBack = '';
+    try { if (newMsgId) readBack = String((await gmail.getMessage(newMsgId)).bodyText || '').slice(0, 4000); } catch (e) { readBack = `(could not read back: ${e.message})`; }
+    await save({ ok: true, ...summary, rawBytes: raw.length, labelled: labelNames.filter((_, i) => ids[i]), readBack });
     console.log(`[buyer-email] ${runId} draft ${draftId} filled and attached (${Math.round(raw.length / 1048576)}MB)`);
   } catch (err) {
     console.error(`[buyer-email] ${runId} failed: ${err.message}`);
