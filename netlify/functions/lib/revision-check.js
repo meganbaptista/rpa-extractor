@@ -42,7 +42,9 @@ function correctionItems(msg) {
       .replace(/CHECK BEFORE SENDING[\s\S]*?delete through here.*/i, '');
     items = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^[-*•]\s+\S/.test(l)).map((l) => l.replace(/^[-*•]\s+/, ''));
   }
-  return items.map((s) => s.replace(/\s+/g, ' ').trim()).filter((s) => s.length > 3);
+  // Any non-empty bullet is an item: "LPD" is three letters (6051 Scenic,
+  // 2026-10-23, the check silently skipped it with a "longer than 3" rule).
+  return items.map((s) => s.replace(/\s+/g, ' ').trim()).filter((s) => /[A-Za-z0-9]/.test(s));
 }
 
 // A CORRECTIONS email, not a first request for the forms: a delivery that

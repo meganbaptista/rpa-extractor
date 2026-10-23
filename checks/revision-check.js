@@ -30,6 +30,7 @@ const revision = { id: 'r1', internalDate: '3000', labelIds: ['INBOX'], headers:
 const items = rc.correctionItems(corrections);
 ok('her 3 items, not the quoted one', items.length, 3);
 ok('item text kept as she wrote it', items[1], 'SPQ 17G: The property is marked as a high fire hazard area, would you please confirm if annual brush clearance is required?');
+ok('a 3-letter item ("LPD") is kept', rc.correctionItems({ bodyHtml: '<p>Still outstanding:</p><ul><li>NHD Statement</li><li>LPD</li><li>TA</li></ul>' }), ['NHD Statement', 'LPD', 'TA']);
 ok('plain-text bullets when there is no HTML list', rc.correctionItems({ bodyHtml: '', newestText: 'Hi,\n- TDS C2 should be Yes\n• SPQ 15D should be Yes\nThanks' }), ['TDS C2 should be Yes', 'SPQ 15D should be Yes']);
 ok('a CHECK BEFORE SENDING block left in is not a request',
   rc.correctionItems({ bodyHtml: '<p>CHECK BEFORE SENDING</p><ul><li>internal note</li></ul><p>---------- delete through here ----------</p><ul><li>SPQ 8B explanation</li></ul>' }), ['SPQ 8B explanation']);
