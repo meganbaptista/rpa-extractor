@@ -132,6 +132,7 @@ const lorem = (seed, n = 60) => Array.from({ length: n }, (_, i) => `word${seed}
   ok('our brokerage pages = after the C.A.R. forms, not local area', JSON.stringify(d1.dropIns.ourBrokerage[0].pages), '[49,54,55]');
   ok('brokerage named in page text: no warning', d1.warnings.some((w) => /do not name/.test(w)), false);
   ok('no AVID in the deal folder = none added', d1.dropIns.ourAvid, null);
+  ok('our BLANK AVID in the deal folder is added (blank is correct)', (D.planDropIns({ dealFiles: [{ id: 'ab', name: 'Our AVID - Blank.pdf', pages: 3 }] }).dropIns.ourAvid || {}).id, 'ab');
   ok('only the termite report is a deal-folder seller report', d1.reports.map((r) => r.name).join(), 'Termite Inspection.pdf');
   const d2 = D.planDropIns({ dealFiles: dealFiles.concat([{ id: 'n', name: 'SIDE MCA (NEED S).pdf', pages: 6 }, { id: 'av', name: 'AVID - Buyer Agent.pdf', pages: 3 }]), template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
   ok('brokerage forms signed with the offer are not added again', d2.dropIns.ourBrokerage.length, 0);
@@ -139,6 +140,15 @@ const lorem = (seed, n = 60) => Array.from({ length: n }, (_, i) => `word${seed}
   ok('the NEED S file is not a seller report', d2.reports.some((r) => /NEED S/.test(r.name)), false);
   const d3 = D.planDropIns({ dealFiles, template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Rodeo Realty' });
   ok("template pages that do not name the buyer's brokerage are warned", d3.warnings.some((w) => /do not name Rodeo Realty/.test(w)), true);
+
+  // 4180 Sunnyslope: the template's local area advisory is not brokerage pages,
+  // and the firm's own "<Firm> DISC.pdf" in the deal folder is used instead.
+  const sfv = { ...template, texts: [], forms: template.forms.concat([{ code: '', name: 'SAN FERNANDO VALLEY LOCAL AREA DISCLOSURE ADVISORY', pages: [56, 57, 58] }]).filter((f) => f.pages[0] < 49 || f.pages[0] > 55) };
+  const d4 = D.planDropIns({ dealFiles, template: sfv, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Equity union' });
+  ok('a local area advisory on the template is not our brokerage pages', d4.dropIns.ourBrokerage.length, 0);
+  const d5 = D.planDropIns({ dealFiles: dealFiles.concat([{ id: 'eu', name: 'Equity Union DISC.pdf', pages: 2 }]), template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Equity union' });
+  ok("the firm's own DISC file beats the template pages", d5.dropIns.ourBrokerage.map((b) => b.src.id).join(), 'eu');
+  ok('the firm file is not a seller report', d5.reports.some((r) => r.src.id === 'eu'), false);
 
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-assemble checks pass');
   process.exit(failed ? 1 : 0);

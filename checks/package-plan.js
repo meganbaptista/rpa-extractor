@@ -47,5 +47,16 @@ ok('Stillwater: our profile and MLS skipped (listing side sent theirs)', s.leftO
 ok('Stillwater: FHDA/WFA flagged as possible FX', ['FHDA', 'WFA'].every((c) => s.warnings.some((x) => x.startsWith(c))), true);
 ok('Stillwater: preliminary report attached', s.attachments.some((a) => /Preliminary Title Report/.test(a.name)), true);
 
+// ---- 4180 Sunnyslope (2026-10-23): four state booklets inside the combined PDF,
+// the earthquake guide mapped as 11 chapter "documents". ALL out; the
+// earthquake risk disclosure statement after them is a seller form and stays.
+const sunny = require('./lib/plan-sunnyslope.json');
+const y = P.planPackage({ files: sunny.files, extras: [], dropIns: {} });
+ok('Sunnyslope: every page placed or left out', y.accounted.size, 141);
+ok('Sunnyslope: no booklet page in the package', y.units.some((u) => u.pages && u.pages.some((p) => p >= 18 && p <= 139)), false);
+ok('Sunnyslope: booklets left out as booklets', y.leftOut.filter((l) => /state booklet/.test(l.why)).map((l) => l.what.match(/p([\d-]+)/)[1]).join(), '18-139');
+ok('Sunnyslope: earthquake risk disclosure stays', y.units.some((u) => /earthquake risk disclosure/i.test(u.label)), true);
+ok('Sunnyslope: no "could not tell" warnings', y.warnings.some((w) => /could not tell/.test(w)), false);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-plan checks pass');
 process.exit(failed ? 1 : 0);

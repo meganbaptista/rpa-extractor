@@ -9,7 +9,9 @@
 const { PDFDocument } = require('pdf-lib');
 const { buildMime } = require('./mime');
 
-const streetOf = (address) => String(address || '').split(',')[0].trim();
+// A duplex reads as a number range ("4180 - 4182 Sunnyslope Ave", 2026-10-23)
+// while her folder and email subjects use the first number: search by that.
+const streetOf = (address) => String(address || '').split(',')[0].trim().replace(/^(\d+)\s*[-–&]\s*\d+\s+/, '$1 ');
 const GMAIL_MAX_RAW = 25 * 1024 * 1024;
 
 /** The package email she SENT for this deal (newest), or null. */
@@ -33,8 +35,15 @@ async function findSentPackage(gmail, address) {
  */
 async function findDealFolder(drive, address) {
   const street = streetOf(address);
-  const folders = (await drive.findFoldersNameContains(street))
-    .filter((f) => String(f.name || '').toLowerCase().startsWith(street.toLowerCase()));
+  // The number, then the rest of the street: "4180 Sunnyslope Ave" finds
+  // "4180 Sunnyslope Ave, ..." and also a folder named "4180-4182 Sunnyslope Ave".
+  const m = street.match(/^(\d+)\s+(.+)$/);
+  const rest = m ? m[2] : street;
+  const folders = (await drive.findFoldersNameContains(rest))
+    .filter((f) => {
+      const n = String(f.name || '').toLowerCase();
+      return m ? n.startsWith(m[1]) && n.includes(rest.toLowerCase()) && !/^\d/.test(n.slice(m[1].length)) : n.startsWith(street.toLowerCase());
+    });
   const seen = [];
   for (const f of folders) {
     const files = await drive.listChildren(f.id, { excludeFolders: true });

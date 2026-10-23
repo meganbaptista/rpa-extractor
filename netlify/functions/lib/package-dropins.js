@@ -11,9 +11,10 @@
 //     listing side sent their own with the SFLS (the planner decides that).
 //     An MLS page that is only a footer is dropped (she removed it on Star
 //     Catcher).
-//   - Our agent's AVID only when a filled one is IN the deal folder ("if we
-//     have no AVID in drive, that means we have not received the AVID, so we
-//     just go without it").
+//   - Our agent's AVID whenever one is IN the deal folder, blank included
+//     ("our blank BA AVID; blank is correct"); none in Drive = go without it
+//     ("if we have no AVID in drive, that means we have not received the
+//     AVID, so we just go without it").
 //   - The "Blank AAA AC ABA" file, whatever agency forms it holds.
 //   - Our brokerage's pages from the template, matching the BUYER agent's
 //     brokerage, unless our buyer already signed them with the offer (a
@@ -47,7 +48,10 @@ const TEMPLATE_OK = new Set(['BHAA', 'LPD', 'WFDA', 'SBSA']);
 
 // Template forms that are C.A.R. standards (anything else on the template,
 // after the C.A.R. forms, is the brokerage's own pages or local area forms).
-const LOCAL_AREA = /local area disclosures|addendum to seller property questionnaire/i;
+// (4180 Sunnyslope: "SAN FERNANDO VALLEY LOCAL AREA DISCLOSURE ADVISORY" was
+// taken for brokerage pages.) Local area forms are the listing side's to send:
+// never added from the template (her approved Wilson package left it out).
+const LOCAL_AREA = /local area disclosure|addendum to seller property questionnaire/i;
 
 const words = (t) => String(t || '').replace(/[^A-Za-z]+/g, ' ').trim().split(' ').filter((w) => w.length > 2).length;
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
@@ -82,13 +86,18 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
     warnings.push('no Property Profile or MLS CLIENT TO SIGN in the deal folder: the package goes without them unless the listing side sent theirs');
   }
 
-  // Our agent's AVID: only a filled one in the deal folder.
+  // Our agent's AVID: whatever is in the deal folder (blank is correct).
   const avid = pickFile(pdfs, /\bavid\b/i);
-  if (avid && !/blank/i.test(avid.name)) dropIns.ourAvid = { type: 'drive', id: avid.id, name: avid.name };
+  if (avid) dropIns.ourAvid = { type: 'drive', id: avid.id, name: avid.name };
 
   // Agency forms file.
   const agency = pickFile(pdfs, /^blank\s+(aaa|ac|aba)\b/i);
-  if (agency) dropIns.ourBrokerage.push({ label: agency.name.replace(/\.pdf$/i, ''), src: { type: 'drive', id: agency.id, name: agency.name }, pages: null });
+  if (agency) dropIns.ourBrokerage.push({ label: agency.name.replace(/(\.pdf)+$/i, ''), src: { type: 'drive', id: agency.id, name: agency.name }, pages: null });
+
+  // Our brokerage's own file in the deal folder ("Equity Union DISC.pdf") beats
+  // the template's pages: it is the buyer agent's firm by name.
+  const firmWord = String(buyerBrokerage || '').split(/\s+/)[0];
+  const firmFile = firmWord ? pdfs.find((f) => new RegExp(`^${firmWord.replace(/[^A-Za-z0-9]/g, '')}\\b.*\\b(disc|disclosures?)\\b`, 'i').test(f.name || '')) : null;
 
   // Template: our brokerage pages + missing standard forms.
   const signedWithOffer = pdfs.filter((f) => /\(need s\)/i.test(f.name || ''));
@@ -97,7 +106,10 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
     const forms = [...template.forms].sort((a, b) => a.pages[0] - b.pages[0]);
     const lastCar = Math.max(0, ...forms.filter((f) => f.code).map((f) => f.pages[f.pages.length - 1]));
     const brokerage = forms.filter((f) => !f.code && f.pages[0] > lastCar && !LOCAL_AREA.test(f.name || ''));
-    if (brokerage.length) {
+    if (firmFile) {
+      if (signedWithOffer.length) notes.push(`our brokerage's forms were signed with the offer (${signedWithOffer.map((f) => f.name).join(', ')}): not added again`);
+      else dropIns.ourBrokerage.push({ label: firmFile.name.replace(/(\.pdf)+$/i, ''), src: { type: 'drive', id: firmFile.id, name: firmFile.name }, pages: null });
+    } else if (brokerage.length) {
       if (signedWithOffer.length) {
         notes.push(`our brokerage's forms were signed with the offer (${signedWithOffer.map((f) => f.name).join(', ')}): not added again`);
       } else {
@@ -127,7 +139,7 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
   // Seller reports saved in the deal folder.
   for (const f of pdfs) {
     if (OUR_OUTPUT.test(f.name) || NOT_A_SELLER_REPORT.test(f.name) || !REPORT.test(f.name)) continue;
-    if (f === avid || f === agency || /\(need s\)/i.test(f.name)) continue;
+    if (f === avid || f === agency || f === firmFile || /\(need s\)/i.test(f.name)) continue;
     // The planner warns about it unless the duplicate check finds it was delivered too.
     reports.push({ key: `d:${f.id}`, name: f.name, pages: f.pages, src: { type: 'drive', id: f.id, name: f.name }, fromDealFolder: true });
   }

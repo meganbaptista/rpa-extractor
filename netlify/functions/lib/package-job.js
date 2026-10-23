@@ -79,7 +79,9 @@ async function buildForJob(ctx, deps = {}) {
   // Compliance Doc.
   let inputs = { brokerage: '', wantedCodes: null, contractItems: [] };
   try {
-    const url = await C.findComplianceDocUrl(address);
+    // A duplex reads "4180 - 4182 ..."; her sheet row uses the first number.
+    const url = (await C.findComplianceDocUrl(address))
+      || (address !== address.replace(/^(\d+)\s*[-–&]\s*\d+\s+/, '$1 ') ? await C.findComplianceDocUrl(address.replace(/^(\d+)\s*[-–&]\s*\d+\s+/, '$1 ')) : '');
     const doc = url ? await C.fetchDocText(url) : null;
     if (doc && doc.text) inputs = parseCompliance(doc.text);
   } catch (err) { ctx.log(`compliance Doc not read: ${err.message}`); }
@@ -139,7 +141,9 @@ async function buildForJob(ctx, deps = {}) {
   };
 
   const plan = P.planPackage({ files, extras, dropIns: drop.dropIns, flags });
-  const built = await A.assemble(plan, assembleDeps, { address });
+  // Named like her deal folder ("4180 Sunnyslope Ave, ..." even when the audit
+  // read the duplex as "4180 - 4182 ...").
+  const built = await A.assemble(plan, assembleDeps, { address: deal.folder ? deal.folder.name : address });
   return { plan, built, drop, inputs, deal, flags };
 }
 

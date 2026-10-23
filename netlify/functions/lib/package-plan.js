@@ -44,14 +44,14 @@ const SECTION = {
 const KNOWN_LEN = { TOA: 1, ADM: 1, APD: 1, WCMD: 1, WHSD: 1, SFLS: 1, PSD: 1, SPT: 1, WFA: 1, AEA: 1, AC: 1, AAA: 1 };
 
 const ADDITIONAL_FORM_CODES = new Set(['FHDS', 'SFLS', 'PSD', 'LPD', 'WCMD', 'WHSD', 'TA', 'SOLAR', 'WBSA', 'RCSD', 'RCSD-S', 'ESD', 'SPRP', 'EQ']);
-const ADVISORY_CODES = new Set(['MCA', 'SBSA', 'WFDA', 'BHAA', 'DIA', 'FHDA', 'WFA', 'AC', 'AAA', 'PVOH', 'RPOA', 'SVRA', 'ABA', 'BIA', 'HOA']);
+const ADVISORY_CODES = new Set(['MCA', 'SBSA', 'WFDA', 'BHAA', 'DIA', 'FHDA', 'WFA', 'AC', 'AAA', 'PVOH', 'RPOA', 'SVRA', 'ABA', 'BIA', 'HOA', 'DBD']);
 const CONTRACT_CODES = new Set(['RFR', 'BIE', 'BIW', 'SPT', 'BUO', 'SXA', 'FIRPTA', 'QS', 'CR', 'NBP', 'ADM']);
 
 const RX = {
   nhdStatement: /natural hazard disclosure statement/i,
   nhdInvoice: /\binvoice\b/i,
   homeWarranty: /home\s*warranty/i,
-  booklet: /\b[1-4]\s*(?:_|-|\s)?of\s*(?:_|-|\s)?6\b|residential environmental hazards|protect your family from lead|home energy rating|homeowner'?s guide to earthquake safety/i,
+  booklet: /\b[1-4]\s*(?:_|-|\s)?of\s*(?:_|-|\s)?6\b|residential environmental hazards|protect your family from\b|home energy rating|homeowner'?s guide\b/i,
   bookletReceipt: /acknowledg\w* of receipt|consumer information (?:booklets|acknowledg)|receipt for (?:links to )?booklets|6\s*of\s*6|booklet.*(?:receipt|signature)/i,
   eqDisclosure: /residential earthquake risk disclosure/i,
   prelim: /prelim(?:inary)?\b.*\b(?:title|report)|clta preliminary|\bptr\b/i,
@@ -214,10 +214,31 @@ function planPackage(input) {
       i++;
     }
 
+    // A STATE BOOKLET'S CHAPTERS are mapped as their own documents (4180
+    // Sunnyslope, 2026-10-23: the earthquake guide came back as "Homeowner's
+    // Guide" + "Is your home bolted to its foundation?" + 9 more), and they went
+    // into the package as unknown documents. Everything touching a booklet that
+    // has no C.A.R. code and is not itself a form (the Residential Earthquake
+    // Risk Disclosure Statement after the guide is a SELLER form and stays) is
+    // part of the booklet.
+    for (let i = 0; i < units.length - 1;) {
+      const a = units[i]; const b = units[i + 1];
+      const isBooklet = !a.code && RX.booklet.test(a.name || '');
+      const touching = b.pages[0] === a.pages[a.pages.length - 1] + 1;
+      const isForm = b.code || RX.eqDisclosure.test(b.name || '') || RX.bookletReceipt.test(b.name || '') || /disclosure|statement|advisory|addendum|questionnaire|report/i.test(b.name || '');
+      if (isBooklet && touching && !isForm) {
+        const booklets = a.booklets || [a.name];
+        if (RX.booklet.test(b.name || '')) booklets.push(b.name);
+        units.splice(i, 2, { ...a, pages: [...a.pages, ...b.pages], booklets });
+        continue;
+      }
+      i++;
+    }
+
     let prev = null;
     for (const u of units) {
       const c = classify(u);
-      const label = u.name || u.code || '(untitled)';
+      const label = u.booklets && u.booklets.length > 1 ? `state booklets: ${u.booklets.join('; ')}` : (u.name || u.code || '(untitled)');
       const fxName = u.pages.map((p) => fxPages.get(`${file.n}:${p}`)).find(Boolean);
       if (fxName) {
         out.fx.push({ name: fxName, src: { type: 'file', n: file.n, pages: [...u.pages] } });

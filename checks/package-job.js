@@ -76,6 +76,13 @@ const DOC = [
   mem.set('out/j1/package-effects', { trialDraft: 'd1' });
   ok('a second run makes no second draft', (await run(ctx())).packageOutcome, 'package: trial draft already made');
 
+  // A duplex address finds her single-number deal folder (4180 - 4182 Sunnyslope).
+  const R = require('../netlify/functions/lib/buyer-revision.js');
+  const names = ['4180 Sunnyslope Ave, Sherman Oaks, CA 91423', '41800 Sunnyslope Ave', '4180 Sunnyslope Blvd'];
+  const fakeDrive = { findFoldersNameContains: async (t) => names.filter((n) => n.toLowerCase().includes(t.toLowerCase())).map((n) => ({ id: n, name: n })), listChildren: async () => [] };
+  ok('"4180 - 4182" finds the "4180 ..." folder', (await R.findDealFolder(fakeDrive, '4180 - 4182 Sunnyslope Ave, Sherman Oaks, CA 91423')).folder.name, names[0]);
+  ok('streetOf drops the range', R.streetOf('4180 - 4182 Sunnyslope Ave, Sherman Oaks'), '4180 Sunnyslope Ave');
+
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-job checks pass');
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
