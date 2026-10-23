@@ -35,12 +35,21 @@ function buildMime({ headers = {}, html = '', attachments = [] }) {
   lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`, '');
   lines.push(`--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '');
   lines.push(wrap76(Buffer.from(html, 'utf8').toString('base64')));
+  // EVERY ATTACHMENT GETS ITS OWN ID. Without one, Gmail fills in a blank
+  // "Content-ID: <>" on every attachment when the draft is sent. Gmail shows the
+  // files by name, so it looks right to Megan, but Outlook, Apple Mail and many
+  // office mail systems treat attachments with the same ID as ONE file: the
+  // agent on 6051 Scenic Ave (2026-10-23) saw the last attachment, the prelim,
+  // three times. (Her Zapier-drafted home warranty emails had the same blank IDs.)
   for (const a of attachments) {
     const name = String(a.filename || 'attachment').replace(/"/g, '');
+    const id = `f_${crypto.randomBytes(8).toString('hex')}`;
     lines.push(`--${boundary}`,
       `Content-Type: ${a.contentType || 'application/octet-stream'}; name="${name}"`,
       `Content-Disposition: attachment; filename="${name}"`,
-      'Content-Transfer-Encoding: base64', '');
+      'Content-Transfer-Encoding: base64',
+      `Content-ID: <${id}>`,
+      `X-Attachment-Id: ${id}`, '');
     lines.push(wrap76(Buffer.from(a.data).toString('base64')));
   }
   lines.push(`--${boundary}--`, '');
