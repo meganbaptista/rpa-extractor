@@ -17,6 +17,7 @@ const J = require('./intake-job');
 const rc = require('./revision-check');
 const R = require('./buyer-revision');
 const { buildRevisionEmail } = require('./buyer-email');
+const { buildMime } = require('./mime');
 
 const SHARE_LINK = /https?:\/\/(?:www\.)?(?:dropbox\.com\/(?:scl\/fo|scl\/fi|sh|s)\/[^\s"'<>)]+|drive\.google\.com\/(?:file\/d\/[A-Za-z0-9_-]+|open\?id=[A-Za-z0-9_-]+|uc\?[^\s"'<>)]*id=[A-Za-z0-9_-]+)[^\s"'<>)]*)/gi;
 
@@ -470,6 +471,29 @@ async function revdraft(ctx) {
     effects.draft = d.draftId || 'created';
     await saveEffects();
     await J.putOut(store, job.id, 'revdraft', { draftId: d.draftId, headers: d.headers, labelled: d.labelled, pdfName, pdfPages: pdf.pages, warnings: built.warnings, notes });
+  }
+  // THE FOLLOW-UP TO THE LISTING SIDE for what is still open, as a reply in
+  // their thread to the people her corrections email went to. Its own effect
+  // key, so a re-run that already made the buyer draft makes only this.
+  if (!effects.followUp) {
+    const open = rev.items.filter((v) => v.status === 'open').map((v) => v.item);
+    if (!open.length) {
+      effects.followUp = 'nothing open';
+    } else {
+      const corr = await gmail.getMessage(job.revision.correctionsId).catch(() => null);
+      const ch = (corr && corr.headers) || {};
+      const html = ctx.signature.withSignature(rc.followUpHtml({ greeting: corr ? rc.greetingFrom(corr) : '', open }),
+        await ctx.signature.liveSignature(gmail));
+      const subject = `Re: ${String(job.source.subject || '').replace(/^\s*(re:\s*)+/i, '')}`;
+      const me = String(process.env.GMAIL_IMPERSONATE_SUBJECT || process.env.GOOGLE_IMPERSONATE_SUBJECT || '').trim();
+      const headers = live
+        ? { To: ch.to || job.source.from, Cc: ch.cc || '', Subject: subject, 'In-Reply-To': job.source.rfcMessageId, References: job.source.rfcMessageId }
+        : { To: me, Subject: `[TRIAL] ${subject}` };
+      const created = await gmail.createDraftRaw(buildMime({ headers, html }), live ? { threadId: job.source.threadId } : {});
+      effects.followUp = (created && created.id) || 'created';
+      ctx.log(`follow-up to the listing side drafted: ${open.length} open item(s)`);
+    }
+    await saveEffects();
   }
   if (live && !effects.label) { await removeLabel(ctx); effects.label = Date.now(); await saveEffects(); }
   return finished;

@@ -263,6 +263,25 @@ function emailInputs(verdicts, ordered) {
   return { changes, stillToCome: [...new Set(stillToCome)], forms, requested: verdicts.length };
 }
 
+/**
+ * THE FOLLOW-UP TO THE LISTING SIDE when a revision leaves items open (Megan,
+ * 6051 Scenic, 2026-10-23: "please prepare the draft back to the TC, not sure
+ * why that wasn't drafted?"). Her corrections-email voice; her own item text,
+ * split the way her emails are: forms still outstanding vs answers to update.
+ */
+const RX_ANSWER_ITEM = /\?|\bis marked\b|left blank|not completed|\bplease\b|\bcould\b|\bunanswered\b/i;
+function followUpHtml({ greeting, open }) {
+  const forms = open.filter((t) => !RX_ANSWER_ITEM.test(t));
+  const answers = open.filter((t) => RX_ANSWER_ITEM.test(t));
+  const list = (xs) => `<ul>${xs.map((x) => `<li>${escHtml(x)}</li>`).join('')}</ul>`;
+  return `<p>${escHtml(greeting || 'Hi there,')}</p>`
+    + '<p>Thanks so much for sending the revisions over! Everything else looks great, and here is what is still pending on my end:</p>'
+    + (forms.length ? `<p><u>Still outstanding:</u></p>${list(forms)}` : '')
+    + (answers.length ? `<p><u>A few answers need a quick update:</u></p>${list(answers)}` : '')
+    + '<p>Whenever you get a chance, send these my way and we will be all set. If any of them are already on the way or do not apply, just let me know!</p>'
+    + '<p>Thanks!</p>';
+}
+
 const escHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** The red "CHECK BEFORE SENDING" note at the top of the draft. */
@@ -284,5 +303,5 @@ function checkNoteHtml({ verdicts, correctionsDate, greetingNote, extra = [], ba
 
 module.exports = {
   correctionItems, findCorrectionsEmail, looksLikeCorrections, attachmentPlan, splitOurs, greetingFrom, formRank, packageOrder, mergedPage,
-  agree, checkRevisions, emailInputs, checkNoteHtml, PROMPT,
+  agree, checkRevisions, emailInputs, checkNoteHtml, followUpHtml, PROMPT,
 };

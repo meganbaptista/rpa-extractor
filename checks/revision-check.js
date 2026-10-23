@@ -122,6 +122,12 @@ const sendFiles = files.map((f) => ({ ...f, base64: 'AA==' }));
   // 12273 Donald Reed: items she said she will add herself are not the seller's.
   const split = rc.splitOurs(['NHD Statement', 'Earthquake Booklet Receipt - I can add this on my end', 'Orange County Local Area Disclosures - I can add this on my end', 'TDS disclosure date is blank. Could the seller answer it?', 'We will add the AVID ourselves']);
   ok('"I can add this on my end" items are hers, not the seller\'s', [split.seller, split.ours.length], [['NHD Statement', 'TDS disclosure date is blank. Could the seller answer it?'], 3]);
+  // 6051 Scenic (2026-10-23): open items -> a follow-up to the listing side, her voice.
+  const fu = rc.followUpHtml({ greeting: 'Hi Fred,', open: ['NHD Statement', 'Trust Advisory', 'FHDS Section 3 is not completed; please mark Section 3A'] });
+  ok('follow-up: forms under Still outstanding', /<u>Still outstanding:<\/u><\/p><ul><li>NHD Statement<\/li><li>Trust Advisory<\/li><\/ul>/.test(fu), true);
+  ok('follow-up: answer fixes under A few answers', /<u>A few answers need a quick update:<\/u><\/p><ul><li>FHDS Section 3 is not completed; please mark Section 3A<\/li><\/ul>/.test(fu), true);
+  ok('follow-up: her greeting and sign-off', [/^<p>Hi Fred,<\/p>/.test(fu), /<p>Thanks!<\/p>$/.test(fu)], [true, true]);
+  ok('follow-up: no em dashes', /\u2014/.test(fu), false);
   const note = rc.checkNoteHtml({ verdicts: differ.items, correctionsDate: 'Thu, 22 Oct 2026 10:27', extra: ['Greeting copied from your package email ("Hello Omeed,"); add any other buyer.'] });
   ok('the red note lists every item and how it was judged',
     [/FIXED \(page 1 of the attachment\)/.test(note), /CHECK THIS ONE/.test(note), /two reads disagreed/.test(note), /delete through here/.test(note)], [true, true, true, true]);
