@@ -22,6 +22,10 @@ ok('Wilson: TDS opens the package', at(w, /TRANSFER DISCLOSURE/i), 0);
 ok('Wilson: SPQ right after the TDS', at(w, /PROPERTY QUESTIONNAIRE/i), 1);
 ok('Wilson: permit report is ONE unit (map split it in 4)', labels(w).filter((l) => /permit timeline/i.test(l)).length, 1);
 ok('Wilson: NHD report attached, not merged', w.attachments.some((a) => /Natural Hazard Disclosure Report/.test(a.name)), true);
+ok('Wilson: home warranty out of the package', labels(w).some((l) => /invoice|warranty/i.test(l)), false);
+ok('Wilson: home warranty attached as a seller report', w.attachments.some((a) => a.name === 'Seller Report - Home Warranty'), true);
+const hw = P.planPackage({ files: [{ n: 0, name: 'Disclosures.pdf', pages: 3, forms: [{ code: '', name: 'Home Warranty Order Confirmation', pages: [1] }, { code: 'TDS', name: 'REAL ESTATE TRANSFER DISCLOSURE STATEMENT', pages: [2, 3] }] }], extras: [], dropIns: {} });
+ok('home warranty pages inside a combined file go out separately too', hw.attachments.map((a) => a.name).join(), 'Seller Report - Home Warranty');
 ok('Wilson: NHD statement is in the package', at(w, /NATURAL HAZARD DISCLOSURE STATEMENT/i) > 0, true);
 ok('Wilson: no form code in a buyer-facing label', labels(w).concat(w.attachments.map((a) => a.name)).some((l) => /\b(TDS|SPQ|AVID|SBSA|FHDS|DSDT|NHD|BHAA)\b/.test(l)), false);
 

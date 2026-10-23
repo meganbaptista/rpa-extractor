@@ -50,6 +50,7 @@ const CONTRACT_CODES = new Set(['RFR', 'BIE', 'BIW', 'SPT', 'BUO', 'SXA', 'FIRPT
 const RX = {
   nhdStatement: /natural hazard disclosure statement/i,
   nhdInvoice: /\binvoice\b/i,
+  homeWarranty: /home\s*warranty/i,
   booklet: /\b[1-4]\s*(?:_|-|\s)?of\s*(?:_|-|\s)?6\b|residential environmental hazards|protect your family from lead|home energy rating|homeowner'?s guide to earthquake safety/i,
   bookletReceipt: /acknowledg\w* of receipt|consumer information (?:booklets|acknowledg)|receipt for (?:links to )?booklets|6\s*of\s*6|booklet.*(?:receipt|signature)/i,
   eqDisclosure: /residential earthquake risk disclosure/i,
@@ -94,6 +95,9 @@ function classifyFile(file) {
   const first = ((file.forms || [])[0] || {}).name || '';
   if (RX.nhdInvoice.test(name) && /nhd|natural hazard|disclosure source|mynhd|priority/i.test(name)) return { leave: 'NHD invoice (always left out)' };
   if (RX.prelim.test(name) || RX.prelim.test(first)) return { attach: 'Preliminary Title Report' };
+  // A home warranty the seller ordered (2647 E Wilson: an order confirmation):
+  // never in the package, saved and attached as a seller report (Megan 10/23).
+  if (RX.homeWarranty.test(name) || RX.homeWarranty.test(first)) return { attach: 'Seller Report - Home Warranty' };
   if (RX.wildfireReport.test(name)) return { attach: 'Wildfire Report' };
   if (/\bnhd\b|natural hazard/i.test(name) && file.pages > 5) return { attach: 'Natural Hazard Disclosure Report', nhdReport: true };
   if (RX.booklet.test(name) && file.pages > 3) return { leave: 'state booklet (never in; the email links the booklets)' };
@@ -232,9 +236,10 @@ function planPackage(input) {
   }
 
   // Long seller reports inside the delivery go out as separate attachments too.
-  for (const u of out.units.filter((v) => v.kind === 'REPORT' && v.pages && (v.pages.length > longPages || RX.homeInspection.test(v.label)))) {
+  for (const u of out.units.filter((v) => v.kind === 'REPORT' && v.pages && (v.pages.length > longPages || RX.homeInspection.test(v.label) || RX.homeWarranty.test(v.label)))) {
+    if (RX.homeWarranty.test(u.label)) u.label = 'Home Warranty';
     out.attachments.push({ name: sellerReportName(u.label), src: { ...u.src, pages: u.pages } });
-    out.leftOut.push({ what: `${u.file}, p${span(u.pages)} (${u.label})`, why: `long seller report: attached separately as "${sellerReportName(u.label)}"` });
+    out.leftOut.push({ what: `${u.file}, p${span(u.pages)} (${u.label})`, why: `${u.label === 'Home Warranty' ? 'home warranty' : 'long seller report'}: attached separately as "${sellerReportName(u.label)}"` });
     u.section = null;
   }
 
