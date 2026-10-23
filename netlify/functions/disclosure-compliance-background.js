@@ -156,7 +156,18 @@ exports.handler = async function (event) {
       console.warn(`[disclosure-compliance] ${skipped} non-paragraph element(s) in the Doc were not read`);
     }
 
-    const files = (await drive.listChildren(propertyFolderId, { excludeFolders: true }))
+    /**
+     * THE DEAL FOLDER AND ITS SUBFOLDERS. Megan files fully executed contract
+     * documents in "FX PURCHASE AGREEMENT" (FX - MCA, FX - FHDA ...), and only
+     * reading the top level missed them: 5733 E Stillwater #2 (2026-10-23) ran
+     * with "applied 0" while FHDA, WFA and MCA sat filed one level down. TRASH
+     * and Incoming (raw, unfiled deliveries) are not filing, so they are skipped.
+     */
+    const FOLDER = 'application/vnd.google-apps.folder';
+    const top = await drive.listChildren(propertyFolderId);
+    const subs = top.filter((f) => f.mimeType === FOLDER && !/trash|^incoming$/i.test(String(f.name || '').trim()));
+    const nested = (await Promise.all(subs.map((f) => drive.listChildren(f.id, { excludeFolders: true })))).flat();
+    const files = [...top.filter((f) => f.mimeType !== FOLDER), ...nested]
       .map((f) => String(f.name || ''))
       .filter((n) => n.toLowerCase().endsWith('.pdf'));
 
