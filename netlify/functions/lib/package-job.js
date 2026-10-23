@@ -106,7 +106,15 @@ async function buildForJob(ctx, deps = {}) {
   const dealTexts = new Map();
   if (deal.folder) {
     const pdfs = deal.files.filter((f) => /\.pdf$/i.test(f.name || ''));
-    const dealFiles = pdfs.map((f) => ({ id: f.id, name: f.name, modifiedTime: f.modifiedTime, pages: 0 }));
+    // The Property Profile sometimes sits in FX PURCHASE AGREEMENT: read it
+    // from there when the top has none (read only; nothing there is moved).
+    if (!pdfs.some((f) => /^property profile\b/i.test(f.name || ''))) {
+      try {
+        const sub = (await drive.listChildren(deal.folder.id)).find((f) => /^fx purchase agreement$/i.test(String(f.name || '').trim()) && /folder/.test(f.mimeType || ''));
+        if (sub) for (const f of await drive.listChildren(sub.id, { excludeFolders: true })) if (/^(fx\s*-\s*)?property profile\b.*\.pdf$/i.test(f.name || '')) pdfs.push({ ...f, inFx: true });
+      } catch (err) { ctx.log(`FX PURCHASE AGREEMENT not read: ${err.message}`); }
+    }
+    const dealFiles = pdfs.map((f) => ({ id: f.id, name: f.name, modifiedTime: f.modifiedTime, pages: 0, inFx: !!f.inFx }));
     const deliveredCodes = files.flatMap((f) => f.forms.map((x) => x.code).filter(Boolean));
     const plain = D.planDropIns({ dealFiles, deliveredCodes, wantedCodes: inputs.wantedCodes, buyerBrokerage: inputs.brokerage });
     // Read only what the drop-ins use: MLS (footer pages) and seller reports (duplicate check).

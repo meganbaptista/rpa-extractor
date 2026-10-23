@@ -150,6 +150,13 @@ const lorem = (seed, n = 60) => Array.from({ length: n }, (_, i) => `word${seed}
   ok("the firm's own DISC file beats the template pages", d5.dropIns.ourBrokerage.map((b) => b.src.id).join(), 'eu');
   ok('the firm file is not a seller report', d5.reports.some((r) => r.src.id === 'eu'), false);
 
+  // The profile from FX PURCHASE AGREEMENT when the top has none (4180 Sunnyslope).
+  const fxProfile = D.planDropIns({ dealFiles: [{ id: 'fp', name: 'FX - Property Profile.pdf', pages: 4, inFx: true }, { id: 'c', name: 'FX - CONTRACT.pdf', pages: 30, inFx: true }] });
+  ok('profile found in FX PURCHASE AGREEMENT', (fxProfile.dropIns.profile || {}).id, 'fp');
+  ok('nothing else in FX PURCHASE AGREEMENT is used', fxProfile.reports.length, 0);
+  const both = D.planDropIns({ dealFiles: [{ id: 'top', name: 'Property Profile.pdf', pages: 4 }, { id: 'fp', name: 'Property Profile.pdf', pages: 4, inFx: true }] });
+  ok('the top-level profile wins', both.dropIns.profile.id, 'top');
+
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-assemble checks pass');
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -69,7 +69,10 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
   const delivered = new Set(deliveredCodes.map((c) => String(c).toUpperCase()));
 
   // Property Profile + MLS.
-  const profile = pickFile(pdfs, /^property profile\b/i);
+  // At the top, or (Megan 2026-10-23: "sometimes it ends up there") in the FX
+  // PURCHASE AGREEMENT subfolder as "Property Profile" / "FX - Property Profile".
+  const profile = pickFile(pdfs.filter((f) => !f.inFx), /^property profile\b/i)
+    || pickFile(pdfs.filter((f) => f.inFx), /^(fx\s*-\s*)?property profile\b/i);
   if (profile) dropIns.profile = { type: 'drive', id: profile.id, name: profile.name };
   const mls = pickFile(pdfs, /^mls client to sign\b/i);
   if (mls) {
@@ -137,7 +140,7 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
   }
 
   // Seller reports saved in the deal folder.
-  for (const f of pdfs) {
+  for (const f of pdfs.filter((x) => !x.inFx)) {
     if (OUR_OUTPUT.test(f.name) || NOT_A_SELLER_REPORT.test(f.name) || !REPORT.test(f.name)) continue;
     if (f === avid || f === agency || f === firmFile || /\(need s\)/i.test(f.name)) continue;
     // The planner warns about it unless the duplicate check finds it was delivered too.
