@@ -201,13 +201,13 @@ function calmLayout(html, { guide, totalPages, stillToCome = [], reportsLink = '
     P("Attached are the seller's disclosures for your review and signature. Please read them as a guide to the property as you make your decisions."),
     `<div><b>What's in the package:</b></div><ul>${guide.map((r) => `<li><b>${esc(range(r))}:</b> ${esc(r.label)}</li>`).join('')}</ul>`,
   ];
-  if (files.length || reportsLink) {
-    const a = files.length ? ` ${esc(serialList(files))} ${files.length === 1 ? 'is' : 'are'} attached separately.` : '';
-    const l = reportsLink ? ` The seller's other reports are <a href="${esc(reportsLink)}">here</a>.` : '';
-    parts.push(P(`<b>Reports:</b>${a}${l}`));
-  }
+  if (files.length) parts.push(P(`<b>Reports:</b> ${esc(serialList(files))} ${files.length === 1 ? 'is' : 'are'} attached separately.`));
+  // ITS OWN BOLD LINE (Megan, 2026-10-23: "the seller reports link is almost
+  // hidden. Anyone with ADHD is missing that 'here' completely").
+  if (reportsLink) parts.push(P(`<b><a href="${esc(reportsLink)}">CLICK HERE FOR THE SELLER'S REPORTS</a></b>`));
   if (todo.length) parts.push(P(`<b>Still to come from the seller:</b> ${esc(serialList(todo))}. I'll send these as soon as they arrive.`));
-  if (links.length) parts.push(P(`<b>California hazard booklets:</b> ${links.map((b) => `<a href="${esc(b.href)}">${esc(b.name)}</a>`).join(' &middot; ')}`));
+  // Say WHY they are there (Megan, 2026-10-23: "we should let the buyer at least know why").
+  if (links.length) parts.push(P(`<b>California hazard booklets:</b> California requires that buyers receive these booklets on home hazards and safety. Please take a look: ${links.map((b) => `<a href="${esc(b.href)}">${esc(b.name)}</a>`).join(' &middot; ')}`));
   parts.push(P("I'll send everything through DocuSign for signature once you've had a chance to review. Let me know if you have any questions!"));
   const head = out.slice(0, g.index + g[0].length);
   const opened = (head.match(/<div\b/gi) || []).length - (head.match(/<\/div>/gi) || []).length;
