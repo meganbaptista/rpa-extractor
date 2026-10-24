@@ -294,6 +294,13 @@ function planPackage(input) {
     const fc = classifyFile({ name: x.name, pages: x.pages || 0, forms: [] });
     if (fc && fc.leave) { out.leftOut.push({ what: x.name, why: fc.leave }); continue; }
     if (fc && fc.attach) { out.attachments.push({ name: fc.attach, src: x.src || { type: 'extra', key: x.key } }); continue; }
+    // The booklet's signature page kept as its own file ("6 of 6 - Homeowner's
+    // Guide - Signature.pdf", 20701 Schoolcraft) is the booklet RECEIPT: an
+    // additional form, closing that section, not a seller report.
+    if (/\b6\s*(?:_|-)?\s*of\s*(?:_|-)?\s*6\b|signature/i.test(x.name) && (RX.booklet.test(x.name) || RX.bookletReceipt.test(x.name))) {
+      out.units.push({ section: SECTION.FORMS, order: 0, kind: 'CIA', code: '', label: x.name.replace(/\.pdf$/i, ''), src: x.src || { type: 'extra', key: x.key }, pages: null, file: x.name, seq: out.units.length });
+      continue;
+    }
     const long = RX.homeInspection.test(x.name) || (x.pages || 0) > longPages;
     if (long) out.attachments.push({ name: sellerReportName(x.name), src: x.src || { type: 'extra', key: x.key } });
     else out.units.push({ section: SECTION.REPORTS, order: 0, kind: 'REPORT', code: '', label: x.name.replace(/\.pdf$/i, ''), src: x.src || { type: 'extra', key: x.key }, pages: null, file: x.name, seq: out.units.length });

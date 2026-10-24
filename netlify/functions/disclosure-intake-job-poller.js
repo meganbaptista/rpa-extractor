@@ -64,6 +64,14 @@ async function jobIdToRun(store, messageId, mode) {
     const cur = await J.readJob(store, id);
     if (!cur) return id;
     if (cur.job.status === 'running') return '';
+    // A FAILED job is never re-run on its own. Its label used to stay on, so
+    // every pass read "finished + labelled = re-labelled on purpose" and ran
+    // the whole job again: 20701 Schoolcraft (2026-10-23) ran 6 times per email,
+    // all failing the same way (no compliance list row). A live failure now
+    // takes the label off (disclosure-intake-job-step-background); re-adding
+    // it is the deliberate re-run. Here: still labelled after a failure means
+    // the removal did not happen, so leave it alone.
+    if (cur.job.status === 'failed') return '';
     // Shadow never removes the label, so a finished job means "already seen".
     // Live removes it, so a finished job whose message is labelled again was
     // re-labelled on purpose: run it again.
@@ -146,3 +154,5 @@ exports.handler = async function (event) {
   }
   return { statusCode: 200 };
 };
+
+exports._internal = { jobIdToRun };

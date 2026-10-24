@@ -45,9 +45,18 @@ exports.handler = async function (event) {
   const { job } = claim;
   const who = `${job.address || job.source.subject || jobId}`;
   if (claim.failed) {
+    // Live: take the label off, so the watcher does not run it again and again;
+    // putting the label back is how Megan re-runs it once the cause is fixed.
+    let unlabelled = false;
+    if (job.mode === 'live' && job.source.labelId) {
+      try { await gmail.modifyMessage(job.source.messageId, { remove: [job.source.labelId] }); unlabelled = true; } catch (err) {
+        console.warn(`[intake-job] ${jobId}: could not remove the label after the failure (${err.message})`);
+      }
+    }
     await rt.intakeAlert(`intake-failed:${jobId}`,
       `Disclosure intake FAILED for "${who}" at step "${claim.failed.name}" after ${J.MAX_ATTEMPTS} tries: `
-      + `${claim.failed.error}. The email from ${job.source.from} still needs a manual check.`);
+      + `${claim.failed.error}. The email from ${job.source.from} still needs a manual check.`
+      + (unlabelled ? ` The "${rt.LABEL()}" label was taken off; once the cause is fixed, put it back on the email to run it again.` : ''));
     return { statusCode: 200 };
   }
 

@@ -125,8 +125,17 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
         dropIns.ourBrokerage.push({ label: `${buyerBrokerage || 'Our brokerage'} forms (template)`, src, pages });
       }
     }
+    // Forms our buyer already signed with the offer are filed "FX - SBSA" (or
+    // "NS - FHDA" while short a signature): never a second blank copy to sign
+    // (20701 Schoolcraft, 2026-10-23: FX - SBSA was in the deal folder).
+    const signedCodes = new Map();
+    for (const f of pdfs) {
+      const m = String(f.name || '').match(/^(?:fx|ns)\s*-\s*([A-Za-z]{2,6}(?:-[A-Za-z]{1,2})?)\b/i);
+      if (m) signedCodes.set(m[1].toUpperCase(), f.name);
+    }
     if (wantedCodes) {
       for (const code of wantedCodes.map((c) => String(c).toUpperCase())) {
+        if (signedCodes.has(code) && !delivered.has(code)) { notes.push(`${code} not added from the template: our buyer already signed it with the offer (${signedCodes.get(code)})`); continue; }
         if (delivered.has(code) || NEVER_FROM_TEMPLATE.has(code)) continue;
         if (!TEMPLATE_OK.has(code)) continue;
         const f = forms.find((x) => String(x.code || '').toUpperCase() === code);

@@ -232,7 +232,10 @@ async function buildPdf(parts, deps) {
     if (!cache.has(k)) {
       const buf = await deps.getBytes(part.src);
       let doc = null;
-      try { doc = await PDFDocument.load(buf, { ignoreEncryption: true }); } catch { doc = null; }
+      // A file can LOAD and still have a broken page tree, so that even counting
+      // its pages throws "Expected instance of PDFDict" (20701 Schoolcraft,
+      // 2026-10-23): treat it as damaged here, so it is rebuilt from images.
+      try { doc = await PDFDocument.load(buf, { ignoreEncryption: true }); doc.getPageCount(); } catch { doc = null; }
       cache.set(k, { buf, doc });
     }
     const { buf, doc } = cache.get(k);
@@ -350,6 +353,38 @@ async function rerenderPages(bytes, pageNumbers, deps) {
   return Buffer.from(await out.save());
 }
 
+/**
+ * Replace the given output pages with images of their ORIGINAL pages. For a
+ * page pdf-lib copied without its content (20701 Schoolcraft, 2026-10-23: the
+ * wildfire advisory came out blank, its original reads fine). Keeps `sources`.
+ */
+async function repairFromSource(built, pageNumbers, deps) {
+  const src = await PDFDocument.load(built.bytes, { ignoreEncryption: true });
+  const out = await PDFDocument.create();
+  const fix = new Set(pageNumbers);
+  for (let i = 1; i <= src.getPageCount(); i++) {
+    const s = built.sources[i - 1];
+    if (fix.has(i) && s) { await addRendered(out, await deps.getBytes(s.src), [s.page], deps); continue; }
+    const [p] = await out.copyPages(src, [i - 1]);
+    out.addPage(p);
+  }
+  return { ...built, bytes: Buffer.from(await out.save()) };
+}
+
+/** Blank check, then repair from the originals, then check again. */
+async function checkAndRepair(built, deps, textOf, label, warnings, problems) {
+  const first = await blankPages(built, deps, textOf);
+  if (!first.checked || !first.problems.length) return { built, checked: first.checked };
+  const pages = first.problems.map((p) => p.page);
+  const fixed = await repairFromSource(built, pages, deps);
+  const again = await blankPages(fixed, deps, textOf);
+  const still = new Set(again.problems.map((p) => p.page));
+  const repaired = first.problems.filter((p) => !still.has(p.page));
+  if (repaired.length) warnings.push(`${label}: ${repaired.length === 1 ? 'page' : 'pages'} ${repaired.map((p) => `${p.page} (${p.label})`).join(', ')} came out blank and ${repaired.length === 1 ? 'was' : 'were'} rebuilt from the original: check ${repaired.length === 1 ? 'it reads' : 'they read'}`);
+  for (const p of again.problems) problems.push(`${label} ${p.why}`);
+  return { built: fixed, checked: true };
+}
+
 // ---------------------------------------------------------------------------
 // The whole build.
 
@@ -402,12 +437,13 @@ async function assemble(plan, deps, { address = '' } = {}) {
   size.gmailOk = size.after * 1.37 <= 25 * 1024 * 1024;
   if (!size.gmailOk) warnings.push(`package + attachments are ${(size.after / 1048576).toFixed(1)}MB, over Gmail's limit once encoded: move an attachment to a link (Megan decides which)`);
 
-  // Blank pages (package and attachments).
-  const blank = await blankPages(pkg, deps, textOf);
-  for (const p of blank.problems) problems.push(`package ${p.why}`);
-  for (const a of atts) {
-    const b = await blankPages(a, deps, textOf);
-    for (const p of b.problems) problems.push(`attachment "${a.name}" ${p.why}`);
+  // Blank pages (package and attachments): repaired from the originals when
+  // possible; a page still blank after that is a problem (do not use).
+  const blank = await checkAndRepair(pkg, deps, textOf, 'package', warnings, problems);
+  pkg = { ...pkg, bytes: blank.built.bytes };
+  for (let i = 0; i < atts.length; i++) {
+    const r = await checkAndRepair(atts[i], deps, textOf, `attachment "${atts[i].name}"`, warnings, problems);
+    atts[i] = { ...atts[i], bytes: r.built.bytes };
   }
   if (!blank.checked) warnings.push('blank-page check did not run (no image reader): look through the package before sending');
 
@@ -463,5 +499,5 @@ async function fileToDealFolder(drive, deal, built, { trash = [] } = {}) {
 
 module.exports = {
   findDuplicates, findWrongProperty, findTails, findTailCandidates, findContractDocs, buildPdf, partsFromPlan, assemble, fileToDealFolder,
-  blankPages, defaultInk, pageWeights, rerenderPages, shingles, overlap, GMAIL_RAW_TARGET,
+  blankPages, repairFromSource, checkAndRepair, defaultInk, pageWeights, rerenderPages, shingles, overlap, GMAIL_RAW_TARGET,
 };

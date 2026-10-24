@@ -84,6 +84,13 @@ const lorem = (seed, n = 60) => Array.from({ length: n }, (_, i) => `word${seed}
   ok('ranges per part', JSON.stringify(built.ranges), '[[1,1],[2,3],[4,7]]');
   const broken = await A.buildPdf([{ src: { type: 'extra', key: 'x0' }, pages: [1, 2], label: 'damaged report' }], deps);
   ok('a damaged file is rebuilt from images, not dropped', `${broken.pages}:${broken.rebuilt.join()}`, '2:damaged report');
+  // A PDF that loads but whose page list is broken (Schoolcraft): rebuilt, not a crash.
+  const plainDoc = await PDFDocument.create(); plainDoc.addPage([611, 792]); plainDoc.addPage([612, 792]);
+  const plain = Buffer.from(await plainDoc.save({ useObjectStreams: false })).toString('latin1');
+  const brokenTree = Buffer.from(plain.replace(/\/Pages \d+ 0 R/, '/Pages 999 0 R'), 'latin1');
+  ok('(the test file really is broken)', plain !== brokenTree.toString('latin1'), true);
+  const bt = await A.buildPdf([{ src: { type: 'file', n: 9 }, pages: [1, 2], label: 'broken page tree' }], { ...deps, getBytes: async () => brokenTree });
+  ok('a file with a broken page list is rebuilt from images', `${bt.pages}:${bt.rebuilt.join()}`, '2:broken page tree');
   ok('asking for a page the file does not have refuses', await A.buildPdf([{ src: { type: 'file', n: 1 }, pages: [5], label: 'x' }], deps).then(() => 'built', (e) => (/not all in/.test(e.message) ? 'refused' : e.message)), 'refused');
 
   // blank check: a white render of a page whose source has words is a problem
@@ -156,6 +163,12 @@ const lorem = (seed, n = 60) => Array.from({ length: n }, (_, i) => `word${seed}
   ok('nothing else in FX PURCHASE AGREEMENT is used', fxProfile.reports.length, 0);
   const both = D.planDropIns({ dealFiles: [{ id: 'top', name: 'Property Profile.pdf', pages: 4 }, { id: 'fp', name: 'Property Profile.pdf', pages: 4, inFx: true }] });
   ok('the top-level profile wins', both.dropIns.profile.id, 'top');
+
+  // 20701 Schoolcraft: "FX - SBSA.pdf" in the deal folder = buyer already signed it.
+  const fxs = D.planDropIns({ dealFiles: dealFiles.concat([{ id: 'fx', name: 'FX - SBSA.pdf', pages: 15 }]), template: { ...template, forms: template.forms.concat([{ code: 'SBSA', name: 'STATEWIDE BUYER AND SELLER ADVISORY', pages: [25, 26] }]) }, deliveredCodes: [], wantedCodes: ['SBSA', 'BHAA'], buyerBrokerage: 'Compass' });
+  ok('a form filed FX in the deal folder is not dropped in again', fxs.dropIns.forms.map((f) => f.code).join(), 'BHAA');
+  ok('and the note says why', fxs.notes.some((n) => /SBSA not added.*FX - SBSA/.test(n)), true);
+  ok('the FX file is not a seller report', fxs.reports.some((r) => r.src.id === 'fx'), false);
 
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-assemble checks pass');
   process.exit(failed ? 1 : 0);

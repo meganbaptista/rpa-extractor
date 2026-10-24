@@ -236,6 +236,32 @@ function applyAvidRule(result, received) {
 // Receipt") carries and the report's name does not. Both are in this same
 // packet, so this distinction is load-bearing, not hypothetical.
 // ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// THE NHD STATEMENT, WHATEVER IDENTIFY CALLS IT.
+//
+// The signed one-page "Natural Hazard Disclosure Statement" is what her
+// "NHD Statement" line asks for, and IDENTIFY_PROMPT deliberately names that
+// page "NHD Receipt" (it is the signature/acknowledgment page). The two names
+// never met, so on 20701 Schoolcraft (2026-10-23) "NHD_Stmnt.pdf" sat in the
+// email while the reply asked for the NHD Statement. Deterministic, like
+// applyAvidRule. The full multi-page NHD report alone does NOT satisfy it.
+// ----------------------------------------------------------------------------
+const RX_NHD_STATEMENT_ITEM = /\bnhd\s*(?:statement|stmt|stmnt)\b|natural\s*hazards?\s*disclosure\s*statement/i;
+const RX_NHD_STATEMENT_FORM = /\bnhd\s*(?:receipt|statement|stmt|stmnt)\b|natural\s*hazards?\s*disclosure\s*statement/i;
+
+function applyNhdStatementRule(result, received) {
+  const has = (received || []).some((f) => RX_NHD_STATEMENT_FORM.test(`${(f && f.code) || ''} ${(f && f.name) || ''}`));
+  if (!result || !has) return { applied: false };
+  const still = Array.isArray(result.still_needed) ? result.still_needed : [];
+  const present = Array.isArray(result.present) ? result.present : [];
+  const satisfied = still.filter((i) => RX_NHD_STATEMENT_ITEM.test(String(i)));
+  if (!satisfied.length) return { applied: false };
+  result.still_needed = still.filter((i) => !satisfied.includes(i));
+  for (const x of satisfied) if (!present.some((p) => String(p) === String(x))) present.push(x);
+  result.present = present;
+  return { applied: true, satisfied: satisfied.map(String) };
+}
+
 const RX_EQ_REPORT_FORM = /residential\s*earthquake\s*(?:hazards?|risk)\s*(?:disclosure|report)|earthquake\s*(?:risk|hazards?)\s*disclosure\s*statement|earthquake\s*hazards?\s*report/i;
 const RX_EQ_NOT_THE_REPORT = /\breceipts?\b|\bbooklet\b|\bpamphlet\b/i;
 
@@ -938,7 +964,11 @@ const BOOKLET_NAME = /(homeowner'?s?\s*guide|environmental\s*hazards?|earthquake
 //   - receipt / acknowledgment — the booklet RECEIPT is a presence check on the
 //     audit list. "Receipt for Links to Booklets" matches BOOKLET_NAME and must
 //     still reach the model.
-const NEVER_BLOCK = /(\bavid\b|agent\s*visual\s*inspection|buyer'?s?\s*inspection\s*(advisory|waiver)|inspection\s*(advisory|waiver)|\bbia\b|\bbiw\b|receipt|acknowledg)/i;
+//   - "6 of 6" / "signature": the booklet's signature page (20701 Schoolcraft,
+//     2026-10-23: "6 of 6 - Homeowner's Guide - Signature.pdf" was skipped as
+//     the booklet, so the Earthquake Booklet Receipt was chased while it sat
+//     in the email).
+const NEVER_BLOCK = /(\bavid\b|agent\s*visual\s*inspection|buyer'?s?\s*inspection\s*(advisory|waiver)|inspection\s*(advisory|waiver)|\bbia\b|\bbiw\b|receipt|acknowledg|signature|\b6\s*(?:_|-)?\s*of\s*(?:_|-)?\s*6\b)/i;
 
 function isBlockedName(name) {
   const n = name || '';
@@ -4070,6 +4100,9 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
       + `${avidInfo.note ? ` (verify added: ${avidInfo.note})` : ''}`);
   }
 
+  const nhdInfo = applyNhdStatementRule(result, currentForms);
+  if (nhdInfo.applied) console.log(`[disclosure-intake] NHD statement satisfied by the received NHD signature page: ${nhdInfo.satisfied.join(', ')}`);
+
   const eqInfo = applyEarthquakeReportRule(result, currentForms);
   if (eqInfo.applied) {
     console.log('[disclosure-intake] earthquake report satisfied by the received Residential '
@@ -4816,7 +4849,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
