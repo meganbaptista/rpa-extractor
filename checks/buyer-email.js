@@ -171,7 +171,10 @@ const CALM = { guide: [{ from: 1, to: 10, label: "The seller's disclosures about
 const calm = fillBuyerEmail(ZAP, CALM);
 const ct = text(calm.html).replace(/&#39;/g, "'").replace(/&middot;/g, '·');
 ok('calm: no warnings', calm.warnings, []);
-ok('calm: greeting kept, Zap intro replaced', [/^Hello Jesse, Attached are the seller's disclosures/.test(ct), /package of important disclosures/.test(ct)], [true, false]);
+// Megan's opening paragraph, always, exactly once (2026-10-26).
+const INTRO = 'Attached is a package of important disclosures that have been filled out by the seller and require your review and signature. Please regard these disclosures as a guide to educate yourself on the subject property and help you make informed decisions regarding this transaction.';
+ok('calm: greeting kept, then her opening paragraph', ct.startsWith(`Hello Jesse, ${INTRO}`), true);
+ok('calm: the Zap\'s own intro is not left in as a second copy', (ct.match(/package of important disclosures/g) || []).length, 1);
 ok('calm: three page ranges', (calm.html.match(/<li><b>Pages/g) || []).length, 3);
 ok('calm: reports line names the attachments', /Reports: Seller Report - City Report and Preliminary Title Report are attached separately\./.test(ct), true);
 ok('calm: the seller-reports link is its own bold line, not a buried "here"', [/<b><a href="https:\/\/drive\.google\.com\/drive\/folders\/X">CLICK HERE FOR THE SELLER'S REPORTS<\/a><\/b>/.test(calm.html.replace(/&#39;/g, "'")), />here</.test(calm.html)], [true, false]);

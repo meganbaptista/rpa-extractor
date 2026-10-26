@@ -198,7 +198,8 @@ function calmLayout(html, { guide, totalPages, stillToCome = [], reportsLink = '
   const links = bookletLinks(out.slice(g.index, sig.index));
   const P = (x) => `<div>${x}</div><br>`;
   const parts = [
-    P("Attached are the seller's disclosures for your review and signature. Please read them as a guide to the property as you make your decisions."),
+    // Megan's wording, always (2026-10-26).
+    P('Attached is a package of important disclosures that have been filled out by the seller and require your review and signature. Please regard these disclosures as a guide to educate yourself on the subject property and help you make informed decisions regarding this transaction.'),
     `<div><b>What's in the package:</b></div><ul>${guide.map((r) => `<li><b>${esc(range(r))}:</b> ${esc(r.label)}</li>`).join('')}</ul>`,
   ];
   if (files.length) parts.push(P(`<b>Reports:</b> ${esc(serialList(files))} ${files.length === 1 ? 'is' : 'are'} attached separately.`));
