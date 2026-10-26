@@ -170,6 +170,13 @@ const lorem = (seed, n = 60) => Array.from({ length: n }, (_, i) => `word${seed}
   ok('and the note says why', fxs.notes.some((n) => /SBSA not added.*FX - SBSA/.test(n)), true);
   ok('the FX file is not a seller report', fxs.reports.some((r) => r.src.id === 'fx'), false);
 
+  // 86 Dornoch: our one-page blank AAA when the listing side sent an AAA naming our agents.
+  const ag = D.planDropIns({ dealFiles: [{ id: 'ag', name: 'Blank AAA AC ABA.pdf.pdf', pages: 1, codes: ['AAA'] }], deliveredCodes: ['AAA', 'TDS'] });
+  ok('our blank AAA is not added when theirs came', ag.dropIns.ourBrokerage.length, 0);
+  ok('and the note says so', ag.notes.some((n) => /not added: the listing side sent the same form \(AAA\)/.test(n)), true);
+  const ag2 = D.planDropIns({ dealFiles: [{ id: 'ag', name: 'Blank AAA AC ABA.pdf.pdf', pages: 2, codes: ['AAA', 'AC'] }], deliveredCodes: ['AAA'] });
+  ok('a file holding more than theirs is added, with a duplicate warning', `${ag2.dropIns.ourBrokerage.length}:${ag2.warnings.some((w) => /check for a duplicate/.test(w))}`, '1:true');
+
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-assemble checks pass');
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

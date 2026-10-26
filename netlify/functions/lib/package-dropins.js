@@ -93,9 +93,19 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
   const avid = pickFile(pdfs, /\bavid\b/i);
   if (avid) dropIns.ourAvid = { type: 'drive', id: avid.id, name: avid.name };
 
-  // Agency forms file.
+  // Agency forms file. Never two copies: when the listing side already sent
+  // the same form (86 Dornoch: their AAA naming OUR agents, seller-signed),
+  // ours is not added. What the file holds is read from its page titles.
   const agency = pickFile(pdfs, /^blank\s+(aaa|ac|aba)\b/i);
-  if (agency) dropIns.ourBrokerage.push({ label: agency.name.replace(/(\.pdf)+$/i, ''), src: { type: 'drive', id: agency.id, name: agency.name }, pages: null });
+  const agencyCodes = agency && agency.codes && agency.codes.length ? [...new Set(agency.codes)] : agency && agency.texts ? [
+    agency.texts.some((t) => /additional agent acknowledg/i.test(t.text)) && 'AAA',
+    agency.texts.some((t) => /affiliated business arrangement/i.test(t.text)) && 'ABA',
+    agency.texts.some((t) => /agency (?:law )?confirmation|confirmation of (?:real estate )?agency/i.test(t.text)) && 'AC',
+  ].filter(Boolean) : [];
+  const agencyDup = agencyCodes.length && agencyCodes.every((c) => delivered.has(c));
+  if (agency && agencyDup) notes.push(`${agency.name.replace(/(\.pdf)+$/i, '')} not added: the listing side sent the same form (${agencyCodes.join(', ')}); never two copies, check theirs names our agents`);
+  else if (agency && agencyCodes.some((c) => delivered.has(c))) warnings.push(`${agency.name.replace(/(\.pdf)+$/i, '')} added, but the listing side also sent ${agencyCodes.filter((c) => delivered.has(c)).join(', ')}: check for a duplicate`);
+  if (agency && !agencyDup) dropIns.ourBrokerage.push({ label: agency.name.replace(/(\.pdf)+$/i, ''), src: { type: 'drive', id: agency.id, name: agency.name }, pages: null });
 
   // Our brokerage's own file in the deal folder ("Equity Union DISC.pdf") beats
   // the template's pages: it is the buyer agent's firm by name.

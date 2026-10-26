@@ -45,20 +45,22 @@ const KNOWN_LEN = { TOA: 1, ADM: 1, APD: 1, WCMD: 1, WHSD: 1, SFLS: 1, PSD: 1, S
 
 const ADDITIONAL_FORM_CODES = new Set(['FHDS', 'SFLS', 'PSD', 'LPD', 'WCMD', 'WHSD', 'TA', 'SOLAR', 'WBSA', 'RCSD', 'RCSD-S', 'ESD', 'SPRP', 'EQ']);
 const ADVISORY_CODES = new Set(['MCA', 'SBSA', 'WFDA', 'BHAA', 'DIA', 'FHDA', 'WFA', 'AC', 'AAA', 'PVOH', 'RPOA', 'SVRA', 'ABA', 'BIA', 'HOA', 'DBD']);
-const CONTRACT_CODES = new Set(['RFR', 'BIE', 'BIW', 'SPT', 'BUO', 'SXA', 'FIRPTA', 'QS', 'CR', 'NBP', 'ADM']);
+// AS = the seller's FIRPTA affidavit of non-foreign status (86 Dornoch: it sat
+// with the advisories); escrow items go at the end, pointed out.
+const CONTRACT_CODES = new Set(['RFR', 'BIE', 'BIW', 'SPT', 'BUO', 'SXA', 'FIRPTA', 'QS', 'AS', 'CR', 'NBP', 'ADM']);
 
 const RX = {
   nhdStatement: /natural hazard disclosure statement/i,
   nhdInvoice: /\binvoice\b/i,
   homeWarranty: /home\s*warranty/i,
   booklet: /\b[1-4]\s*(?:_|-|\s)?of\s*(?:_|-|\s)?6\b|residential environmental hazards|protect your family from\b|home energy rating|homeowner'?s guide\b/i,
-  bookletReceipt: /acknowledg\w* of receipt|consumer information (?:booklets|acknowledg)|receipt for (?:links to )?booklets|6\s*of\s*6|booklet.*(?:receipt|signature)/i,
+  bookletReceipt: /i found the booklet|acknowledg\w* of receipt|consumer information (?:booklets|acknowledg)|receipt for (?:links to )?booklets|6\s*of\s*6|booklet.*(?:receipt|signature)/i,
   eqDisclosure: /residential earthquake risk disclosure/i,
   prelim: /prelim(?:inary)?\b.*\b(?:title|report)|clta preliminary|\bptr\b/i,
   wildfireReport: /wildfire (?:risk )?report|fire risk report/i,
   homeInspection: /home inspection|property inspection report|pre-?listing inspection/i,
   report: /report|inspection|estimate|proposal|letter|permit|termite|wood destroying|work order|improvement|photo|remediation|mitigation|restoration|warranty|invoice\/order|association disclosure|hoa|certificate|clearance/i,
-  listingBrokerage: /affiliated business|hold harmless|mold disclosure|local area disclosure|brokerage|realty|real estate|sotheby|compass|coldwell|keller|truline|carolwood|seven gables/i,
+  listingBrokerage: /affiliated business|business arrangement disclosure|hold harmless|mold disclosure|local area disclosure|brokerage|realty|real estate|sotheby|compass|coldwell|keller|truline|carolwood|seven gables/i,
   mlsOrProfile: /property details|property profile|\bmls\b|listing (?:report|detail)|vendor enhanced/i,
 };
 
@@ -142,7 +144,18 @@ function planPackage(input) {
   // delivery (Stillwater: FHDA, WFA, our brokerage's ABA, MCA, all fully signed):
   // filed as "FX - <name>" at the top of the deal folder, never in the package.
   const fxPages = new Map();
-  for (const f of (input.flags || {}).fx || []) for (const p of f.pages) fxPages.set(`${f.n}:${p}`, f.name);
+  // ONLY when confirmed fully signed (signed: true). 86 Dornoch (2026-10-26):
+  // both AAAs were open contract items but still waiting on OUR buyer's
+  // signature, and filing them FX would have kept them from the buyer. Not
+  // confirmed = kept in the package for signature, with a warning.
+  const fxOpen = new Map();
+  for (const f of (input.flags || {}).fx || []) {
+    for (const p of f.pages) (f.signed === true ? fxPages : fxOpen).set(`${f.n}:${p}`, f.name);
+  }
+  // First words of untitled pages (the assembler's text read): a page the map
+  // could not title can still say what it is (86 Dornoch p54: "I found the
+  // booklet, The Homeowner's Guide ..." = the booklet receipt).
+  const firstText = (input.flags || {}).firstText || {};
   out.fx = [];
   const seenCodes = new Set();
   let nhdStatementPlaced = false;
@@ -237,7 +250,14 @@ function planPackage(input) {
 
     let prev = null;
     for (const u of units) {
+      if (!u.code && !String(u.name || '').trim()) {
+        const t = String(firstText[`${file.n}:${u.pages[0]}`] || '');
+        if (RX.bookletReceipt.test(t)) u.name = "Booklet receipt (Homeowner's Guide)";
+        else if (/business arrangement disclosure/i.test(t)) u.name = 'Affiliated Business Arrangement Disclosure Statement';
+      }
       const c = classify(u);
+      const openFx = u.pages.map((p) => fxOpen.get(`${file.n}:${p}`)).find(Boolean);
+      if (openFx) out.warnings.push(`${u.name || u.code} (${file.name} p${span(u.pages)}) is a purchase-agreement document still open on your list: kept in the package for the buyer's signature (not confirmed fully signed); once fully signed, file it as "${openFx}"`);
       const label = u.booklets && u.booklets.length > 1 ? `state booklets: ${u.booklets.join('; ')}` : (u.name || u.code || '(untitled)');
       const fxName = u.pages.map((p) => fxPages.get(`${file.n}:${p}`)).find(Boolean);
       if (fxName) {
@@ -263,7 +283,12 @@ function planPackage(input) {
         prev = null;
         continue;
       }
-      if ((c.kind === 'ADDENDUM' || c.kind === 'MLS_PROFILE' || (c.kind === 'UNKNOWN' && u.split && prev && prev.kind === 'REPORT')) && prev) {
+      // Pages the map ran PAST a form's usual length, right after the seller's
+      // TDS/SPQ chain, are their attachments (86 Dornoch p14-15: foundation
+      // drawings after the SPQ's overflow addendum). A run that is really a
+      // separate report was already merged into it above (Stillwater).
+      const pastSeller = c.kind === 'UNKNOWN' && u.split && /past its/.test(u.split) && prev && prev.section === SECTION.SELLER;
+      if ((c.kind === 'ADDENDUM' || c.kind === 'MLS_PROFILE' || pastSeller || (c.kind === 'UNKNOWN' && u.split && prev && prev.kind === 'REPORT')) && prev) {
         // Overflow / addenda / the SFLS's backing printouts / the tail of a report stay with what they follow.
         prev.pages.push(...u.pages);
         if (c.kind === 'UNKNOWN') out.warnings.push(`${file.name} p${span(u.pages)}: ${u.split}; kept with "${prev.label}"`);

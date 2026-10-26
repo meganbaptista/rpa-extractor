@@ -58,5 +58,24 @@ ok('Sunnyslope: booklets left out as booklets', y.leftOut.filter((l) => /state b
 ok('Sunnyslope: earthquake risk disclosure stays', y.units.some((u) => /earthquake risk disclosure/i.test(u.label)), true);
 ok('Sunnyslope: no "could not tell" warnings', y.warnings.some((w) => /could not tell/.test(w)), false);
 
+// ---- 86 Dornoch (2026-10-26) ----
+const dorn = require('./lib/plan-dornoch.json');
+const dn = P.planPackage({ files: dorn.files, extras: [], dropIns: {}, flags: {
+  firstText: { '1:54': "I found the booklet, The Homeowner's Guide to Environmental Hazards and Earthquake Safety helpful" },
+  fx: [{ n: 1, pages: [26], name: 'FX - AAA' }, { n: 1, pages: [55], name: 'FX - AAA' }],
+} });
+const dnAt = (rx) => dn.units.findIndex((u) => rx.test(u.label));
+ok('Dornoch: every page placed or left out', dn.accounted.size, dorn.files.reduce((s, f) => s + f.pages, 0));
+ok('Dornoch: drawings after the SPQ overflow stay with the SPQ', dn.units.find((u) => /PROPERTY QUESTIONNAIRE/.test(u.label)).pages.join(), '8,9,10,11,12,13,14,15');
+ok('Dornoch: no "(untitled)" units', dn.units.some((u) => /untitled/.test(u.label)), false);
+ok('Dornoch: booklet receipt recognized from its text', dn.units.some((u) => /Booklet receipt/.test(u.label)), true);
+ok('Dornoch: listing brokerage ABA with the advisories', dn.units.find((u) => /Business Arrangement/.test(u.label)).section, P.SECTION.ADVISORIES);
+ok('Dornoch: FIRPTA affidavit at the end', dn.units.find((u) => /FIRPTA/.test(u.label)).section, P.SECTION.OTHER);
+ok('Dornoch: unsigned AAAs stay in the package for the buyer', dn.units.filter((u) => /ADDITIONAL AGENT/.test(u.label)).length, 2);
+ok('Dornoch: nothing filed FX without a confirmed signature', dn.fx.length, 0);
+ok('Dornoch: and a warning says why', dn.warnings.filter((w) => /still open on your list/.test(w)).length, 2);
+ok('Dornoch: DSDT out', dn.leftOut.some((l) => /DSDT/.test(l.why)), true);
+ok('Dornoch: a CONFIRMED signed contract doc is still filed FX', P.planPackage({ files: dorn.files, extras: [], dropIns: {}, flags: { fx: [{ n: 1, pages: [26], name: 'FX - AAA', signed: true }] } }).fx.length, 1);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-plan checks pass');
 process.exit(failed ? 1 : 0);

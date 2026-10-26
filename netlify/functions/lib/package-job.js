@@ -118,11 +118,18 @@ async function buildForJob(ctx, deps = {}) {
     const deliveredCodes = files.flatMap((f) => f.forms.map((x) => x.code).filter(Boolean));
     const plain = D.planDropIns({ dealFiles, deliveredCodes, wantedCodes: inputs.wantedCodes, buyerBrokerage: inputs.brokerage });
     // Read only what the drop-ins use: MLS (footer pages) and seller reports (duplicate check).
-    const needText = [plain.dropIns.mls && plain.dropIns.mls.id, ...plain.reports.map((r) => r.src.id)].filter(Boolean);
+    const agencyId = (plain.dropIns.ourBrokerage || []).map((b) => b.src && b.src.id).find((id) => id && /^blank\s+(aaa|ac|aba)/i.test((dealFiles.find((x) => x.id === id) || {}).name || ''));
+    const needText = [plain.dropIns.mls && plain.dropIns.mls.id, agencyId, ...plain.reports.map((r) => r.src.id)].filter(Boolean);
     for (const id of needText) {
       const t = await core.pdfPageTexts(await getBytes({ type: 'drive', id }));
       dealTexts.set(id, t);
       const f = dealFiles.find((x) => x.id === id); f.texts = t; f.pages = t.length;
+    }
+    // The agency file's text is often garbled (zipForm export), so its forms are
+    // read like the template's, to know if the listing side sent the same one.
+    if (agencyId) {
+      const f = dealFiles.find((x) => x.id === agencyId);
+      try { f.codes = (await templateMap(ctx, f, await getBytes({ type: 'drive', id: agencyId }))).map((x) => String(x.code || '').toUpperCase()).filter(Boolean); } catch (err) { ctx.log(`agency file not read: ${err.message}`); }
     }
     let template = null;
     const tpl = pdfs.filter((f) => /^audit disclosures/i.test(f.name)).sort((a, b) => String(b.modifiedTime).localeCompare(String(a.modifiedTime)))[0];
@@ -146,6 +153,7 @@ async function buildForJob(ctx, deps = {}) {
     wrongProperty: A.findWrongProperty(sources, address),
     tails: await A.findTails(sources, assembleDeps),
     fx: A.findContractDocs(files, sources, inputs.contractItems),
+    firstText: A.firstTexts(sources),
   };
 
   const plan = P.planPackage({ files, extras, dropIns: drop.dropIns, flags });

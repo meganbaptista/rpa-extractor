@@ -212,6 +212,19 @@ function findContractDocs(files, sources, items) {
   return out;
 }
 
+/** First words of every delivered page, for pages the map left untitled. */
+function firstTexts(sources) {
+  const out = {};
+  for (const s of sources) {
+    if (s.n == null) continue;
+    for (const t of s.texts || []) {
+      const x = String(t.text || '').replace(/docusign envelope id:\s*[0-9a-f-]+/ig, ' ').replace(/\s+/g, ' ').trim();
+      if (x) out[`${s.n}:${t.num}`] = x.slice(0, 240);
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Building.
 
@@ -503,6 +516,6 @@ async function fileToDealFolder(drive, deal, built, { trash = [] } = {}) {
 }
 
 module.exports = {
-  findDuplicates, findWrongProperty, findTails, findTailCandidates, findContractDocs, buildPdf, partsFromPlan, assemble, fileToDealFolder,
+  findDuplicates, findWrongProperty, findTails, firstTexts, findTailCandidates, findContractDocs, buildPdf, partsFromPlan, assemble, fileToDealFolder,
   blankPages, repairFromSource, checkAndRepair, defaultInk, pageWeights, rerenderPages, shingles, overlap, GMAIL_RAW_TARGET,
 };
