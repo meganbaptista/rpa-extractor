@@ -16,6 +16,7 @@
 const J = require('./intake-job');
 const rc = require('./revision-check');
 const R = require('./buyer-revision');
+const A = require('./package-assemble');
 const { buildRevisionEmail } = require('./buyer-email');
 const { buildMime } = require('./mime');
 
@@ -435,9 +436,32 @@ async function revdraft(ctx) {
     const ordered = rev.ordered.filter((f) => !contractNs.has(f.n));
     // Only the files that carry a fix go to the buyer (Megan, 2026-10-22).
     const plan = rc.attachmentPlan(items, ordered);
-    const pdf = await R.mergePdfs(await Promise.all(plan.attached.map((f) => J.getDoc(store, job.id, f.n))), {
+    let pdf = await R.mergePdfs(await Promise.all(plan.attached.map((f) => J.getDoc(store, job.id, f.n))), {
       render: ctx.core.renderPagesAsImages, pageCount: ctx.core.pdfPageCount, names: plan.attached.map((f) => f.name),
     });
+    // THE SAME BLANK-PAGE NET AS THE PACKAGE (2506 Westminster, 2026-10-26: all
+    // 11 merged pages came out blank while the originals read fine). Every page
+    // is rendered; a blank one whose original is not is rebuilt from an image
+    // of the original, and a page still blank after that is said loudly.
+    const blankNotes = []; const blankProblems = [];
+    try {
+      const sources = [];
+      plan.attached.forEach((f, i) => { for (let p = 1; p <= pdf.parts[i]; p++) sources.push({ src: { type: 'file', n: f.n }, page: p, label: f.name }); });
+      const deps = {
+        render: ctx.core.renderPagesAsImages, pageCount: ctx.core.pdfPageCount, pageTexts: ctx.core.pdfPageTexts,
+        getBytes: (src) => J.getDoc(store, job.id, src.n),
+      };
+      const texts = new Map();
+      const textOf = async (src, page) => {
+        if (!texts.has(src.n)) texts.set(src.n, await ctx.core.pdfPageTexts(await deps.getBytes(src)));
+        return ((texts.get(src.n) || []).find((t) => t.num === page) || {}).text || '';
+      };
+      const r = await A.checkAndRepair({ bytes: pdf.bytes, pages: pdf.pages, sources }, deps, textOf, 'revised PDF', blankNotes, blankProblems);
+      pdf = { ...pdf, bytes: r.built.bytes };
+      if (!r.checked) blankNotes.push('The blank-page check could not run: open the revised PDF and look before sending.');
+    } catch (err) {
+      blankNotes.push(`The blank-page check failed (${err.message}): open the revised PDF and look before sending.`);
+    }
     const inputs = rc.emailInputs(plan.verdicts, plan.attached);
     const greeting = pkg ? rc.greetingFrom(pkg.original) : '';
     const built = buildRevisionEmail({ greeting, ...inputs, totalPages: pdf.pages });
@@ -480,6 +504,8 @@ async function revdraft(ctx) {
         ? `${f.name} is a counter offer: not sent to the buyers, it is yours to handle.`
         : `${f.name} is a purchase-agreement document: not sent to the buyers${filed ? `; saved in the deal folder as "${filed}", tick it on the compliance list` : '; file it if it is fully signed'}.`);
     }
+    notes.push(...blankNotes);
+    if (blankProblems.length) notes.push(`DO NOT SEND AS IS: ${blankProblems.join('; ')}.`);
     if (pdf.rebuilt.length) notes.push(`Damaged file(s) rebuilt as page images so they could be attached: ${pdf.rebuilt.join(', ')}. Check they read clearly.`);
     if (!address) notes.push('The property address could not be read from the revised forms.');
     else if (!pkg) notes.push(`No sent "Seller Disclosure Package" email was found for ${address}, so this is not in the buyer thread and has no recipients.`);

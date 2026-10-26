@@ -317,7 +317,12 @@ async function blankPages(built, deps, textOf) {
       if ((await deps.ink(im.base64)) >= BLANK_INK) continue;
       const s = built.sources[im.pageNumber - 1];
       const srcWords = s ? words(await textOf(s.src, s.page)).length : 0;
-      if (srcWords >= 5) problems.push({ page: im.pageNumber, label: s.label, why: `page ${im.pageNumber} (${s.label}) came out blank but the original page has text` });
+      if (srcWords >= 5) { problems.push({ page: im.pageNumber, label: s.label, why: `page ${im.pageNumber} (${s.label}) came out blank but the original page has text` }); continue; }
+      // A scanned original has no text to compare: look at it instead.
+      if (s && deps.getBytes) {
+        const [orig] = await deps.render(await deps.getBytes(s.src), [s.page], CHECK_SCALE).catch(() => []);
+        if (orig && (await deps.ink(orig.base64)) >= BLANK_INK * 5) problems.push({ page: im.pageNumber, label: s.label, why: `page ${im.pageNumber} (${s.label}) came out blank but the original page is not` });
+      }
     }
   }
   return { checked: true, problems };
