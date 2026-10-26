@@ -424,10 +424,17 @@ async function revdraft(ctx) {
     j.outcome = `revision: ${tally[0]} fixed, ${tally[1]} still open, ${tally[2]} to check`;
   };
 
-  if (!effects.draft) {
+  // job.redraft: correct the buyer draft already made, in place (restart tool).
+  if (!effects.draft || job.redraft) {
     const pkg = address ? await R.findSentPackage(gmail, address) : null;
+    // Purchase-agreement documents never go to the buyers: filed as FX (if
+    // their fix came back) and left out of the update (lib/revision-check.js).
+    const contractNs = new Set(rev.ordered.filter((f) => rc.contractCode(f)).map((f) => f.n));
+    const contractFiled = [];
+    const items = rev.items.filter((v) => !contractNs.has(v.n));
+    const ordered = rev.ordered.filter((f) => !contractNs.has(f.n));
     // Only the files that carry a fix go to the buyer (Megan, 2026-10-22).
-    const plan = rc.attachmentPlan(rev.items, rev.ordered);
+    const plan = rc.attachmentPlan(items, ordered);
     const pdf = await R.mergePdfs(await Promise.all(plan.attached.map((f) => J.getDoc(store, job.id, f.n))), {
       render: ctx.core.renderPagesAsImages, pageCount: ctx.core.pdfPageCount, names: plan.attached.map((f) => f.name),
     });
@@ -456,11 +463,28 @@ async function revdraft(ctx) {
     notes.push('Only the items in your corrections email were checked; a new form in this delivery was not audited.');
     if ((job.revision.ours || []).length) notes.push(`Yours to add (you said so in your email, not checked and not in the buyer email): ${job.revision.ours.join('; ')}.`);
     if (plan.left.length) notes.push(`Not attached (no fix in them): ${plan.left.map((f) => f.name).join(', ')}.`);
+    if (live && address && contractNs.size) {
+      const deal = await R.findDealFolder(ctx.drive, address);
+      for (const f of rev.ordered.filter((x) => contractNs.has(x.n))) {
+        const code = rc.contractCode(f);
+        const fixed = rev.items.some((v) => v.n === f.n && v.status === 'fixed');
+        if (code === 'COUNTER' || !fixed) continue;
+        const name = `FX - ${code}.pdf`;
+        if (await R.saveToDealFolder(ctx.drive, deal, name, await J.getDoc(store, job.id, f.n))) contractFiled.push(name);
+      }
+    }
+    for (const f of rev.ordered.filter((x) => contractNs.has(x.n))) {
+      const code = rc.contractCode(f);
+      const filed = contractFiled.find((n) => n === `FX - ${code}.pdf`);
+      notes.push(code === 'COUNTER'
+        ? `${f.name} is a counter offer: not sent to the buyers, it is yours to handle.`
+        : `${f.name} is a purchase-agreement document: not sent to the buyers${filed ? `; saved in the deal folder as "${filed}", tick it on the compliance list` : '; file it if it is fully signed'}.`);
+    }
     if (pdf.rebuilt.length) notes.push(`Damaged file(s) rebuilt as page images so they could be attached: ${pdf.rebuilt.join(', ')}. Check they read clearly.`);
     if (!address) notes.push('The property address could not be read from the revised forms.');
     else if (!pkg) notes.push(`No sent "Seller Disclosure Package" email was found for ${address}, so this is not in the buyer thread and has no recipients.`);
     if (built.warnings.length) notes.push(`The buyer email was not written: ${built.warnings.join('; ')}.`);
-    const note = rc.checkNoteHtml({ verdicts: plan.verdicts, correctionsDate: job.revision.correctionsDate, extra: notes, banner });
+    const note = rc.checkNoteHtml({ verdicts: plan.verdicts.concat(rev.items.filter((v) => contractNs.has(v.n))), correctionsDate: job.revision.correctionsDate, extra: notes, banner });
     const html = ctx.signature.withSignature(note + (built.html || ''), await ctx.signature.liveSignature(gmail));
     const pdfName = `Revised Disclosures - ${address || 'unknown address'}.pdf`;
 
@@ -472,7 +496,7 @@ async function revdraft(ctx) {
       }
       d = await R.createRevisionDraft(gmail, {
         pkg, html, pdfName, pdfBytes: pdf.bytes, labels: ['Buyer Disclosures', 'Edelyn'],
-        inThread: !!(pkg && built.html), to: '',
+        inThread: !!(pkg && built.html), to: '', replaceDraftId: job.redraft && effects.draft && effects.draft !== 'created' ? effects.draft : '',
       });
     } else {
       const me = String(process.env.GMAIL_IMPERSONATE_SUBJECT || process.env.GOOGLE_IMPERSONATE_SUBJECT || '').trim();

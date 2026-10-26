@@ -303,7 +303,31 @@ function checkNoteHtml({ verdicts, correctionsDate, greetingNote, extra = [], ba
     + '<p style="margin:0 0 16px 0">---------- delete through here ----------</p></div>';
 }
 
+/**
+ * PURCHASE-AGREEMENT DOCUMENTS in a revision reply (20701 Schoolcraft,
+ * 2026-10-26: her corrections asked for the FHDA "with seller signature from
+ * the RPA", and the returned FHDA went to the buyers inside the revised
+ * disclosures). They are contract documents: filed as "FX - <code>" in the deal
+ * folder and ticked on the compliance list, never sent as a disclosure update.
+ * Counter offers are contract items too (never attached; back to Megan).
+ */
+const CONTRACT_DOCS = [
+  [/fair\s*housing|\bfhda\b/i, 'FHDA'],
+  [/wire\s*fraud|\bwfa\b/i, 'WFA'],
+  [/possible\s*representation\s*of\s*more\s*than\s*one|\bprbs\b/i, 'PRBS'],
+  [/buyer.?s?\s*inspection\s*advisory|\bbia\b/i, 'BIA'],
+  [/buyer.?s?\s*homeowners?.?\s*insurance\s*advisory|\bbhia\b/i, 'BHIA'],
+  [/\bccpa\b|consumer\s*privacy/i, 'CCPA'],
+  [/counter\s*offer|\b(?:smco|sco|bco|mco)\s*#?\s*\d*\b/i, 'COUNTER'],
+];
+function contractCode(file) {
+  const s = `${file.name || ''} ${(file.forms || []).join(' ')}`;
+  for (const [rx, code] of CONTRACT_DOCS) if (rx.test(s)) return code;
+  return '';
+}
+
 module.exports = {
+  contractCode, CONTRACT_DOCS,
   correctionItems, findCorrectionsEmail, looksLikeCorrections, attachmentPlan, splitOurs, greetingFrom, formRank, packageOrder, mergedPage,
   agree, checkRevisions, emailInputs, checkNoteHtml, followUpHtml, PROMPT,
 };

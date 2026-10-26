@@ -110,7 +110,7 @@ async function saveToDealFolder(drive, deal, name, bytes) {
  *   inThread: true  -> reply in the package thread, to its recipients (live)
  *   inThread: false -> standalone, addressed to `to` (trial: Megan only)
  */
-async function createRevisionDraft(gmail, { pkg, html, pdfName, pdfBytes, labels, inThread, to = '', subjectPrefix = '' }) {
+async function createRevisionDraft(gmail, { pkg, html, pdfName, pdfBytes, labels, inThread, to = '', subjectPrefix = '', replaceDraftId = '' }) {
   if (pdfBytes && pdfBytes.length * 1.37 > GMAIL_MAX_RAW) {
     throw new Error(`the PDF is ${Math.round(pdfBytes.length / 1048576)}MB, over Gmail's 25MB once encoded`);
   }
@@ -124,7 +124,10 @@ async function createRevisionDraft(gmail, { pkg, html, pdfName, pdfBytes, labels
     html,
     attachments: pdfBytes ? [{ filename: pdfName, contentType: 'application/pdf', data: pdfBytes }] : [],
   });
-  const created = await gmail.createDraftRaw(raw, inThread ? { threadId: pkg.msg.threadId } : {});
+  // replaceDraftId: correct a draft already made, in place (two drafts in one
+  // thread cannot both be seen on her computer).
+  const created = replaceDraftId ? await gmail.updateDraftRaw(replaceDraftId, raw)
+    : await gmail.createDraftRaw(raw, inThread ? { threadId: pkg.msg.threadId } : {});
   const newMsgId = created && created.message && created.message.id;
   const found = await Promise.all((labels || []).map((n) => gmail.labelId(n)));
   const ids = found.filter(Boolean);
