@@ -129,6 +129,11 @@ function toToken(v) {
   if (s === 's' || s === 'seller' || s === 'sellers') return 'S';
   if (s === 'ba' || /buyer'?s?\s*agent/.test(s) || s === 'buyer agent') return 'BA';
   if (s === 'la' || /listing\s*agent/.test(s) || /seller'?s?\s*agent/.test(s) || s === 'seller agent') return 'LA';
+  // THE BROKER WAS MISSING HERE (1407 Santanella, 2026-10-26: "the system marks
+  // the ABA as FX even if we are missing the broker signature"). The audit said
+  // BR was required and absent, and this mapping dropped BR from BOTH lists, so
+  // nothing was missing and the ABA filed FX. NEED_WORD already had the word.
+  if (s === 'br' || /\bbroker\b|office\s*manager/.test(s)) return 'BR';
   return null;
 }
 function normSigners(arr) {

@@ -390,6 +390,15 @@ function resolveSigners(audit, code) {
   }
 
   /**
+   * A BLANK BROKER LINE OVERRULES "PRESENT" TOO. The ABA prints one
+   * "By (Broker/Office Manager)" line per broker, and both brokers must sign;
+   * the agents' own signatures in paragraph 4 sit right above them, and a
+   * DocuSign box can overlap the line (1407 Santanella, 2026-10-26). The label
+   * is unambiguous, so any one of them left blank means the broker is missing.
+   */
+  if (lines.some((l) => l && !l.signed && tokensForLabel(l.label).includes('BR'))) present.delete('BR');
+
+  /**
    * WHEN THE PAGE DOES NOT SAY WHICH PARTY, DO NOT NAME ONE.
    *
    * Sotheby's affiliated business disclosure prints four identical lines
