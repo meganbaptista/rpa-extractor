@@ -70,6 +70,11 @@ function classify(unit) {
   const name = String(unit.name || '');
   const pages = unit.pages.length;
   if (code === 'DSDT') return { leave: 'DSDT (always removed)' };
+  // Megan, 2026-10-26: "ALWAYS remove the BIW from the package. I hate when
+  // agents send us that." ... "and also buyer inspection elections, so BIE AND
+  // BIW both to be removed, always".
+  if (code === 'BIW' || /buyer.?s? investigation waiver/i.test(name)) return { leave: 'buyer investigation waiver (always removed)' };
+  if (code === 'BIE' || /buyer.?s? investigation elections?/i.test(name)) return { leave: 'buyer investigation elections (always removed)' };
   if (code === 'TDS') return { section: SECTION.SELLER, order: 0, kind: 'TDS' };
   if (code === 'SPQ') return { section: SECTION.SELLER, order: 1, kind: 'SPQ' };
   if (code === 'TOA' || code === 'ADM' || code === 'APD') return { kind: 'ADDENDUM' };   // follows the form before it
@@ -418,6 +423,30 @@ function sellerReportName(name) {
   return `Seller Report - ${base.replace(/\b\w/g, (c) => c.toUpperCase())}`;
 }
 
+/** Plain words for the end section's documents (escrow / contract items). */
+const OTHER_WORDS = [
+  [(u) => /^(AS|FIRPTA|QS)$/.test(u.code) || /non-?foreign|firpta/i.test(u.label), "the seller's non-foreign status affidavit"],
+  [(u) => u.code === 'SPT' || /supplemental.*property tax/i.test(u.label), 'the supplemental property tax notice'],
+  [(u) => u.code === 'BIE' || /investigation elections/i.test(u.label), 'your inspection elections'],
+  [(u) => u.code === 'BIW' || /investigation waiver/i.test(u.label), 'the inspection waiver'],
+  [(u) => u.code === 'RFR' || /receipt for reports/i.test(u.label), 'the receipt for reports'],
+  [(u) => u.code === 'SXA' || /seller.*exchange/i.test(u.label), "the seller's exchange addendum"],
+  [(u) => u.code === 'BUO' || /back.?up offer/i.test(u.label), 'the backup offer addendum'],
+  [(u) => u.code === 'CR' || /contingency removal/i.test(u.label), 'the contingency removal'],
+];
+function otherLabel(units) {
+  const words = [];
+  let unknown = 0;
+  for (const u of units) {
+    const hit = OTHER_WORDS.find(([test]) => test(u));
+    if (hit && !words.includes(hit[1])) words.push(hit[1]);
+    else if (!hit) unknown++;
+  }
+  if (unknown) words.push(unknown === 1 ? 'one more form for your signature' : 'a few more forms for your signature');
+  const s = words.join(', ').replace(/, ([^,]*)$/, ' and $1');
+  return s ? s[0].toUpperCase() + s.slice(1) : 'Forms for your signature';
+}
+
 /** The calm layout's three (or four) page ranges, labels in plain English. */
 function guideSections(units) {
   const groups = [
@@ -432,7 +461,9 @@ function guideSections(units) {
       : units.some((u) => u.kind === 'AVID') ? "the listing agent's visual inspection" : "our agent's visual inspection") : '']
     .filter(Boolean).join(', ').replace(/, ([^,]*)$/, ' and $1').replace(/^a/, 'A');
   groups[2].label = has(SECTION.OURS) ? (has(SECTION.ADVISORIES) ? "Standard advisories and our brokerage's forms" : "Our brokerage's forms") : 'Standard advisories';
-  groups[3].label = 'Other documents';
+  // NEVER "Other documents" (Megan, 86 Dornoch, 2026-10-26: "absolutely not do
+  // we say that to a buyer"). Name what is there, in plain words.
+  groups[3].label = otherLabel(units.filter((u) => u.section === SECTION.OTHER));
   return groups.filter((g) => g.secs.some(has)).map((g) => ({ sections: g.secs, label: g.label }));
 }
 
