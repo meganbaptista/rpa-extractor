@@ -486,12 +486,15 @@ async function revdraft(ctx) {
     if (built.warnings.length) notes.push(`The buyer email was not written: ${built.warnings.join('; ')}.`);
     const note = rc.checkNoteHtml({ verdicts: plan.verdicts.concat(rev.items.filter((v) => contractNs.has(v.n))), correctionsDate: job.revision.correctionsDate, extra: notes, banner });
     const html = ctx.signature.withSignature(note + (built.html || ''), await ctx.signature.liveSignature(gmail));
-    const pdfName = `Revised Disclosures - ${address || 'unknown address'}.pdf`;
+    // Named like her deal folder: the address read from the forms can drop
+    // the "St" (20701 Schoolcraft, 2026-10-26).
+    const dealForName = live && address ? await R.findDealFolder(ctx.drive, address).catch(() => null) : null;
+    const pdfName = `Revised Disclosures - ${(dealForName && dealForName.folder && dealForName.folder.name) || address || 'unknown address'}.pdf`;
 
     let d;
     if (live) {
       if (address) {
-        const deal = await R.findDealFolder(ctx.drive, address);
+        const deal = dealForName || await R.findDealFolder(ctx.drive, address);
         effects.savedToDrive = await R.saveToDealFolder(ctx.drive, deal, pdfName, pdf.bytes);
       }
       d = await R.createRevisionDraft(gmail, {
