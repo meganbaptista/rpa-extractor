@@ -3140,7 +3140,7 @@ function reviseLineFor(f) {
   const joined = lead ? `${ref} ${why.slice(lead[0].length)}` : '';
   const line = (fallback, ask) => (joined ? `${joined}. ${ask}` : `${ref}: ${fallback}. ${ask}`);
   if (f.issue === 'detail_incomplete') return `${ref}: ${why}. Could you fill that in, or mark it Unknown?`;
-  if (f.issue === 'verify_mismatch') return `${ref}: ${why}.`;
+  if (f.issue === 'verify_mismatch') return `${ref}: ${why}${/[?!]$/.test(why) ? '' : '.'}`;
   if (f.issue === 'entity_signer') return dashless(f.reason);
   if (f.issue === 'seller_signature_missing') {
     return `${f.form || 'This form'}: the seller's signature and date look to be missing. Could the seller sign and date it, or could you send the signed copy?`;
@@ -4142,9 +4142,14 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // "SPQ 17G: Yes, high fire brush clearance SPQ present; confirm 17G: marked No, but
   // the property is in a high fire hazard area, so it should be Yes."
   //
-  // The renderer appends the full stop, so this string must NOT end in one.
-  const BRUSH_ASK = 'The property is marked as a high fire hazard area. Please confirm if the '
-    + 'seller should have marked this as a "Yes" for annual brush clearance';
+  // Megan's wording (86 Dornoch, 2026-10-26): ONE question, no "Please ..."
+  // second sentence. reasonOf() cuts everything from ". Please" on, which
+  // left the line as "SPQ 17G: The property is marked as a high fire hazard
+  // area," and nothing else. And it asks the seller to CONFIRM, not to change
+  // the answer: "in my experience orange county does not have annual brush
+  // clearance". It ends in "?", so the renderer adds no full stop.
+  const BRUSH_ASK = 'The property is marked as a high fire hazard area, can you please confirm the seller '
+    + 'is not required to complete annual brush clearance?';
   const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} highFireHazard=${ctx.highFireHazard} brushExempt=${brushExempt} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no} fire_clearance=${ka.fire_clearance || 'na'}(->${fireSev || 'na'})(${ka.fire_clearance_item || '?'}) fhds=${ka.fhds || 'na'}`;
   console.log(`[disclosure-intake] context check ${address}: ${debugContext}`);
   const ctxFlags = [];
