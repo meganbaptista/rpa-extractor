@@ -261,7 +261,7 @@ function emailInputs(verdicts, ordered) {
     }
   }
   const forms = [];
-  for (const f of ordered) for (const name of f.forms) if (!forms.includes(name)) forms.push(name);
+  for (const f of ordered) for (const name of f.forms) if (!forms.includes(name) && !NEVER_PAGES.some(([rx]) => rx.test(name))) forms.push(name);
   return { changes, stillToCome: [...new Set(stillToCome)], forms, requested: verdicts.length };
 }
 
@@ -326,7 +326,49 @@ function contractCode(file) {
   return '';
 }
 
+/**
+ * WHICH PAGES OF EACH FILE GO TO THE BUYER (6051 Scenic, 2026-10-26: the
+ * revised PDF carried the whole 31-page NHD report, whose only fix was the
+ * seller's signature on the statement page, and the FHDS file's Defensible
+ * Space Decision Tree). The package rules hold for revisions too:
+ *   - pages titled DSDT / Buyer Investigation Elections / Waiver never go;
+ *   - from a long report (over 5 pages, e.g. the NHD report) only the pages
+ *     that carry a fix go: the buyer already has the full report.
+ * texts: [{ num, text }] for the file. Returns { pages, dropped: [why] }.
+ */
+/** The file lists a never-send form but no page text names it: map its pages. */
+function needsPageMap(file, texts) {
+  if (!(file.forms || []).some((n) => NEVER_PAGES.some(([rx]) => rx.test(n)))) return false;
+  return !(texts || []).some((t) => NEVER_PAGES.some(([rx]) => rx.test(String(t.text || ''))));
+}
+const NEVER_PAGES = [
+  [/defensible\s+space\s+decision\s+tree/i, 'the defensible space decision tree'],
+  [/buyer.?s?\s+investigation\s+elections?/i, 'the buyer investigation elections'],
+  [/buyer.?s?\s+investigation\s+waiver/i, 'the buyer investigation waiver'],
+];
+function pagesToSend(file, texts, fixPages, formPages = null) {
+  const all = Array.from({ length: file.pages }, (_, i) => i + 1);
+  // formPages (the page reader's map, [{ name, pages }]) names each page's form
+  // when the text layer is unreadable (6051 Scenic's FHDS file).
+  const fromMap = (p) => ((formPages || []).find((f) => (f.pages || []).includes(p)) || {}).name || '';
+  const head = (p) => `${fromMap(p)} ${String(((texts || []).find((t) => t.num === p) || {}).text || '').replace(/docusign envelope id:\s*[0-9a-f-]+/ig, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)}`;
+  const dropped = [];
+  let keep = all.filter((p) => {
+    const hit = NEVER_PAGES.find(([rx]) => rx.test(head(p)));
+    if (hit && !fixPages.includes(p)) { if (!dropped.includes(hit[1])) dropped.push(hit[1]); return false; }
+    return true;
+  });
+  const isReport = file.pages > 5 && /\bnhd\b|natural\s+hazard|report/i.test(`${file.name} ${(file.forms || []).join(' ')}`);
+  if (isReport && fixPages.length) {
+    const before = keep.length;
+    keep = keep.filter((p) => fixPages.includes(p));
+    if (keep.length < before) dropped.push(`the rest of ${String(file.name || 'the report').replace(/^\[reply [^\]]*\]\s*/, '').replace(/\.pdf$/i, '')} (only the page${keep.length === 1 ? '' : 's'} with the change; the buyer has the full report)`);
+  }
+  return { pages: keep.length ? keep : all, dropped };
+}
+
 module.exports = {
+  pagesToSend, NEVER_PAGES, needsPageMap,
   contractCode, CONTRACT_DOCS,
   correctionItems, findCorrectionsEmail, looksLikeCorrections, attachmentPlan, splitOurs, greetingFrom, formRank, packageOrder, mergedPage,
   agree, checkRevisions, emailInputs, checkNoteHtml, followUpHtml, PROMPT,

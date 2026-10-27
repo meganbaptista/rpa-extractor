@@ -432,11 +432,39 @@ async function revdraft(ctx) {
     // their fix came back) and left out of the update (lib/revision-check.js).
     const contractNs = new Set(rev.ordered.filter((f) => rc.contractCode(f)).map((f) => f.n));
     const contractFiled = [];
-    const items = rev.items.filter((v) => !contractNs.has(v.n));
-    const ordered = rev.ordered.filter((f) => !contractNs.has(f.n));
+    const items0 = rev.items.filter((v) => !contractNs.has(v.n));
+    const ordered0 = rev.ordered.filter((f) => !contractNs.has(f.n));
+    // Package rules inside each file (rc.pagesToSend): no DSDT / BIE / BIW
+    // pages, and only the changed pages of a long report (6051 Scenic: the
+    // whole NHD report went to the buyer for one signature).
+    const sel = new Map(); const pageNotes = [];
+    for (const f of ordered0) {
+      const fixPages = items0.filter((v) => v.n === f.n && v.page).map((v) => Number(v.page));
+      let texts = [];
+      try { texts = await ctx.core.pdfPageTexts(await J.getDoc(store, job.id, f.n)); } catch (err) { texts = []; }
+      let formPages = null;
+      if (rc.needsPageMap(f, texts) && ctx.strips) {
+        try {
+          const buf = await J.getDoc(store, job.id, f.n);
+          const rows = await ctx.strips.readAllStrips(buf, f.pages, f.name);
+          formPages = ctx.strips.documentsFromStrips(rows.filter((x) => !x.unread)).map((d) => ({ name: d.title || d.carCode || d.footerName || '', pages: d.pages }));
+        } catch (err) { ctx.log(`page map for ${f.name} failed: ${err.message}`); }
+      }
+      const r = rc.pagesToSend(f, texts, fixPages, formPages);
+      sel.set(f.n, r.pages);
+      if (r.dropped.length) pageNotes.push(`${String(f.name).replace(/^\[reply [^\]]*\]\s*/, '')}: left out ${r.dropped.join(', ')}.`);
+    }
+    const ordered = ordered0.map((f) => ({ ...f, pages: sel.get(f.n).length }));
+    const items = items0.map((v) => (v.n != null && sel.has(v.n) && v.page && sel.get(v.n).includes(Number(v.page))
+      ? { ...v, page: sel.get(v.n).indexOf(Number(v.page)) + 1 } : v));
     // Only the files that carry a fix go to the buyer (Megan, 2026-10-22).
     const plan = rc.attachmentPlan(items, ordered);
-    let pdf = await R.mergePdfs(await Promise.all(plan.attached.map((f) => J.getDoc(store, job.id, f.n))), {
+    const fileBytes = async (f) => {
+      const buf = await J.getDoc(store, job.id, f.n);
+      const want = sel.get(f.n);
+      return want.length === rev.ordered.find((x) => x.n === f.n).pages ? buf : R.pickPages(buf, want, { render: ctx.core.renderPagesAsImages });
+    };
+    let pdf = await R.mergePdfs(await Promise.all(plan.attached.map(fileBytes)), {
       render: ctx.core.renderPagesAsImages, pageCount: ctx.core.pdfPageCount, names: plan.attached.map((f) => f.name),
     });
     // THE SAME BLANK-PAGE NET AS THE PACKAGE (2506 Westminster, 2026-10-26: all
@@ -446,7 +474,7 @@ async function revdraft(ctx) {
     const blankNotes = []; const blankProblems = [];
     try {
       const sources = [];
-      plan.attached.forEach((f, i) => { for (let p = 1; p <= pdf.parts[i]; p++) sources.push({ src: { type: 'file', n: f.n }, page: p, label: f.name }); });
+      plan.attached.forEach((f, i) => { for (let p = 1; p <= pdf.parts[i]; p++) sources.push({ src: { type: 'file', n: f.n }, page: (sel.get(f.n) || [])[p - 1] || p, label: f.name }); });
       const deps = {
         render: ctx.core.renderPagesAsImages, pageCount: ctx.core.pdfPageCount, pageTexts: ctx.core.pdfPageTexts,
         getBytes: (src) => J.getDoc(store, job.id, src.n),
@@ -504,6 +532,7 @@ async function revdraft(ctx) {
         ? `${f.name} is a counter offer: not sent to the buyers, it is yours to handle.`
         : `${f.name} is a purchase-agreement document: not sent to the buyers${filed ? `; saved in the deal folder as "${filed}", tick it on the compliance list` : '; file it if it is fully signed'}.`);
     }
+    notes.push(...pageNotes);
     notes.push(...blankNotes);
     if (blankProblems.length) notes.push(`DO NOT SEND AS IS: ${blankProblems.join('; ')}.`);
     if (pdf.rebuilt.length) notes.push(`Damaged file(s) rebuilt as page images so they could be attached: ${pdf.rebuilt.join(', ')}. Check they read clearly.`);

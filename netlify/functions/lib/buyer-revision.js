@@ -98,6 +98,27 @@ async function mergePdfs(bufs, { render, pageCount, names = [] } = {}) {
   return { bytes: Buffer.from(await out.save()), pages: out.getPageCount(), parts, rebuilt };
 }
 
+/**
+ * Only the given pages (1-based) of a PDF. A damaged file pdf-lib cannot copy
+ * is rendered page by page instead, like mergePdfs.
+ */
+async function pickPages(buf, pages, { render } = {}) {
+  const out = await PDFDocument.create();
+  try {
+    const src = await PDFDocument.load(buf, { ignoreEncryption: true });
+    (await out.copyPages(src, pages.map((p) => p - 1))).forEach((p) => out.addPage(p));
+  } catch (err) {
+    if (!render) throw err;
+    const imgs = await render(buf, pages, RENDER_SCALE);
+    for (const im of imgs.sort((a, b) => a.pageNumber - b.pageNumber)) {
+      const png = await out.embedPng(Buffer.from(im.base64, 'base64'));
+      const w = png.width / RENDER_SCALE; const h = png.height / RENDER_SCALE;
+      out.addPage([w, h]).drawImage(png, { x: 0, y: 0, width: w, height: h });
+    }
+  }
+  return Buffer.from(await out.save());
+}
+
 /** Save next to the package unless a file of that name is already there. */
 async function saveToDealFolder(drive, deal, name, bytes) {
   if (!deal || !deal.folder || deal.files.some((x) => x.name === name)) return false;
@@ -135,4 +156,4 @@ async function createRevisionDraft(gmail, { pkg, html, pdfName, pdfBytes, labels
   return { draftId: created && created.id, rawBytes: raw.length, labelled: (labels || []).filter((_, i) => found[i]), headers };
 }
 
-module.exports = { streetOf, findSentPackage, findDealFolder, mergePdfs, saveToDealFolder, createRevisionDraft, GMAIL_MAX_RAW };
+module.exports = { streetOf, findSentPackage, findDealFolder, mergePdfs, pickPages, saveToDealFolder, createRevisionDraft, GMAIL_MAX_RAW };

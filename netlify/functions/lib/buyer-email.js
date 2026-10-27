@@ -393,10 +393,15 @@ function mergeSamePage(changes) {
 // disclosures in the package I sent earlier.").
 function closingLine(forms) {
   const amend = forms.filter((f) => /amendment/i.test(f));
-  const other = forms.filter((f) => !/amendment/i.test(f));
-  if (!amend.length) return `These replace the matching ${serialList(other)} pages in the package I sent earlier.`;
+  // At most three documents by name (her own revision email names three);
+  // more reads as a wall (6051 Scenic, 2026-10-26: every section title of an
+  // NHD report was listed, "a little wild"). Past three, the plain sentence.
+  const named = forms.filter((f) => !/amendment/i.test(f));
+  const other = named.length > 3 ? [] : named;
+  if (!amend.length) return other.length ? `These replace the matching ${serialList(other)} pages in the package I sent earlier.` : 'These replace the matching pages in the package I sent earlier.';
   const a = amend.length === 1 ? 'This amendment updates' : 'These amendments update';
-  if (!other.length) return `${a} the seller's disclosures in the package I sent earlier.`;
+  if (!other.length && !named.length) return `${a} the seller's disclosures in the package I sent earlier.`;
+  if (!other.length) return `These replace the matching pages in the package I sent earlier, and the ${amend.length === 1 ? 'amendment updates' : 'amendments update'} the seller's disclosures.`;
   return `These replace the matching ${serialList(other)} pages in the package I sent earlier, and the ${amend.length === 1 ? 'amendment updates' : 'amendments update'} the seller's disclosures.`;
 }
 
