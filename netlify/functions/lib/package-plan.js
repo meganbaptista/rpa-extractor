@@ -75,7 +75,15 @@ function classify(unit) {
   // BIW both to be removed, always".
   if (code === 'BIW' || /buyer.?s? investigation waiver/i.test(name)) return { leave: 'buyer investigation waiver (always removed)' };
   if (code === 'BIE' || /buyer.?s? investigation elections?/i.test(name)) return { leave: 'buyer investigation elections (always removed)' };
+  // Counter offers are contract items: never in the package (3345 Rubio).
+  if (/^(SCO|SMCO|BCO|MCO|BCOU|SCOU)$/.test(code) || /\bcounter\s*offer\b/i.test(name)) return { leave: 'counter offer: a contract item, yours to handle (not in the package)', warn: true };
   if (code === 'TDS') return { section: SECTION.SELLER, order: 0, kind: 'TDS' };
+  // The seller's own written disclosures ("Disclosures regarding 3345 Rubio
+  // Crest Drive, Altadena (revised 10-26)") belong with the TDS and SPQ.
+  if (!code && /^\s*(?:seller'?s?\s+)?(?:additional\s+)?disclosures?\s+(?:regarding|for|re:?)\b/i.test(name)) return { section: SECTION.SELLER, order: 2, kind: 'SELLER_WRITTEN' };
+  // The listing side's own property printout ("PROPERTY TAX RECORDS", 3345
+  // Rubio) is their property profile: it sits with the SFLS, ours is not added.
+  if (!code && /^\s*property\s+tax\s+records?\b/i.test(name)) return { section: SECTION.FORMS, kind: 'LISTING_PROFILE' };
   if (code === 'SPQ') return { section: SECTION.SELLER, order: 1, kind: 'SPQ' };
   if (code === 'TOA' || code === 'ADM' || code === 'APD') return { kind: 'ADDENDUM' };   // follows the form before it
   if (code === 'AVID') return { section: SECTION.AVIDS, kind: 'AVID' };
@@ -106,7 +114,9 @@ function classifyFile(file) {
   // never in the package, saved and attached as a seller report (Megan 10/23).
   if (RX.homeWarranty.test(name) || RX.homeWarranty.test(first)) return { attach: 'Seller Report - Home Warranty' };
   if (RX.wildfireReport.test(name)) return { attach: 'Wildfire Report' };
-  if (/\bnhd\b|natural hazard/i.test(name) && file.pages > 5) return { attach: 'Natural Hazard Disclosure Report', nhdReport: true };
+  // By its first page's title too: "3345RubioC_PIDReport_4197582.pdf" opens
+  // with "Residential NHD Report with Environmental Hazards & Forms".
+  if ((/\bnhd\b|natural hazard/i.test(name) || /\bnhd\b.*report|natural hazard.*report/i.test(first)) && file.pages > 5) return { attach: 'Natural Hazard Disclosure Report', nhdReport: true };
   if (RX.booklet.test(name) && file.pages > 3) return { leave: 'state booklet (never in; the email links the booklets)' };
   return null;
 }
@@ -134,7 +144,11 @@ function planPackage(input) {
   const wrong = new Map(wrongAll.filter((w) => w.n != null && !w.pages).map((w) => [w.n, w.why]));
   const wrongExtras = new Map(wrongAll.filter((w) => w.key != null).map((w) => [w.key, w.why]));
   const wrongPages = new Map();
-  for (const w of wrongAll.filter((x) => x.n != null && x.pages)) for (const p of w.pages) wrongPages.set(`${w.n}:${p}`, w.why);
+  const goodPages = new Set();
+  for (const w of wrongAll.filter((x) => x.n != null && x.pages)) {
+    for (const p of w.pages) wrongPages.set(`${w.n}:${p}`, w.why);
+    for (const p of w.good || []) goodPages.add(`${w.n}:${p}`);
+  }
   // Whole files (or extras) that repeat pages already in another delivered file
   // (5733 E Stillwater #2: four separate attachments were copies of pages inside
   // the combined PDF). Found by the assembler's text comparison; placed once.
@@ -255,13 +269,18 @@ function planPackage(input) {
 
     let prev = null;
     for (const u of units) {
+      // A whole file the map could not title is named by its file name
+      // ("JLM_Asbestos_Report-__3345_Rubio..." -> a report from the seller).
+      if (!u.code && !String(u.name || '').trim() && u.pages.length === file.pages) {
+        u.name = String(file.name || '').replace(/\.pdf$/i, '').replace(/\s*\(\d+\)\s*$/, '').replace(/[_]+/g, ' ').replace(/\s+-\s*/g, ' - ').replace(/\s+/g, ' ').trim();
+      }
       if (!u.code && !String(u.name || '').trim()) {
         const t = String(firstText[`${file.n}:${u.pages[0]}`] || '');
         if (RX.bookletReceipt.test(t)) u.name = "Booklet receipt (Homeowner's Guide)";
         else if (/business arrangement disclosure/i.test(t)) u.name = 'Affiliated Business Arrangement Disclosure Statement';
       }
       const c = classify(u);
-      const openFx = u.pages.map((p) => fxOpen.get(`${file.n}:${p}`)).find(Boolean);
+      const openFx = c.leave ? null : u.pages.map((p) => fxOpen.get(`${file.n}:${p}`)).find(Boolean);
       if (openFx) out.warnings.push(`${u.name || u.code} (${file.name} p${span(u.pages)}) is a purchase-agreement document still open on your list: kept in the package for the buyer's signature (not confirmed fully signed); once fully signed, file it as "${openFx}"`);
       const label = u.booklets && u.booklets.length > 1 ? `state booklets: ${u.booklets.join('; ')}` : (u.name || u.code || '(untitled)');
       const fxName = u.pages.map((p) => fxPages.get(`${file.n}:${p}`)).find(Boolean);
@@ -273,7 +292,9 @@ function planPackage(input) {
         prev = null;
         continue;
       }
-      const wrongWhy = u.pages.map((p) => wrongPages.get(`${file.n}:${p}`)).find(Boolean);
+      // Wrong only if the document never names OUR number (another address
+      // mentioned in passing is not a wrong report).
+      const wrongWhy = u.pages.some((p) => goodPages.has(`${file.n}:${p}`)) ? null : u.pages.map((p) => wrongPages.get(`${file.n}:${p}`)).find(Boolean);
       if (wrongWhy) {
         out.leftOut.push({ what: `${file.name}, p${span(u.pages)} (${label})`, why: `wrong property: ${wrongWhy}; ask the listing side for the right one` });
         out.warnings.push(`${label} (${file.name} p${span(u.pages)}): ${wrongWhy}; left out, ask the listing side for the right one`);
@@ -355,8 +376,9 @@ function planPackage(input) {
   // Drop-ins.
   const d = input.dropIns || {};
   const hasListingMls = out.units.some((u) => u.kind === 'SFLS' && u.pages && u.pages.length > 1);
-  if (d.profile && !hasListingMls) out.units.push({ section: SECTION.FORMS, order: 0, kind: 'PROFILE', label: 'Property Profile (drop-in)', src: d.profile, seq: out.units.length });
-  else if (d.profile) out.leftOut.push({ what: 'our Property Profile', why: 'the listing side sent their own printout with the square footage disclosure (never two copies)' });
+  const hasListingProfile = hasListingMls || out.units.some((u) => u.kind === 'LISTING_PROFILE');
+  if (d.profile && !hasListingProfile) out.units.push({ section: SECTION.FORMS, order: 0, kind: 'PROFILE', label: 'Property Profile (drop-in)', src: d.profile, seq: out.units.length });
+  else if (d.profile) out.leftOut.push({ what: 'our Property Profile', why: 'the listing side sent their own property printout (never two copies)' });
   if (d.mls && !hasListingMls) out.units.push({ section: SECTION.FORMS, order: 0, kind: 'MLS', label: 'MLS CLIENT TO SIGN (drop-in)', src: d.mls, seq: out.units.length });
   else if (d.mls) out.leftOut.push({ what: 'our MLS CLIENT TO SIGN', why: 'the listing side sent their own MLS printout (never two copies)' });
   if (d.ourAvid) out.units.push({ section: SECTION.AVIDS, order: 1, kind: 'OUR_AVID', label: "Our agent's AVID (drop-in, blank is correct)", src: d.ourAvid, seq: out.units.length });
@@ -374,7 +396,7 @@ function planPackage(input) {
     if (u.section !== SECTION.FORMS) return 0;
     if (u.kind === 'NHD_STATEMENT') return 0;
     if (u.kind === 'FHDS') return 1;
-    if (u.kind === 'SFLS' || u.kind === 'PROFILE' || u.kind === 'MLS') return 2 + (u.kind === 'SFLS' ? 0 : u.kind === 'PROFILE' ? 0.1 : 0.2);
+    if (u.kind === 'SFLS' || u.kind === 'PROFILE' || u.kind === 'MLS' || u.kind === 'LISTING_PROFILE') return 2 + (u.kind === 'SFLS' ? 0 : u.kind === 'PROFILE' || u.kind === 'LISTING_PROFILE' ? 0.1 : 0.2);
     // The booklet acknowledgement closes the additional forms (her Stillwater order).
     if (u.kind === 'CIA' || /consumer information acknowledg/i.test(u.label || '')) return 4;
     return 3;

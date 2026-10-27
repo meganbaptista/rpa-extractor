@@ -133,7 +133,11 @@ function findWrongProperty(sources, address) {
     const other = bad[0].other;
     out.push({
       ...(s.n != null ? { n: s.n } : { key: s.key }),
-      ...(whole ? {} : { pages: bad.map((b) => b.num) }),
+      // `good`: pages that DO name our number. The planner judges each
+      // document: wrong only if none of its pages names us (3345 Rubio: a
+      // contamination site at "3200 Rubio Canyon Road" on page 68 of a report
+      // that names 3345 on 31 pages).
+      ...(whole ? {} : { pages: bad.map((b) => b.num), good: (s.texts || []).filter((t) => [...String(t.text || '').matchAll(rx)].some((x) => x[1] === num)).map((t) => t.num) }),
       why: `it is for ${other} ${m[2]}, not ${num} ${m[2]}`,
     });
   }

@@ -109,11 +109,18 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
 
   // Our brokerage's own file in the deal folder ("Equity Union DISC.pdf") beats
   // the template's pages: it is the buyer agent's firm by name.
-  const firmWord = String(buyerBrokerage || '').split(/\s+/)[0];
+  // The firm's first real word: "The Agency" -> "Agency" (3345 Rubio's
+  // "AGENCY AFFILIATE DISCLOSURE.pdf" was missed matching on "The").
+  const firmWord = String(buyerBrokerage || '').replace(/^\s*the\s+/i, '').split(/\s+/)[0];
   const firmFile = firmWord ? pdfs.find((f) => new RegExp(`^${firmWord.replace(/[^A-Za-z0-9]/g, '')}\\b.*\\b(disc|disclosures?)\\b`, 'i').test(f.name || '')) : null;
 
   // Template: our brokerage pages + missing standard forms.
   const signedWithOffer = pdfs.filter((f) => /\(need s\)/i.test(f.name || ''));
+  // The firm's own file counts with or without a template.
+  if (firmFile && !(template && template.forms && template.forms.length)) {
+    if (signedWithOffer.length) notes.push(`our brokerage's forms were signed with the offer (${signedWithOffer.map((f) => f.name).join(', ')}): not added again`);
+    else dropIns.ourBrokerage.push({ label: firmFile.name.replace(/(\.pdf)+$/i, ''), src: { type: 'drive', id: firmFile.id, name: firmFile.name }, pages: null });
+  }
   if (template && template.forms && template.forms.length) {
     const src = { type: 'drive', id: template.id, name: template.name };
     const forms = [...template.forms].sort((a, b) => a.pages[0] - b.pages[0]);
