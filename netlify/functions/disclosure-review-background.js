@@ -275,8 +275,11 @@ function fireBrushMandate(fields, propertyAddress) {
       section: 'SPQ 17G',
       emailHeading: 'Fire hazard and brush clearance (SPQ 17G)',
       seller_wrote: 'No',
-      why: 'The property is in a High Fire Hazard area, which typically carries annual brush clearance requirements, so a "No" here reads as inconsistent and a buyer would question it.',
-      ask: 'I noticed that you answered "No" to the property having annual brush clearance requirements. I show that the property is in a High Fire hazard zone, so typically this would require annual brush clearance. Do you want to revise this to be a Yes response?',
+      // A QUESTION, not a push to Yes (Megan, 2026-10-27, same as the buyer
+      // side: "in my experience orange county does not have annual brush
+      // clearance"). The seller confirms; "No" can be right.
+      why: 'The property is in a High Fire Hazard area, so a buyer may ask whether annual brush clearance is required.',
+      ask: 'The property is marked as a high fire hazard area, can you please confirm you are not required to complete annual brush clearance?',
       keyword: /brush clearance|high fire hazard/i,
       sectionRx: /17\s*g/i,
     };

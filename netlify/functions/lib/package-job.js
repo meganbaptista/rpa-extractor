@@ -20,8 +20,11 @@
 //           attached and the plan written out: order, attachments, FX files,
 //           what was left out and why, warnings. Nothing is saved to Drive and
 //           nothing is moved. She compares it with the package she builds.
-//   live    not built yet: Megan turns it on after the trial runs look right
-//           (it will file to the deal folder and fill the buyer draft).
+//   live    (Megan, 2026-10-27: "yes we should have that built asap") save the
+//           package + reports at the top of the deal folder and fill her Zap's
+//           buyer draft, with a red CHECK BEFORE SENDING box (lib/package-live.js).
+//           Never over an existing "Disclosures - ..." package; a build with a
+//           problem is not filled (alert + the trial draft instead).
 //
 // The step never fails the job: errors retry, and on the last try they become
 // an alert and the job is closed as usual.
@@ -34,6 +37,7 @@ const { parseCompliance } = require('./package-inputs');
 const C = require('./compliance-doc');
 const R = require('./buyer-revision');
 const { buildMime } = require('./mime');
+const L = require('./package-live');
 
 const MODE_KEY = 'meta/package-mode';
 const GMAIL_RAW_MAX = 24 * 1024 * 1024;
@@ -209,6 +213,55 @@ async function trialDraft(ctx, r) {
   return (created && created.id) || 'created';
 }
 
+/**
+ * LIVE: save to the deal folder, fill the buyer draft. Returns the outcome, or
+ * null when the trial draft should be made instead (Megan looks at it).
+ */
+async function deliverLive(ctx, r, effects, lastTry) {
+  const { store, job, drive, gmail } = ctx;
+  const save = () => J.putOut(store, job.id, 'package-effects', effects);
+  const address = job.address;
+  if (r.built.problems.length) {
+    await ctx.alert(`package-problem:${job.id}`, `${address}: the buyer package was NOT filled into the buyer email: ${r.built.problems.join('; ')}. A [PACKAGE TRIAL] draft shows what was built.`);
+    return null;
+  }
+  if (!r.deal || !r.deal.folder) {
+    await ctx.alert(`package-nofolder:${job.id}`, `${address}: no deal folder found, so the buyer package was not saved or filled. A [PACKAGE TRIAL] draft shows what was built.`);
+    return null;
+  }
+  // ALREADY BUILT BY HAND = hands off. Her own file can have any name (3345
+  // Rubio: "SELLER DISCLOSURES SS.pdf"), and a package email already sent
+  // means the buyer has it.
+  const existing = r.deal.files.find((f) => f.name === r.built.name || /^(disclosures\s*-|seller\s+disclosures)/i.test(String(f.name || '')));
+  if (existing) return `package: "${existing.name}" already in the deal folder, nothing changed (built by hand)`;
+  try {
+    const sent = await R.findSentPackage(gmail, address);
+    if (sent) return 'package: a "Seller Disclosure Package" email was already sent for this address, nothing changed';
+  } catch (err) { ctx.log(`sent-package check failed: ${err.message}`); }
+  if (!effects.saved) {
+    const res = await A.fileToDealFolder(drive, r.deal, r.built);
+    effects.saved = res.saved; await save();
+    ctx.log(`package saved to the deal folder: ${res.saved.join(', ')}`);
+  }
+  const payload = (await J.getOut(store, job.id, 'payload')) || {};
+  const included = ((r.drop && r.drop.dropIns && r.drop.dropIns.forms) || []).map((f) => String(f.code || '').toLowerCase());
+  const still = L.stillToComeFrom(payload, included);
+  try {
+    const d = await L.fillDraft({
+      gmail, street: R.streetOf(address), address, built: r.built, plan: r.plan, still,
+      warnings: r.drop.warnings.concat(r.plan.warnings, r.built.warnings), notes: r.drop.notes,
+      source: `"${job.source.subject}" (${job.source.fromName || job.source.from})`,
+    });
+    effects.liveDraft = d.draftId; await save();
+    await J.putOut(store, job.id, 'package-live', d);
+    return `package: buyer draft filled (${r.built.pkg.pages} pages, ${r.built.attachments.length} separate report(s))`;
+  } catch (err) {
+    if (err.code === 'no-draft' && !lastTry) throw err;     // her Zap may not have made it yet: retry
+    await ctx.alert(`package-fill:${job.id}`, `${address}: the buyer package is saved in the deal folder (${effects.saved.join(', ')}), but the buyer email was not filled: ${err.message}. Fill it by hand.`);
+    return `package: saved, buyer draft NOT filled (${err.message})`;
+  }
+}
+
 /** The step. */
 async function packageStep(ctx) {
   const { store, job } = ctx;
@@ -219,8 +272,14 @@ async function packageStep(ctx) {
     if (mode === 'off') return close('package: off');
     const effects = (await J.getOut(store, job.id, 'package-effects')) || {};
     if (effects.trialDraft) return close('package: trial draft already made');
+    if (effects.liveDraft) return close('package: buyer draft already filled');
     const r = await buildForJob(ctx, ctx.packageDeps || {});
     if (r.skip) { ctx.log(`package skipped: ${r.skip}`); return close(`package skipped: ${r.skip}`); }
+    if (mode === 'live') {
+      const out = await deliverLive(ctx, r, effects, lastTry);
+      if (out) return close(out);
+      // null = fall through to the trial draft (a problem, no deal folder).
+    }
     await J.putDoc(store, job.id, 'pkg', r.built.pkg.bytes);
     await J.putOut(store, job.id, 'package', {
       name: r.built.name, pages: r.built.pkg.pages, ranges: r.built.pkg.ranges,
@@ -241,4 +300,4 @@ async function packageStep(ctx) {
   }
 }
 
-module.exports = { packageStep, buildForJob, reportHtml, packageMode, MODE_KEY };
+module.exports = { packageStep, buildForJob, reportHtml, packageMode, deliverLive, MODE_KEY };

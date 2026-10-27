@@ -57,7 +57,7 @@ const RX = {
   bookletReceipt: /i found the booklet|acknowledg\w* of receipt|consumer information (?:booklets|acknowledg)|receipt for (?:links to )?booklets|6\s*of\s*6|booklet.*(?:receipt|signature)/i,
   eqDisclosure: /residential earthquake risk disclosure/i,
   prelim: /prelim(?:inary)?\b.*\b(?:title|report)|clta preliminary|\bptr\b/i,
-  wildfireReport: /wildfire (?:risk )?report|fire risk report/i,
+  wildfireReport: /wildfire (?:risk |disclosure )?report|fire risk report/i,
   homeInspection: /home inspection|property inspection report|pre-?listing inspection/i,
   report: /report|inspection|estimate|proposal|letter|permit|termite|wood destroying|work order|improvement|photo|remediation|mitigation|restoration|warranty|invoice\/order|association disclosure|hoa|certificate|clearance/i,
   listingBrokerage: /affiliated business|business arrangement disclosure|hold harmless|mold disclosure|local area disclosure|brokerage|realty|real estate|sotheby|compass|coldwell|keller|truline|carolwood|seven gables/i,
