@@ -457,17 +457,21 @@ function sellerReportName(name) {
   return `Seller Report - ${base.replace(/\b\w/g, (c) => c.toUpperCase())}`;
 }
 
-/** Plain words for the end section's documents (escrow / contract items). */
+/**
+ * The end section's documents, as formal titles (Megan, 3725 Ramboz,
+ * 2026-10-28: the conversational labels read "flippant to send a buyer").
+ */
 const OTHER_WORDS = [
-  [(u) => /^(AS|FIRPTA|QS)$/.test(u.code) || /non-?foreign|firpta/i.test(u.label), "the seller's non-foreign status affidavit"],
-  [(u) => u.code === 'SPT' || /supplemental.*property tax/i.test(u.label), 'the supplemental property tax notice'],
-  [(u) => u.code === 'BIE' || /investigation elections/i.test(u.label), 'your inspection elections'],
-  [(u) => u.code === 'BIW' || /investigation waiver/i.test(u.label), 'the inspection waiver'],
-  [(u) => u.code === 'RFR' || /receipt for reports/i.test(u.label), 'the receipt for reports'],
-  [(u) => u.code === 'SXA' || /seller.*exchange/i.test(u.label), "the seller's exchange addendum"],
-  [(u) => u.code === 'BUO' || /back.?up offer/i.test(u.label), 'the backup offer addendum'],
-  [(u) => u.code === 'CR' || /contingency removal/i.test(u.label), 'the contingency removal'],
+  [(u) => /^(AS|FIRPTA|QS)$/.test(u.code) || /non-?foreign|firpta/i.test(u.label), "Seller's Non-Foreign Status Affidavit"],
+  [(u) => u.code === 'SPT' || /supplemental.*property tax/i.test(u.label), 'Supplemental Property Tax Notice'],
+  [(u) => u.code === 'BIE' || /investigation elections/i.test(u.label), 'Buyer Inspection Elections'],
+  [(u) => u.code === 'BIW' || /investigation waiver/i.test(u.label), 'Buyer Inspection Waiver'],
+  [(u) => u.code === 'RFR' || /receipt for reports/i.test(u.label), 'Receipt for Reports'],
+  [(u) => u.code === 'SXA' || /seller.*exchange/i.test(u.label), "Seller's Exchange Addendum"],
+  [(u) => u.code === 'BUO' || /back.?up offer/i.test(u.label), 'Back-Up Offer Addendum'],
+  [(u) => u.code === 'CR' || /contingency removal/i.test(u.label), 'Contingency Removal'],
 ];
+const joinAnd = (words) => words.join(', ').replace(/, ([^,]*)$/, ' and $1');
 function otherLabel(units) {
   const words = [];
   let unknown = 0;
@@ -476,27 +480,33 @@ function otherLabel(units) {
     if (hit && !words.includes(hit[1])) words.push(hit[1]);
     else if (!hit) unknown++;
   }
-  if (unknown) words.push(unknown === 1 ? 'one more form for your signature' : 'a few more forms for your signature');
-  const s = words.join(', ').replace(/, ([^,]*)$/, ' and $1');
-  return s ? s[0].toUpperCase() + s.slice(1) : 'Forms for your signature';
+  if (unknown) words.push('Additional Forms for Your Signature');
+  return words.length ? joinAnd(words) : 'Forms for Your Signature';
 }
 
-/** The calm layout's three (or four) page ranges, labels in plain English. */
+/**
+ * The page ranges, labelled like a table of contents: formal titles, never
+ * conversational ("Documents from the seller and additional forms", "Standard
+ * advisories" read flippant to a buyer; Megan, 3725 Ramboz, 2026-10-28).
+ */
 function guideSections(units) {
   const groups = [
-    { secs: [SECTION.SELLER], label: "The seller's disclosures about the condition of the home" },
+    { secs: [SECTION.SELLER], label: 'Seller Disclosures' },
     { secs: [SECTION.REPORTS, SECTION.FORMS, SECTION.AVIDS], label: null },
     { secs: [SECTION.ADVISORIES, SECTION.OURS], label: null },
     { secs: [SECTION.OTHER], label: null },
   ];
   const has = (s) => units.some((u) => u.section === s);
-  groups[1].label = [has(SECTION.REPORTS) ? 'Documents from the seller' : '', has(SECTION.FORMS) ? 'additional forms' : '',
-    has(SECTION.AVIDS) ? (units.some((u) => u.kind === 'AVID') && units.some((u) => u.kind === 'OUR_AVID') ? 'the visual inspections by the listing agent and our agent'
-      : units.some((u) => u.kind === 'AVID') ? "the listing agent's visual inspection" : "our agent's visual inspection") : '']
-    .filter(Boolean).join(', ').replace(/, ([^,]*)$/, ' and $1').replace(/^a/, 'A');
-  groups[2].label = has(SECTION.OURS) ? (has(SECTION.ADVISORIES) ? "Standard advisories and our brokerage's forms" : "Our brokerage's forms") : 'Standard advisories';
+  const listingAvid = units.some((u) => u.kind === 'AVID');
+  const ourAvid = units.some((u) => u.kind === 'OUR_AVID');
+  groups[1].label = joinAnd([
+    has(SECTION.REPORTS) ? 'Seller-Provided Documents' : '',
+    has(SECTION.FORMS) ? 'Supplemental Disclosures' : '',
+    has(SECTION.AVIDS) ? (listingAvid && ourAvid ? 'Agent Visual Inspection Disclosures' : listingAvid ? "Listing Agent's Visual Inspection Disclosure" : "Buyer's Agent's Visual Inspection Disclosure") : '',
+  ].filter(Boolean));
+  groups[2].label = has(SECTION.OURS) ? (has(SECTION.ADVISORIES) ? 'California Advisories and Brokerage Disclosures' : 'Brokerage Disclosures') : 'California Advisories';
   // NEVER "Other documents" (Megan, 86 Dornoch, 2026-10-26: "absolutely not do
-  // we say that to a buyer"). Name what is there, in plain words.
+  // we say that to a buyer"). Name what is there.
   groups[3].label = otherLabel(units.filter((u) => u.section === SECTION.OTHER));
   return groups.filter((g) => g.secs.some(has)).map((g) => ({ sections: g.secs, label: g.label }));
 }

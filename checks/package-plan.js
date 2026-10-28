@@ -77,7 +77,7 @@ ok('Dornoch: and a warning says why', dn.warnings.filter((w) => /still open on y
 ok('Dornoch: DSDT out', dn.leftOut.some((l) => /DSDT/.test(l.why)), true);
 ok('Dornoch: a CONFIRMED signed contract doc is still filed FX', P.planPackage({ files: dorn.files, extras: [], dropIns: {}, flags: { fx: [{ n: 1, pages: [26], name: 'FX - AAA', signed: true }] } }).fx.length, 1);
 
-ok('Dornoch: the end section is named, never "Other documents"', dn.guide[dn.guide.length - 1].label, "The seller's non-foreign status affidavit and the supplemental property tax notice");
+ok('Dornoch: the end section is named, never "Other documents"', dn.guide[dn.guide.length - 1].label, "Seller's Non-Foreign Status Affidavit and Supplemental Property Tax Notice");
 ok('Dornoch: the BIW is always removed', `${dn.units.some((u) => /INVESTIGATION WAIVER/.test(u.label))}:${dn.leftOut.some((l) => /investigation waiver \(always removed\)/.test(l.why))}`, 'false:true');
 ok('Dornoch: the BIE is always removed', `${dn.units.some((u) => /INVESTIGATION ELECTIONS/.test(u.label))}:${dn.leftOut.some((l) => /investigation elections \(always removed\)/.test(l.why))}`, 'false:true');
 ok('no guide label says "other documents"', [dn, w, s].some((x) => x.guide.some((g) => /other documents/i.test(g.label))), false);
