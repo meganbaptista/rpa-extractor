@@ -17,6 +17,7 @@ const J = require('./intake-job');
 const rc = require('./revision-check');
 const R = require('./buyer-revision');
 const A = require('./package-assemble');
+const RL = require('./revision-local');
 const { buildRevisionEmail } = require('./buyer-email');
 const { buildMime } = require('./mime');
 
@@ -490,7 +491,34 @@ async function revdraft(ctx) {
     } catch (err) {
       blankNotes.push(`The blank-page check failed (${err.message}): open the revised PDF and look before sending.`);
     }
-    const inputs = rc.emailInputs(plan.verdicts, plan.attached);
+    // LOCAL AREA DISCLOSURES FROM OUR OWN PACKAGE when still open and the form
+    // asks the seller nothing (lib/revision-local.js; Megan 2026-10-26/27).
+    const localNotes = [];
+    let localAdded = [];
+    const lc = RL.localItems(rev.items);
+    if (live && address && lc.ours.length) {
+      try {
+        const got = await RL.fromOurPackage(address, {
+          drive: ctx.drive, findDealFolder: R.findDealFolder, pageTexts: ctx.core.pdfPageTexts, strips: ctx.strips,
+          pickPages: R.pickPages, render: ctx.core.renderPagesAsImages, pageCount: ctx.core.pdfPageCount,
+        });
+        if (got.bytes) {
+          const start = pdf.pages + 1;
+          const merged = await R.mergePdfs([pdf.bytes, got.bytes], { render: ctx.core.renderPagesAsImages, pageCount: ctx.core.pdfPageCount, names: ['revised pages', 'local area disclosures'] });
+          pdf = { ...pdf, bytes: merged.bytes, pages: merged.pages };
+          localAdded = lc.ours.map((v) => ({ ...v, status: 'fixed', n: null, mergedPage: start, buyerLine: RL.buyerLine(v.item), addedByUs: true }));
+          localNotes.push(`Added the local area disclosures ourselves from ${got.source} (the listing side has not sent them): pages ${start}-${pdf.pages}, check the address on page ${start}.`);
+        } else {
+          localNotes.push(`The local area disclosures are still open and ours could not be added: ${got.why}.`);
+        }
+      } catch (err) {
+        localNotes.push(`The local area disclosures are still open and ours could not be added: ${err.message}.`);
+      }
+    }
+    if (lc.theirs.length) localNotes.push(`${lc.theirs.map((v) => v.item).join(', ')}: the seller fills this one in, so it stays a request to the listing side.`);
+    effects.localAdded = localAdded.map((v) => v.item);
+    const verdicts = plan.verdicts.map((v) => localAdded.find((a) => a.item === v.item) || v);
+    const inputs = rc.emailInputs(verdicts, plan.attached);
     const greeting = pkg ? rc.greetingFrom(pkg.original) : '';
     const built = buildRevisionEmail({ greeting, ...inputs, totalPages: pdf.pages });
     const notes = [];
@@ -532,14 +560,14 @@ async function revdraft(ctx) {
         ? `${f.name} is a counter offer: not sent to the buyers, it is yours to handle.`
         : `${f.name} is a purchase-agreement document: not sent to the buyers${filed ? `; saved in the deal folder as "${filed}", tick it on the compliance list` : '; file it if it is fully signed'}.`);
     }
-    notes.push(...pageNotes);
+    notes.push(...pageNotes, ...localNotes);
     notes.push(...blankNotes);
     if (blankProblems.length) notes.push(`DO NOT SEND AS IS: ${blankProblems.join('; ')}.`);
     if (pdf.rebuilt.length) notes.push(`Damaged file(s) rebuilt as page images so they could be attached: ${pdf.rebuilt.join(', ')}. Check they read clearly.`);
     if (!address) notes.push('The property address could not be read from the revised forms.');
     else if (!pkg) notes.push(`No sent "Seller Disclosure Package" email was found for ${address}, so this is not in the buyer thread and has no recipients.`);
     if (built.warnings.length) notes.push(`The buyer email was not written: ${built.warnings.join('; ')}.`);
-    const note = rc.checkNoteHtml({ verdicts: plan.verdicts.concat(rev.items.filter((v) => contractNs.has(v.n))), correctionsDate: job.revision.correctionsDate, extra: notes, banner });
+    const note = rc.checkNoteHtml({ verdicts: verdicts.concat(rev.items.filter((v) => contractNs.has(v.n))), correctionsDate: job.revision.correctionsDate, extra: notes, banner });
     const html = ctx.signature.withSignature(note + (built.html || ''), await ctx.signature.liveSignature(gmail));
     // Named like her deal folder: the address read from the forms can drop
     // the "St" (20701 Schoolcraft, 2026-10-26).
@@ -571,7 +599,7 @@ async function revdraft(ctx) {
   // their thread to the people her corrections email went to. Its own effect
   // key, so a re-run that already made the buyer draft makes only this.
   if (!effects.followUp) {
-    const open = rev.items.filter((v) => v.status === 'open').map((v) => v.item);
+    const open = rev.items.filter((v) => v.status === 'open' && !(effects.localAdded || []).includes(v.item)).map((v) => v.item);
     if (!open.length) {
       effects.followUp = 'nothing open';
     } else {
