@@ -50,7 +50,7 @@ const ADVISORY_CODES = new Set(['MCA', 'SBSA', 'WFDA', 'BHAA', 'DIA', 'FHDA', 'W
 const CONTRACT_CODES = new Set(['RFR', 'BIE', 'BIW', 'SPT', 'BUO', 'SXA', 'FIRPTA', 'QS', 'AS', 'CR', 'NBP', 'ADM']);
 
 const RX = {
-  nhdStatement: /natural hazard disclosure statement/i,
+  nhdStatement: /natural hazard disclosure (?:\(\W*nhd\W*\) )?statement/i,
   nhdInvoice: /\binvoice\b/i,
   homeWarranty: /home\s*warranty/i,
   booklet: /\b[1-4]\s*(?:_|-|\s)?of\s*(?:_|-|\s)?6\b|residential environmental hazards|protect your family from\b|home energy rating|homeowner'?s guide\b/i,
@@ -59,7 +59,7 @@ const RX = {
   prelim: /prelim(?:inary)?\b.*\b(?:title|report)|clta preliminary|\bptr\b/i,
   wildfireReport: /wildfire (?:risk |disclosure )?report|fire risk report/i,
   homeInspection: /home inspection|property inspection report|pre-?listing inspection/i,
-  report: /report|inspection|estimate|proposal|letter|permit|termite|wood destroying|work order|improvement|photo|remediation|mitigation|restoration|warranty|invoice\/order|association disclosure|hoa|certificate|clearance/i,
+  report: /\binvoice\b|change\s+order|audit\s+trail|report|inspection|estimate|proposal|letter|permit|termite|wood destroying|work order|improvement|photo|remediation|mitigation|restoration|warranty|invoice\/order|association disclosure|hoa|certificate|clearance/i,
   listingBrokerage: /affiliated business|business arrangement disclosure|hold harmless|mold disclosure|local area disclosure|brokerage|realty|real estate|sotheby|compass|coldwell|keller|truline|carolwood|seven gables/i,
   mlsOrProfile: /property details|property profile|\bmls\b|listing (?:report|detail)|vendor enhanced/i,
 };
@@ -97,9 +97,17 @@ function classify(unit) {
   // Only a signature check can say they are fully executed: kept, and flagged.
   if (code === 'FHDA' || code === 'WFA') return { section: SECTION.ADVISORIES, order: 1, kind: code, warn: `${code} is a purchase-agreement document: if it came back fully signed, file it as "FX - ${code}" and take it out of the package` };
   if (ADVISORY_CODES.has(code)) return { section: SECTION.ADVISORIES, order: 1, kind: code };
+  // A brokerage's own square footage form ("SQUARE FOOTAGE, LOT SIZE AND
+  // BEDROOM/BATH COUNT ADVISORY AND DISCLOSURE", 26012 Lucerne) is the SFLS.
+  if (!code && /square\s+footage/i.test(name)) return { section: SECTION.FORMS, kind: 'SFLS' };
   if (RX.mlsOrProfile.test(name)) return { kind: 'MLS_PROFILE' };   // follows the SFLS it backs up
   if (!code && RX.listingBrokerage.test(name) && !RX.report.test(name)) return { section: SECTION.ADVISORIES, order: 0, kind: 'LISTING_BROKERAGE' };
   if (!code && RX.report.test(name)) return { section: SECTION.REPORTS, kind: 'REPORT' };
+  // A form with no C.A.R. code still says what it is (26012 Lucerne): an
+  // "... Advisory" goes with the advisories, a "... Disclosure (Notice)" with
+  // the additional forms, never the seller's documents.
+  if (!code && /\badvisory\b/i.test(name)) return { section: SECTION.ADVISORIES, order: 1, kind: 'ADVISORY' };
+  if (!code && (/\bdisclosures?(?:\s+(?:notice|statement))?\s*$/i.test(name.trim()) || /\bdisclosure\s+notice\b/i.test(name))) return { section: SECTION.FORMS, kind: 'FORM' };
   if (code) return { section: SECTION.ADVISORIES, order: 1, kind: code, warn: `C.A.R. form ${code} placed with the advisories: check the spot` };
   return { section: SECTION.REPORTS, kind: 'UNKNOWN', warn: true };
 }
@@ -116,7 +124,11 @@ function classifyFile(file) {
   if (RX.wildfireReport.test(name)) return { attach: 'Wildfire Report' };
   // By its first page's title too: "3345RubioC_PIDReport_4197582.pdf" opens
   // with "Residential NHD Report with Environmental Hazards & Forms".
-  if ((/\bnhd\b|natural hazard/i.test(name) || /\bnhd\b.*report|natural hazard.*report/i.test(first)) && file.pages > 5) return { attach: 'Natural Hazard Disclosure Report', nhdReport: true };
+  // ...and by the vendor (26012 Lucerne, 2026-10-28: "..._FANHD.pdf", First
+  // American, whose first page is "Residential Resale Disclosure").
+  const NHD_VENDOR = /\bnhd\b|natural hazard|fanhd|mynhd|snapnhd|disclosure\s*source|\bjcp\b|property\s*id/i;
+  const NHD_FIRST = /\bnhd\b.*report|natural hazard.*report|residential resale disclosure|property disclosure summary/i;
+  if ((NHD_VENDOR.test(name) || NHD_FIRST.test(first)) && file.pages > 5) return { attach: 'Natural Hazard Disclosure Report', nhdReport: true };
   if (RX.booklet.test(name) && file.pages > 3) return { leave: 'state booklet (never in; the email links the booklets)' };
   return null;
 }

@@ -83,9 +83,14 @@ async function buildForJob(ctx, deps = {}) {
   // Compliance Doc.
   let inputs = { brokerage: '', wantedCodes: null, contractItems: [] };
   try {
-    // A duplex reads "4180 - 4182 ..."; her sheet row uses the first number.
-    const url = (await C.findComplianceDocUrl(address))
-      || (address !== address.replace(/^(\d+)\s*[-–&]\s*\d+\s+/, '$1 ') ? await C.findComplianceDocUrl(address.replace(/^(\d+)\s*[-–&]\s*\d+\s+/, '$1 ')) : '');
+    // The address as her sheet row may write it: a duplex "4180 - 4182 ..."
+    // uses the first number; "Valencia (Santa Clarita)" (26012 Lucerne) may be
+    // either city.
+    const variants = [address, address.replace(/^(\d+)\s*[-–&]\s*\d+\s+/, '$1 ')];
+    const paren = address.match(/,\s*([^,(]+?)\s*\(([^)]+)\)\s*,/);
+    if (paren) variants.push(address.replace(paren[0], `, ${paren[1]},`), address.replace(paren[0], `, ${paren[2]},`));
+    let url = '';
+    for (const v of [...new Set(variants)]) { url = await C.findComplianceDocUrl(v); if (url) break; }
     const doc = url ? await C.fetchDocText(url) : null;
     if (doc && doc.text) inputs = parseCompliance(doc.text);
   } catch (err) { ctx.log(`compliance Doc not read: ${err.message}`); }
