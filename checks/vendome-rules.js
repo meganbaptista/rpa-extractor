@@ -52,5 +52,18 @@ ok('all ten lease documents are set aside as lease paperwork', leases.length, 10
 ok('a real prior sale (TDS and its WHSD, 2016) is still a prior sale', prior.map((f) => f.code).join(','), 'TDS,WHSD');
 ok('a Tenant Occupied Property Addendum is never lease paperwork (it is a sale form)', I.isLeaseDocument({ code: 'TOPA', name: 'Tenant Occupied Property Addendum' }), false);
 
+// 3. INLINE PDFs ARE ATTACHMENTS (370 Electric, 2026-10-29: 17 PDFs marked
+//    inline by the sender's mail program read as "0 attachment(s)").
+const G = require('../netlify/functions/lib/gmail.js');
+const part = (filename, mimeType, disp) => ({ filename, mimeType, body: { attachmentId: `a-${filename}`, size: 10 }, headers: [{ name: 'Content-Disposition', value: `${disp}; filename="${filename}"` }] });
+const rosi = { mimeType: 'multipart/mixed', parts: [
+  { mimeType: 'text/html', body: { size: 100 }, headers: [] },
+  part('image001.png', 'image/png', 'inline'),
+  part('Real Estate Transfer Disclosure Statement.pdf', 'application/pdf', 'inline'),
+  part('Seller Property Questionnaire.pdf', 'application/pdf', 'inline'),
+  part('MASTER ABA 630.pdf', 'application/pdf', 'attachment'),
+] };
+ok('inline PDFs count, the inline signature logo does not', G.collectAttachments(rosi).map((a) => a.filename).join(' | '), 'Real Estate Transfer Disclosure Statement.pdf | Seller Property Questionnaire.pdf | MASTER ABA 630.pdf');
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall vendome-rules checks pass');
 process.exit(failed ? 1 : 0);

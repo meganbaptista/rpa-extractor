@@ -236,7 +236,11 @@ function collectAttachments(payload, acc = []) {
   const body = payload.body || {};
   const filename = payload.filename || '';
   const disp = ((payload.headers || []).find((h) => h.name && h.name.toLowerCase() === 'content-disposition') || {}).value || '';
-  const isInline = /inline/i.test(disp);
+  // "Inline" only skips IMAGES (signature logos). Outlook marks real PDF
+  // attachments inline too: 370 Electric (2026-10-29) arrived with 17 PDFs, all
+  // inline, which read as "0 attachment(s)", so the revisions never ran.
+  const isImage = /^image\//i.test(payload.mimeType || '') || /\.(png|jpe?g|gif|bmp|webp|heic|tiff?)$/i.test(filename);
+  const isInline = /inline/i.test(disp) && isImage;
   if (filename && body.attachmentId && !isInline) {
     // attachmentId kept so lib/inspection-filer.js can download the bytes.
     acc.push({ filename, mimeType: payload.mimeType || '', size: body.size || 0, attachmentId: body.attachmentId });
@@ -609,6 +613,7 @@ async function createDraftRaw(rawMime, { threadId = '' } = {}) {
 }
 
 module.exports = {
+  collectAttachments,
   createDraftRaw,
   getThreadMessages,
   // auth / low-level
