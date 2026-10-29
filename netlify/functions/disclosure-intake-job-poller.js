@@ -89,6 +89,14 @@ async function poll(store, mode) {
 
   const listed = await gmail.listMessages({ labelIds: [labelId], maxPages: 1, pageSize: 50 });
   let started = 0;
+  // ONE AUDIT PER CONVERSATION: a conversation already being audited, or one
+  // this pass has started (newest email with files first), is not started
+  // again for its other labelled emails. Its finish unlabels the whole thread.
+  const busyThreads = new Set();
+  for (const aid of await J.activeJobIds(store).catch(() => [])) {
+    const cur = await J.readJob(store, aid).catch(() => null);
+    if (cur && cur.job.status === 'running' && cur.job.source && cur.job.source.threadId) busyThreads.add(cur.job.source.threadId);
+  }
   // What this pass saw and why each message was or was not started, kept at
   // meta/last-poll for checks/intake-job-status.js. A skipped email is
   // explained, never silent.
@@ -100,6 +108,7 @@ async function poll(store, mode) {
     if (!jobId) { note(id, '', 'already has a job'); continue; }
     const msg = await gmail.getMessage(id);
     const subj = (msg.headers && msg.headers.subject) || '';
+    if (busyThreads.has(msg.threadId)) { note(id, subj, 'its conversation is already being audited'); continue; }
     if (Number(msg.internalDate || 0) < cutoff) { note(id, subj, 'received before the cut-off'); continue; }
     const from = (msg.headers && msg.headers.from) || '';
     if (me && from.toLowerCase().includes(me)) { note(id, subj, 'sent by us'); continue; }
@@ -123,6 +132,7 @@ async function poll(store, mode) {
       },
     });
     if (!(await J.createJob(store, job, rt.verifyMs()))) { note(id, subj, 'job creation lost a race or did not save'); continue; }
+    busyThreads.add(msg.threadId);
     note(id, subj, `started ${jobId}`);
     console.log(`[intake-poller] new ${mode} job ${jobId}: "${job.source.subject}" from ${from}`);
     await rt.kick(jobId).catch((err) => console.warn(`[intake-poller] kick ${jobId} failed (the next pass will retry): ${err.message}`));

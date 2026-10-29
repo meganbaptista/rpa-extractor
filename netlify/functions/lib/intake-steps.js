@@ -672,9 +672,21 @@ async function revdraft(ctx) {
   return finished;
 }
 
+/*
+  THE LABEL COMES OFF THE WHOLE CONVERSATION (Megan, 2026-10-29: "I add the
+  label on what I need, you do your work, and then unlabel it. if its unlabeled
+  then a new email in that thread shouldnt get accidentally audited"). Labelling
+  a conversation in Gmail labels every email in it; taking it off only the one
+  audited left the rest labelled (1826 W. 78th had four), each a later audit
+  waiting to happen.
+*/
 async function removeLabel(ctx) {
   const { job, gmail } = ctx;
   if (!job.source.labelId || !gmail) return;
+  if (job.source.threadId && gmail.modifyThread) {
+    try { await gmail.modifyThread(job.source.threadId, { remove: [job.source.labelId] }); return; }
+    catch (err) { ctx.log && ctx.log(`could not unlabel the conversation (${err.message}); unlabelling the email`); }
+  }
   await gmail.modifyMessage(job.source.messageId, { remove: [job.source.labelId] });
 }
 

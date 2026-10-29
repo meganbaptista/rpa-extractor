@@ -367,6 +367,16 @@ async function modifyMessage(id, { add = [], remove = [] } = {}) {
   });
 }
 
+// Add/remove labels on EVERY message in a conversation (the intake's "done":
+// Megan labels a conversation, the audit runs once, the whole conversation is
+// unlabelled, so a later email in it is never audited by accident).
+async function modifyThread(threadId, { add = [], remove = [] } = {}) {
+  return apiPost(`/threads/${encodeURIComponent(threadId)}/modify`, {
+    addLabelIds: add,
+    removeLabelIds: remove,
+  });
+}
+
 // Mark read = remove the system UNREAD label.
 async function markRead(id) {
   return modifyMessage(id, { remove: ['UNREAD'] });
@@ -614,6 +624,7 @@ async function createDraftRaw(rawMime, { threadId = '' } = {}) {
 
 module.exports = {
   collectAttachments,
+  modifyThread,
   createDraftRaw,
   getThreadMessages,
   // auth / low-level
