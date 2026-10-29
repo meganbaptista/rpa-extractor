@@ -352,7 +352,7 @@ Be calibrated: most answers are fine. Only call something "material" if a carefu
 ANSWERS THAT DO NOT MATCH: when a finding is that one answer contradicts another or the seller's own explanation (an explanation describes an event, but the box for it is No), the "ask" and the email MUST say plainly which answers should change and to what, naming EACH one with its locator, as well as asking for any details. Example (14951 Camarosa): the seller explained that insurance paid for smoke remediation after the Palisades fire, but TDS C9 was No. Write: "Since insurance paid for smoke remediation after the fire, TDS C9 and SPQ 6H and 9A should be answered Yes to match. Could you update those, and share a few details (roughly when it was done, what work was performed, and whether it is fully complete)?" Never only "make sure the fire-damage question lines up": name the answers and say Yes or No. Only name answers that really should change; if one is already right, leave it out.
 
 Then write a SHORT, friendly clarification email to the seller that includes ONLY the material items, grouped by topic. Plain and warm, and easy to digest for a seller who may be 60+ (Megan, 2026-10-29: "this email is very wordy can we come up with something easier to digest?").
-SHAPE: after the greeting, ONE short opening line, e.g. "Thanks for getting your disclosures together! Just one quick update before we send everything out:" (or "a few quick updates" when there is more than one topic). Then each topic: its heading, then ONE or TWO plain sentences saying exactly what to change or add. When several questions need the same change, list their numbers grouped by form on bullet lines ("\u2022 SPQ 6G, 14A and 14F" then "\u2022 TDS C12 and C14"). NEVER quote or paraphrase a question's own wording in parentheses; the seller finds each question by its number. No closing filler ("That is all I needed", "Just let me know and we will get these finalized"): after the last topic, go straight to "Thanks!".
+SHAPE (Megan's own template, 2026-10-29, the Beverlywood email she revised and sent): after the greeting, this opening line EXACTLY: "Thanks for getting your disclosures together. I had just one thing I wanted to confirm with you before we send everything out, and it is an easy one." (with more than one topic: "Thanks for getting your disclosures together. I had just a few things I wanted to confirm with you before we send everything out, and they are easy ones."). Then each topic: its heading, then ONE or TWO plain sentences saying exactly what to change or add. When several questions need the same change, list their numbers grouped by form on bullet lines ("\u2022 SPQ 6G, 14A and 14F" then "\u2022 TDS C12 and C14"). NEVER quote or paraphrase a question's own wording in parentheses; the seller finds each question by its number. After the last topic, this closing line EXACTLY: "That is all I needed. Just let me know and we will get these finalized." and then "Thanks!".
 GREETING: open with a greeting on its own line addressed to the sellers by FIRST name only, e.g. "Hi Chase and Kelly,". Use only the first names of the people listed under SELLERS below (join two with "and", three or more with commas and a final "and"). If a seller is a trust, estate, or other entity, use its short name or just "Hi there,". NEVER address the email to an agent, a team, the brokerage, or a property address.
 SECTION REFERENCES: for each topic in the email, put its locator in parentheses right after the topic heading, e.g. "Drainage (TDS C8):", so the seller and the listing team can find the exact question. Exception: a MANDATORY ITEM keeps its given heading exactly; its question numbers are already in its bullet lines. Use the same form-from-code mapping described under LOCATOR. If a finding has no locator, omit the parentheses for that one.
 LINE BREAKS: do NOT hard-wrap text. Write each paragraph (the greeting, the intro, each topic's question, the closing) as ONE continuous line with no line breaks inside it — let the email client wrap it. Use a single newline only between a topic heading and its question, between the bullet lines of a list ("\u2022 ..."), and after the last bullet line; a blank line (two newlines) only to separate blocks. Never break a sentence across lines.
@@ -426,16 +426,39 @@ function escapeHtml(s) {
 // they stay unbolded.
 function renderEmailHtml(bodyText) {
   const body = String(bodyText || '').trim();
+  const P = (html) => `<p style="margin:0 0 1em 0">${html}</p>`;
+  const isBullet = (l) => /^\s*[\u2022\-*]\s+/.test(l);
+  // A topic block, as Megan lays it out (2026-10-29): the heading inline, bold
+  // italic, with its sentence on the same line; bullet lines as a real list;
+  // anything after the list (the suggested explanation) as its own paragraph.
+  const topic = (lines) => {
+    const out = [];
+    let i = 0;
+    if (lines.length > 1 && /:\s*$/.test(lines[0]) && !isBullet(lines[1])) {
+      out.push(P(`<strong><em>${escapeHtml(lines[0])}</em></strong> ${escapeHtml(lines[1])}`));
+      i = 2;
+    } else if (lines.length > 1 && /:\s*$/.test(lines[0])) {
+      out.push(P(`<strong><em>${escapeHtml(lines[0])}</em></strong>`));
+      i = 1;
+    }
+    let para = [];
+    const flush = () => { if (para.length) { out.push(P(para.map(escapeHtml).join('<br>'))); para = []; } };
+    for (; i < lines.length; i++) {
+      if (isBullet(lines[i])) {
+        flush();
+        const items = [];
+        while (i < lines.length && isBullet(lines[i])) { items.push(`<li>${escapeHtml(lines[i].replace(/^\s*[\u2022\-*]\s+/, ''))}</li>`); i++; }
+        i--;
+        out.push(`<ul style="margin:0 0 1em 0">${items.join('')}</ul>`);
+      } else para.push(lines[i]);
+    }
+    flush();
+    return out.join('\n');
+  };
   const blocks = body
     ? body
         .split(/\n{2,}/)
-        .map((block) => {
-          const lines = block.split('\n').map((line) => escapeHtml(line));
-          if (lines.length > 1 && /:\s*$/.test(lines[0])) {
-            lines[0] = `<strong>${lines[0]}</strong>`;
-          }
-          return `<p style="margin:0 0 1em 0">${lines.join('<br>')}</p>`;
-        })
+        .map((block) => topic(block.split('\n')))
         .join('\n')
     : '';
   // 13px Arial == Gmail's "Normal" size, so the body matches a hand-typed
@@ -611,6 +634,7 @@ exports.handler = async function (event) {
 
 // Exposed for unit tests (not used by the handler).
 module.exports._internal = {
+  renderEmailHtml,
   sellerAnswerMandates,
   normYesNo,
   fireHazardField,

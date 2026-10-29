@@ -86,8 +86,10 @@ ok('HOA property with 14D No -> asked to be Yes', rules(run({ ...condo, c2: 'Yes
 {
   const m = run({ ...condo, c2: 'Yes', c2x: 'Walls', '15d': 'Yes', '15dx': 'Walls', '14d': 'No', '14dx': '', c12: 'No', c12x: '' }).find((x) => x.rule === 'hoaConsistency');
   ok('HOA ask: one sentence, numbers grouped by form on bullet lines, the suggested explanation',
-    m.ask, 'Since the property is part of an HOA, please change these to "Yes":\n\u2022 SPQ 14D\n\u2022 TDS C12\nFor the explanation you can write: "Buyer to review HOA documents in escrow."');
+    m.ask, 'Since the property is part of an HOA, I would recommend we change these to "Yes":\n\u2022 SPQ 14D\n\u2022 TDS C12\nFor the explanation you can write: "Buyer to review HOA documents in escrow."');
   ok('HOA heading carries no question numbers (they are in the bullets)', m.emailHeading, 'HOA questions');
+  const named = run({ ...condo, c2: 'Yes', c2x: 'Walls', '15d': 'Yes', '15dx': 'Walls', '14d': 'No', '14dx': '', '14bx': 'Beverlywood HOA' }).find((x) => x.rule === 'hoaConsistency');
+  ok('the HOA by name when the seller wrote it', /part of Beverlywood HOA, I would recommend/.test(named.ask), true);
 }
 ok('14E (dues increases, assessments) can be No in an HOA', rules(run({ ...condo, c2: 'Yes', c2x: 'Walls', '15d': 'Yes', '15dx': 'Walls', '14e': 'No' })), []);
 ok('no HOA anywhere -> HOA items left alone', rules(run({ hoa: 'No', c12: 'No', c13: 'No' }, '1 Main St, LA')), []);

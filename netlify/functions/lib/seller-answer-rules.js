@@ -168,6 +168,13 @@ function hoaConsistency(qs, fields) {
   const no = items.filter((x) => x.q.answer === 'no');
   if (!no.length) return null;
   const list = no.map((x) => locator(x.code));
+  // The HOA BY NAME, as Megan writes it ("part of Beverlywood HOA"): a name
+  // field on the file, else what the seller wrote for an HOA question, when it
+  // reads like a name (short, says HOA or Association). Otherwise "an HOA".
+  const nameField = (fields || []).find((f) => /\b(?:hoa|association)\b[^?]*\bname\b|name of (?:the )?(?:hoa|association)/i.test(f.label || '') && String(f.value || '').trim());
+  const written = items.filter((x) => x.q.answer === 'yes').flatMap((x) => x.q.explains.map((e) => String(e.value || '').trim()))
+    .find((v) => v && v.length <= 60 && /\b(?:hoa|association)\b/i.test(v) && !/^hoa\.?$/i.test(v));
+  const hoaName = String((nameField && nameField.value) || written || '').replace(/[.\s]+$/, '').trim();
   return {
     rule: 'hoaConsistency',
     topic: 'HOA questions',
@@ -176,7 +183,8 @@ function hoaConsistency(qs, fields) {
     emailHeading: 'HOA questions',
     seller_wrote: 'No',
     why: `The property is in an HOA (${signals[0]}), so these HOA questions should be "Yes"; a "No" contradicts the rest of the disclosures.`,
-    ask: `Since the property is part of an HOA, please change ${no.length === 1 ? 'this' : 'these'} to "Yes":\n${codeBullets(no.map((x) => x.code))}\nFor the explanation you can write: "Buyer to review HOA documents in escrow."`,
+    // Her own wording (2026-10-29, the Beverlywood email she revised and sent).
+    ask: `Since the property is part of ${hoaName || 'an HOA'}, I would recommend we change ${no.length === 1 ? 'this' : 'these'} to "Yes":\n${codeBullets(no.map((x) => x.code))}\nFor the explanation you can write: "Buyer to review HOA documents in escrow."`,
     keyword: /HOA questions|part of an HOA/i,
   };
 }
