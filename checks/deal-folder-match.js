@@ -35,5 +35,21 @@ const drive = {
 
   const none = await findDealFolder(drive, '2073 Deer Ln, Yucca Valley, CA');
   assert.equal(none.folder, null, 'a different street type is a different street');
+
+  // Two same-named folders: the one in 00 ESCROW is the deal.
+  const PARENTS = { pEsc: '00 ESCROW', pCan: '00 CANCELLED' };
+  const twin = {
+    async findFoldersNameContains() {
+      return [
+        { id: 'old', name: '2073 Deer Trl, Yucca Valley, CA 92284', parents: ['pCan'] },
+        { id: 'live', name: '2073 Deer Trl, Yucca Valley, CA 92284', parents: ['pEsc'] },
+      ];
+    },
+    async listChildren() { return []; },
+    async getFileMeta(id) { return { name: PARENTS[id] }; },
+  };
+  const picked = await findDealFolder(twin, '2073 Deer Trl, Yucca Valley, CA 92284');
+  assert.equal(picked.folder && picked.folder.id, 'live', 'the 00 ESCROW copy is the deal');
+  assert.equal(picked.seen[0].parent, '00 CANCELLED', 'what was seen names its parent for the alert');
   console.log('deal-folder-match: ok');
 })().catch((e) => { console.error(e); process.exit(1); });

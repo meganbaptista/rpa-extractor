@@ -231,7 +231,10 @@ async function deliverLive(ctx, r, effects, lastTry) {
     return null;
   }
   if (!r.deal || !r.deal.folder) {
-    await ctx.alert(`package-nofolder:${job.id}`, `${address}: no deal folder found, so the buyer package was not saved or filled. A [PACKAGE TRIAL] draft shows what was built.`);
+    // Which folders it looked at, so a duplicate shows in the alert itself.
+    const seen = ((r.deal && r.deal.seen) || []).map((x) => `"${x.folder}"${x.parent ? ` in ${x.parent}` : ''}`);
+    const why = seen.length > 1 ? ` It found ${seen.length} folders with that name and could not tell which is the deal: ${seen.join('; ')}.` : seen.length ? '' : ' No folder with that name was found.';
+    await ctx.alert(`package-nofolder:${job.id}`, `${address}: no deal folder found, so the buyer package was not saved or filled.${why} A [PACKAGE TRIAL] draft shows what was built.`);
     return null;
   }
   // ALREADY BUILT BY HAND = hands off. Her own file can have any name (3345

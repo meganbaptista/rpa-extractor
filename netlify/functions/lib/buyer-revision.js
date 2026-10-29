@@ -72,6 +72,22 @@ async function findDealFolder(drive, address) {
   if (folders.length === 1) {
     return { folder: folders[0], files: await drive.listChildren(folders[0].id, { excludeFolders: true }), seen };
   }
+  /*
+    SEVERAL SAME-NAMED FOLDERS (2073 Deer Trl, 2026-10-29: the package was
+    neither saved nor filled though the folder sat in 00 ESCROW). The live
+    deal is the one under an agent's 00 ESCROW or 00 ACTIVE; a copy in
+    CANCELLED, CLOSED or anywhere else is not it. Exactly one live copy wins.
+  */
+  if (folders.length > 1 && drive.getFileMeta) {
+    const parentOf = async (f) => {
+      const id = (f.parents || [])[0];
+      return id ? String((await drive.getFileMeta(id, 'name').catch(() => ({}))).name || '') : '';
+    };
+    const parents = await Promise.all(folders.map(parentOf));
+    folders.forEach((f, i) => { if (seen[i]) seen[i].parent = parents[i]; });
+    const live = folders.filter((f, i) => /^00\s*(escrow|active)$/i.test(parents[i].trim()));
+    if (live.length === 1) return { folder: live[0], files: await drive.listChildren(live[0].id, { excludeFolders: true }), seen };
+  }
   return { folder: null, files: [], seen };
 }
 
