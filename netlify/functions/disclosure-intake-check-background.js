@@ -4862,6 +4862,8 @@ module.exports.core = {
   loadDocuments, planBatches, identifyForms, reviewAnswers, combineIdentifyReview,
   mergeBatchResults, reconcileAndCallback, sendCallback, pdfPageCount, mergeForms, renderPagesAsImages,
   pdfPageTexts, normalizeAddress, blobsConfig, STATE_STORE, CALLBACK_URL_ENV, EMPTY_KEY_ANSWERS,
+  // For Google Drive folder links (lib/drive-share.js): the same limits and name rules as a zip.
+  isBlockedName, MAX_DOC_BYTES, MAX_UNZIP_TOTAL_BYTES,
 };
 
 exports.handler = async function (event) {

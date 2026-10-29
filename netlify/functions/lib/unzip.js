@@ -445,6 +445,7 @@ module.exports = {
   hasCentralDirectory,
   inExcludedFolder,
   inPriorTransactionFolder,
+  RESCUE_NAME,
   ZIP_MAGIC,
   PDF_MAGIC,
   looksZip,

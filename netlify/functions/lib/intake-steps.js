@@ -21,23 +21,27 @@ const RL = require('./revision-local');
 const { buildRevisionEmail } = require('./buyer-email');
 const { buildMime } = require('./mime');
 
-const SHARE_LINK = /https?:\/\/(?:www\.)?(?:dropbox\.com\/(?:scl\/fo|scl\/fi|sh|s)\/[^\s"'<>)]+|drive\.google\.com\/(?:file\/d\/[A-Za-z0-9_-]+|open\?id=[A-Za-z0-9_-]+|uc\?[^\s"'<>)]*id=[A-Za-z0-9_-]+)[^\s"'<>)]*)/gi;
+const SHARE_LINK = /https?:\/\/(?:www\.)?(?:dropbox\.com\/(?:scl\/fo|scl\/fi|sh|s)\/[^\s"'<>)]+|drive\.google\.com\/(?:file\/d\/[A-Za-z0-9_-]+|open\?id=[A-Za-z0-9_-]+|uc\?[^\s"'<>)]*id=[A-Za-z0-9_-]+|drive\/(?:u\/\d+\/)?folders\/[A-Za-z0-9_-]+)[^\s"'<>)]*|docs\.google\.com\/document\/d\/[A-Za-z0-9_-]+[^\s"'<>)]*)/gi;
+const DS = require('./drive-share');
 
 /**
- * Share links in an email body: Dropbox files/folders, Google Drive FILES.
+ * Share links in an email body: Dropbox files/folders, Google Drive files AND
+ * FOLDERS (2026-10-29, 135 S Vendome: a Drive folder link was not read at all).
  * The HTML body first, because Gmail hard-wraps the plain body and splits a
  * 140-character Dropbox URL across lines (see disclosure-intake-share-links).
- * A Drive file link becomes its direct-download form. Drive FOLDERS and
- * WeTransfer cannot be fetched server-side, so they are not matched here and
- * the email reads as "nothing reviewable", which is alerted.
+ * A Drive link carries `drive` ({ kind, id, resourceKey }): the load step opens
+ * it as Megan's Google account (lib/drive-share.js), and keeps the public
+ * direct-download URL only as the fallback for a file. WeTransfer still cannot
+ * be fetched.
  */
 function shareLinks(html = '', text = '') {
   const found = new Map();
   const add = (raw) => {
     const url = raw.replace(/&amp;/g, '&').replace(/[.,;]+$/, '');
-    const id = (url.match(/\/file\/d\/([A-Za-z0-9_-]+)/) || url.match(/[?&]id=([A-Za-z0-9_-]+)/) || [])[1];
-    const direct = /drive\.google\.com/i.test(url) && id ? `https://drive.google.com/uc?export=download&id=${id}` : url;
-    if (!found.has(direct)) found.set(direct, { name: `link ${found.size + 1}`, url: direct });
+    const drive = DS.parseDriveLink(url);
+    const direct = drive && drive.kind === 'file' ? `https://drive.google.com/uc?export=download&id=${drive.id}` : url;
+    const keyOf = drive ? `drive:${drive.id}` : direct;
+    if (!found.has(keyOf)) found.set(keyOf, { name: `link ${found.size + 1}`, url: direct, ...(drive ? { drive } : {}) });
   };
   for (const m of String(html).matchAll(SHARE_LINK)) add(m[0]);
   for (const m of String(text).matchAll(SHARE_LINK)) add(m[0]);
@@ -55,6 +59,8 @@ const replyTime = (m) => new Date(Number(m.internalDate)).toLocaleString('en-US'
 async function load(ctx) {
   const { store, job, core, gmail } = ctx;
   let documents = [];
+  // What a Google Drive link held, or why it could not be read: shown with the run's report.
+  const driveNotes = [];
   let msg = null;
   // A REPLY TO HER CORRECTIONS EMAIL is a revision: check the items she asked
   // for and draft the buyer reply (revcheck, revdraft) instead of auditing it
@@ -100,11 +106,21 @@ async function load(ctx) {
         const buf = await gmail.getAttachment(m.id, a.attachmentId);
         documents.push({ name: `${label}${a.filename}`, base64: buf.toString('base64') });
       }
-      documents.push(...shareLinks(m.bodyHtml, m.bodyText).map((l) => ({ ...l, name: `${label}${l.name}` })));
+      for (const l of shareLinks(m.bodyHtml, m.bodyText)) {
+        if (!l.drive) { documents.push({ ...l, name: `${label}${l.name}` }); continue; }
+        // GOOGLE DRIVE: opened as Megan's account; a folder walked like a Dropbox zip.
+        const got = await DS.expandDriveLink(l.drive, { maxDocBytes: core.MAX_DOC_BYTES, maxTotalBytes: core.MAX_UNZIP_TOTAL_BYTES, isBlocked: core.isBlockedName })
+          .catch((err) => ({ docs: [], notes: [{ name: 'Google Drive link', reason: `could not be read: ${err.message}` }], failed: true }));
+        documents.push(...got.docs.map((d) => ({ ...d, name: `${label}${d.name}` })));
+        driveNotes.push(...got.notes);
+        // A single FILE the account cannot open may still be public: try the direct download.
+        if (got.failed && l.drive.kind === 'file') documents.push({ name: `${label}${l.name}`, url: l.url });
+        ctx.log(`Google Drive ${l.drive.kind} ${l.drive.id}: ${got.docs.length} file(s) read${got.failed ? ' (could not be opened)' : ''}`);
+      }
     }
   }
 
-  const report = [];
+  const report = [...driveNotes];
   const docs = await core.loadDocuments(documents, report);
   const meta = [];
   for (let n = 0; n < docs.length; n++) {
@@ -131,6 +147,8 @@ async function load(ctx) {
     j.skipped = report.filter((r) => !r.info);
     j.archives = report.filter((r) => r.info);
     j.extras = extras;
+    // A share link that could not be opened: the run never saw those files.
+    j.linkUnread = driveNotes.filter((n) => !n.info && /could not be (?:opened|read)|could not be listed/.test(n.reason)).map((n) => `${n.name}: ${n.reason}`);
     if (revision && meta.length) j.revision = revision;
     J.addSteps(j, !meta.length ? ['finish'] : (revision ? ['revcheck', 'revdraft'] : ['map', 'plan']));
   };
@@ -297,6 +315,14 @@ async function finish(ctx) {
     if (!effects.callback) {
       await core.sendCallback(ctx.callbackUrl, payload);
       effects.callback = Date.now(); await saveEffects();
+    }
+    // A DRIVE LINK WE COULD NOT OPEN means the files were never read, so
+    // "everything is missing" is wrong: no request goes to the agent; Megan is
+    // told why instead (135 S Vendome, 2026-10-28, drafted a 15-item request).
+    if (!effects.draft && (job.linkUnread || []).length) {
+      await ctx.alert(`intake-link-unread:${job.id}`,
+        `${address}: the Google Drive link in the listing side's email could not be opened, so no request was drafted. ${job.linkUnread.join('; ')}. Share it with your account, or download the files and send them to yourself.`);
+      effects.draft = 'held: Drive link unread'; await saveEffects();
     }
     if (!effects.draft && payload.chase_email_body_html) {
       const draft = await ctx.gmail.createDraft({

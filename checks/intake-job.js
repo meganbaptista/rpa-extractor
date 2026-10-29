@@ -161,7 +161,8 @@ function ok(label, got, want) {
   ]);
   ok('the same link in the plain body is not added twice',
     S.shareLinks(html, 'see https://drive.google.com/file/d/FILEID_9/view').length, 2);
-  ok('a Drive FOLDER is not a fetchable link', S.shareLinks('<a href="https://drive.google.com/drive/folders/F1">x</a>', '').length, 0);
+  // Changed 2026-10-29 (135 S Vendome): a Drive FOLDER is now read through Megan's Google login (checks/drive-share.js).
+  ok('a Drive FOLDER is a link, opened through the Google login', (S.shareLinks('<a href="https://drive.google.com/drive/folders/F1abcdef">x</a>', '')[0] || {}).drive?.kind, 'folder');
 
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall intake-job checks pass');
   process.exit(failed ? 1 : 0);
