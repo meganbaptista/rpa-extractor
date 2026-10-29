@@ -82,6 +82,13 @@ ok('C3 and 15E disagree -> make them match', rules(run({ c3: 'Yes', c3x: 'easeme
 
 // HOA consistency (buyer audit rule (d)).
 ok('HOA property with 14D No -> asked to be Yes', rules(run({ ...condo, c2: 'Yes', c2x: 'Walls', '15d': 'Yes', '15dx': 'Walls', '14d': 'No', '14dx': '' })), ['hoaConsistency: SPQ 14D']);
+// SHORT AND GROUPED (Megan, 2026-10-29: "this email is very wordy"): no quoted question text.
+{
+  const m = run({ ...condo, c2: 'Yes', c2x: 'Walls', '15d': 'Yes', '15dx': 'Walls', '14d': 'No', '14dx': '', c12: 'No', c12x: '' }).find((x) => x.rule === 'hoaConsistency');
+  ok('HOA ask: one sentence, numbers grouped by form on bullet lines, the suggested explanation',
+    m.ask, 'Since the property is part of an HOA, please change these to "Yes":\n\u2022 SPQ 14D\n\u2022 TDS C12\nFor the explanation you can write: "Buyer to review HOA documents in escrow."');
+  ok('HOA heading carries no question numbers (they are in the bullets)', m.emailHeading, 'HOA questions');
+}
 ok('14E (dues increases, assessments) can be No in an HOA', rules(run({ ...condo, c2: 'Yes', c2x: 'Walls', '15d': 'Yes', '15dx': 'Walls', '14e': 'No' })), []);
 ok('no HOA anywhere -> HOA items left alone', rules(run({ hoa: 'No', c12: 'No', c13: 'No' }, '1 Main St, LA')), []);
 

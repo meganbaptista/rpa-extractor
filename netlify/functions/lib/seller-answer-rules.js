@@ -63,6 +63,19 @@ const isEmptyExplanation = (v) => {
 // review prompt uses), with the question so the seller can find it either way.
 const locatorOf = (code) => (/^[A-Z]\d/.test(code) ? `TDS ${code}` : `SPQ ${code}`);
 const locator = (code) => (/^[A-Z]\d/.test(code) ? `TDS ${code}` : `SPQ ${code}`);
+/**
+ * QUESTION NUMBERS GROUPED BY FORM, one bullet line each (Megan, 2026-10-29,
+ * choosing "short + grouped": "this email is very wordy can we come up with
+ * something easier to digest?"). ["6G","14A","C12","14F","C14"] ->
+ *   "• SPQ 6G, 14A and 14F\n• TDS C12 and C14"
+ * The question text is never quoted: the seller finds each by its number.
+ */
+const andList = (xs) => (xs.length <= 2 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+function codeBullets(codes) {
+  const spq = codes.filter((c) => !/^[A-Z]\d/.test(c));
+  const tds = codes.filter((c) => /^[A-Z]\d/.test(c));
+  return [spq.length ? `\u2022 SPQ ${andList(spq)}` : '', tds.length ? `\u2022 TDS ${andList(tds)}` : ''].filter(Boolean).join('\n');
+}
 const short = (s, n = 90) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 3).trim()}...` : t; };
 
 /** Questions (not explanations) in form order, each with its explanation field(s). */
@@ -160,10 +173,10 @@ function hoaConsistency(qs, fields) {
     topic: 'HOA questions',
     section: list.join('; '),
     sectionRx: new RegExp(no.map((x) => x.code.replace(/(\d+)([A-Z])/, '$1\\s*$2')).join('|'), 'i'),
-    emailHeading: `HOA questions (${list.join(', ')})`,
+    emailHeading: 'HOA questions',
     seller_wrote: 'No',
     why: `The property is in an HOA (${signals[0]}), so these HOA questions should be "Yes"; a "No" contradicts the rest of the disclosures.`,
-    ask: `Since the property is part of an HOA, ${no.length === 1 ? 'this question' : 'these questions'} would typically be answered "Yes": ${no.map((x) => `${locator(x.code)} (${short(x.q.text, 70)})`).join('; ')}. Could we update ${no.length === 1 ? 'it' : 'them'} to "Yes"? For the explanation you can write "Buyer to review HOA documents in escrow."`,
+    ask: `Since the property is part of an HOA, please change ${no.length === 1 ? 'this' : 'these'} to "Yes":\n${codeBullets(no.map((x) => x.code))}\nFor the explanation you can write: "Buyer to review HOA documents in escrow."`,
     keyword: /HOA questions|part of an HOA/i,
   };
 }
@@ -185,7 +198,7 @@ function yesNoExplanation(qs) {
     emailHeading: 'A few "Yes" answers need a short explanation',
     seller_wrote: 'Yes (no explanation)',
     why: 'Every "Yes" needs its own explanation; the buyer\'s side sends back a Yes with a blank explanation.',
-    ask: `You answered "Yes" to ${missing.length === 1 ? 'this question' : 'these questions'} but the explanation was left blank: ${missing.map((q) => `${locator(q.code)} (${short(q.text, 70)})`).join('; ')}. Could you add a short explanation for ${missing.length === 1 ? 'it' : 'each'}?`,
+    ask: `${missing.length === 1 ? 'This is' : 'These are'} answered "Yes" with the explanation left blank. Could you add a few words for ${missing.length === 1 ? 'it' : 'each'}?\n${codeBullets(missing.map((q) => q.code))}`,
     keyword: /need a short explanation|explanation was left blank/i,
   };
 }
@@ -202,7 +215,8 @@ function explainedButNo(qs) {
     emailHeading: 'Answers that may need to be "Yes"',
     seller_wrote: 'No (with an explanation)',
     why: 'A seller writes an explanation only when the answer is Yes, so a No with an explanation reads as a mismarked box.',
-    ask: `You answered "No" but wrote an explanation for ${odd.length === 1 ? 'this question' : 'these questions'}: ${odd.map((q) => `${locator(q.code)} (${short(q.text, 60)}): "${short(q.explains.map((e) => e.value).filter((v) => !isEmptyExplanation(v)).join(' '), 60)}"`).join('; ')}. Should ${odd.length === 1 ? 'it' : 'these'} be "Yes"?`,
+    // One bullet each, with a few words of what the seller wrote, so they know which answer is meant.
+    ask: `${odd.length === 1 ? 'This is' : 'These are'} answered "No" but ${odd.length === 1 ? 'has' : 'have'} an explanation written. Should ${odd.length === 1 ? 'it' : 'they'} be "Yes"?\n${odd.map((q) => `\u2022 ${locator(q.code)}: "${short(q.explains.map((e) => e.value).filter((v) => !isEmptyExplanation(v)).join(' '), 50)}"`).join('\n')}`,
     keyword: /may need to be "Yes"|but wrote an explanation/i,
   };
 }
