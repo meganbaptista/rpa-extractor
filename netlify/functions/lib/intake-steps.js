@@ -48,6 +48,15 @@ function shareLinks(html = '', text = '') {
   return [...found.values()];
 }
 
+/** Later replies in the thread, from someone else, with files or a link, and not labelled themselves. */
+function laterReplies(thread, msg, me, labelId) {
+  return (thread || []).filter((m) => m.id !== msg.id
+    && Number(m.internalDate) > Number(msg.internalDate)
+    && !(me && String((m.headers && m.headers.from) || '').toLowerCase().includes(me))
+    && !(labelId && (m.labelIds || []).includes(labelId))
+    && ((m.attachments || []).some(isPdfOrZip) || shareLinks(m.bodyHtml, m.bodyText).length > 0));
+}
+
 const isPdfOrZip = (a) => /\.(pdf|zip)$/i.test(a.filename || '')
   || /application\/(pdf|zip|x-zip|x-zip-compressed)/i.test(a.mimeType || '');
 
@@ -77,6 +86,21 @@ async function load(ctx) {
       try {
         const thread = await gmail.getThreadMessages(msg.threadId);
         const found = rc.findCorrectionsEmail(thread, msg);
+        if (!found) {
+          // LATER REPLIES WITH THE FILES (135 S Vendome, 2026-10-28): the label
+          // sat on the forwarded acceptance email, and the listing side's
+          // disclosures came as a REPLY in the same thread (a Drive link), so the
+          // run read only the purchase contract and called every disclosure
+          // missing. A later reply from someone else that carries files or a
+          // link is read too, unless it carries the label itself (then it is its
+          // own run, and reading it here would draft twice).
+          const me = String(process.env.GMAIL_IMPERSONATE_SUBJECT || process.env.GOOGLE_IMPERSONATE_SUBJECT || '').trim().toLowerCase();
+          const later = laterReplies(thread, msg, me, job.source.labelId);
+          if (later.length) {
+            replies = [msg, ...later];
+            ctx.log(`also reading ${later.length} later reply(ies) in the thread with files or a link: ${later.map((m) => (m.headers && m.headers.from) || m.id).join(', ')}`);
+          }
+        }
         if (found) {
           const split = rc.splitOurs(found.items);
           revision = { correctionsId: found.msg.id, correctionsDate: (found.msg.headers && found.msg.headers.date) || '', items: split.seller, ours: split.ours };
@@ -671,4 +695,4 @@ async function run(name, ctx) {
   }
 }
 
-module.exports = { run, shareLinks, isPdfOrZip };
+module.exports = { run, shareLinks, isPdfOrZip, laterReplies };

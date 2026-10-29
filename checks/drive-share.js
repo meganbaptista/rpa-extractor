@@ -65,6 +65,15 @@ const tree = {
   ok('an unshared folder fails', denied.failed, true);
   ok('and says why, in plain words', /not shared with the account/.test(denied.notes[0].reason), true);
 
+  // THE LINK CAME AS A REPLY (Vendome: the label sat on the forwarded acceptance email).
+  const fwd = { id: 'f', internalDate: '100', headers: { from: 'Megan <megan@mytcconcierge.com>' }, labelIds: ['L'], attachments: [{ filename: 'Purchase Contract.pdf' }] }
+  const stef = { id: 's', internalDate: '200', headers: { from: 'Stefanie <stefanie@maggieding.com>' }, labelIds: [], attachments: [], bodyHtml: '<a href="https://drive.google.com/drive/folders/1Xy_ZabcdEFGhij">Google Drive Link</a>' }
+  const chat = { id: 'c', internalDate: '300', headers: { from: 'John <john@x.com>' }, labelIds: [], attachments: [], bodyText: 'thanks!' }
+  const ours = { id: 'o', internalDate: '400', headers: { from: 'megan@mytcconcierge.com' }, labelIds: [], attachments: [{ filename: 'Our Package.pdf' }] }
+  const labelled = { ...stef, id: 'l', internalDate: '500', labelIds: ['L'] }
+  const got2 = S.laterReplies([fwd, stef, chat, ours, labelled], fwd, 'megan@mytcconcierge.com', 'L').map((m) => m.id).join(',')
+  ok('the reply with the Drive link is read; a chat reply, our own email and a reply that is its own run are not', got2, 's')
+
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall drive-share checks pass');
   process.exit(failed ? 1 : 0);
 })();
