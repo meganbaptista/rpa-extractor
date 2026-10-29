@@ -57,6 +57,9 @@ const DOC = [
 
   mem.set('meta/package-mode', { mode: 'off' });
   ok('mode off: the job just closes', (await run(ctx())).packageOutcome, 'package: off');
+  job.packageMode = 'shadow';
+  ok('off wins over a per-job trial', (await run(ctx())).packageOutcome, 'package: off');
+  delete job.packageMode;
   mem.delete('meta/package-mode');
   ok('no mode set = shadow (trial only)', await PJ.packageMode(store), 'shadow');
 

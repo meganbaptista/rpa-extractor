@@ -276,7 +276,14 @@ async function packageStep(ctx) {
   const lastTry = ctx.attempt >= J.MAX_ATTEMPTS;
   const close = (outcome) => (j) => { j.status = 'done'; j.packageOutcome = outcome; };
   try {
-    const mode = await packageMode(store);
+    /*
+      A TRIAL RUN NEVER DELIVERS (2026-10-29): a shadow intake job, or one
+      marked packageMode 'shadow' to show a package again (2073 Deer Trl),
+      makes the trial draft even while packages are live, never touching the
+      deal folder or the buyer's draft.
+    */
+    const global = await packageMode(store);
+    const mode = global === 'off' ? 'off' : job.packageMode || (job.mode === 'shadow' ? 'shadow' : global);
     if (mode === 'off') return close('package: off');
     const effects = (await J.getOut(store, job.id, 'package-effects')) || {};
     if (effects.trialDraft) return close('package: trial draft already made');
