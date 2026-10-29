@@ -565,7 +565,42 @@ function partitionByVintage(received, nowMs) {
     current.push(f);
     if (vintage.band === 'aging') aging.push({ ...f, vintage });
   }
-  return { current, historical, aging, dealTokens };
+  const { leases, prior } = splitLeasePaperwork(historical);
+  return { current, historical: prior, aging, dealTokens, leases };
+}
+
+/*
+  TENANT LEASE PAPERWORK IS NOT A PREVIOUS SALE (135 S Vendome, 2026-10-29).
+  A tenant-occupied sale ships the leases and their attachments: signed years
+  ago, sometimes by the owners under a slightly different name. They read as
+  "historical" by age or party, and the email told the agent "some of the
+  documents sent appear to be from a previous sale". Only among what would
+  ALREADY be set aside: a lease form with a current date is untouched, and a
+  sale form (TOPA, a current WHSD) never moves. The shared notices (WHSD, CMD,
+  DBD, LPD) count as lease paperwork only when signed within 45 days of a lease
+  document. Not counted toward this sale either way; never mentioned to the agent.
+*/
+const LEASE_CODES = new Set(['LR', 'LRM', 'RCJC', 'KLA', 'BBD', 'TFHD', 'TEC', 'LRA', 'MMR']);
+const LEASE_SHARED_CODES = new Set(['WHSD', 'CMD', 'DBD', 'LPD']);
+const RX_LEASE_NAME = /\b(?:lease|rental\s+agreement|tenant\s+estoppel|estoppel\s+certificate|bed\s*bug|rent\s+cap|just\s+cause|month[-\s]to[-\s]month|tenant\s+flood)\b/i;
+function isLeaseDocument(f) {
+  const code = String((f && f.code) || '').toUpperCase();
+  if (code === 'TOPA') return false;
+  return LEASE_CODES.has(code) || RX_LEASE_NAME.test(String((f && f.name) || ''));
+}
+function splitLeasePaperwork(historical) {
+  const leaseDays = historical.filter(isLeaseDocument).map((f) => parseSignedDate(f.signed)).filter((t) => t != null);
+  const nearLease = (f) => {
+    const t = parseSignedDate(f.signed);
+    return t != null && leaseDays.some((d) => Math.abs(d - t) <= 45 * 86400000);
+  };
+  const leases = [], prior = [];
+  for (const f of historical) {
+    const code = String(f.code || '').toUpperCase();
+    if (isLeaseDocument(f) || (LEASE_SHARED_CODES.has(code) && nearLease(f))) leases.push(f);
+    else prior.push(f);
+  }
+  return { leases, prior };
 }
 
 // "ESD Exempt Seller Disclosure, signed 4/12/2024, seller John Smith Family Trust"
@@ -2103,6 +2138,22 @@ function eqStatementLayout(texts) {
   };
 }
 
+/**
+ * THE SELLER'S OWN ADDENDUM (135 S Vendome, 2026-10-29). Not a C.A.R. form: a
+ * typed "Addendum to the Transfer Disclosure Statement and Seller's Property
+ * Questionnaire" carrying every "see addendum" explanation. The picker knew
+ * C.A.R. forms, the Text Overflow Addendum and question pages, so it took page
+ * 11 of the three and left 9-10; the review then asked the seller to explain
+ * ten answers the addendum already explained. Recognised by its HEADING only
+ * (the first lines), so a TDS that says "see addendum" in its body does not
+ * count. Over-inclusion costs one page the review finds nothing on.
+ */
+const RX_SELLER_ADDENDUM_HEAD = /\b(?:addendum|explanations?)\b.{0,80}?\b(?:transfer\s+disclosure|seller['\u2019]?s?\s+property\s+questionnaire|TDS|SPQ|disclosures?)\b|\b(?:TDS|SPQ|seller['\u2019]?s?)\s*(?:\/\s*(?:TDS|SPQ)\s*)?(?:disclosure\s+)?(?:addendum|explanations?)\b/i;
+function isSellerAddendum(text) {
+  const head = String(text || '').slice(0, 300).replace(/\s+/g, ' ');
+  return RX_SELLER_ADDENDUM_HEAD.test(head) && !/C\.?A\.?R\.?\s+Form/i.test(head);
+}
+
 function selectQAPagesFromText(texts, pageCount, opts = {}) {
   if (!isTextLayerUsable(texts)) return { usable: false, pages: [], selection: '' };
   const byNum = new Map(texts.map((p) => [p.num, p.text]));
@@ -2116,6 +2167,7 @@ function selectQAPagesFromText(texts, pageCount, opts = {}) {
     if (code && QA_FORM_CODES.has(code)) mark(num, code);
     else if (hasQaTitle(text)) mark(num, 'title');
     else if (isOverflowAddendum(text)) mark(num, 'overflow');
+    else if (isSellerAddendum(text)) mark(num, 'addendum');
     else if (hasSellerAwareQuestion(text)) mark(num, 'answer');
   }
 
@@ -2159,7 +2211,7 @@ function selectQAPagesFromText(texts, pageCount, opts = {}) {
   // clearly its own titled form or an advisory. This is what recovers the earthquake report's second
   // page without dragging a neighboring advisory into the review.
   for (const n of [...include]) {
-    if (why.get(n) !== 'title' && why.get(n) !== 'answer') continue;
+    if (why.get(n) !== 'title' && why.get(n) !== 'answer' && why.get(n) !== 'addendum') continue;
     for (const j of [n - 1, n + 1]) {
       if (j < 1 || j > pageCount || include.has(j)) continue;
       const t = byNum.get(j) || '';
@@ -4076,7 +4128,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   // what reconcile and every deterministic rule below consume: a prior sale's ESD
   // must not put this deal on the exempt path, and a prior sale's TDS must not
   // count as this seller's. See the historical-documents section.
-  const { current: currentForms, historical, aging, dealTokens } = partitionByVintage(received, Date.now());
+  const { current: currentForms, historical, aging, dealTokens, leases } = partitionByVintage(received, Date.now());
+  if (leases.length) console.log(`[disclosure-intake] ${address}: ${leases.length} tenant lease document(s) set aside (not this sale's disclosures): ${leases.map(vintageLabel).join('; ')}`);
   if (historical.length) {
     console.warn(`[disclosure-intake] ${address}: ${historical.length} form(s) read as a PRIOR TRANSACTION `
       + `and quarantined (not counted, not shown to the rules); this deal's seller reads as `
@@ -4697,6 +4750,10 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
       + 'Request the current seller\'s versions of anything still outstanding.'
     : '';
   if (historical.length) console.warn(`[disclosure-intake] ${address}: ${historicalAlert}`);
+  // Megan's note only (never the agent's email): the leases were seen and set aside.
+  const leaseNote = leases.length
+    ? `NOTE: ${leases.length} tenant lease document(s) (leases, estoppels, lease addenda and notices) were set aside: not disclosures for this sale, and not counted toward it.`
+    : '';
 
   const psComment =
     `Disclosure intake — ${address}\n` +
@@ -4704,6 +4761,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     (biwAlert ? `** ${biwAlert} **\n\n` : '') +
     (exemptAlert ? `** ${exemptAlert} **\n\n` : '') +
     (historicalAlert ? `** ${historicalAlert} **\n\n` : '') +
+    (leaseNote ? `${leaseNote}\n\n` : '') +
     // High, next to the alert, not down with the reference lists: this changes what
     // the package IS, so a TC has to see it before reading anything below.
     (historical.length ? `PRIOR SALE / HISTORICAL (not counted, request current versions):\n${bullets(historical, vintageLabel)}\n\n` : '') +
@@ -4821,6 +4879,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     historical_count: historical.length,
     historical_alert: historicalAlert,
     historical_text: historical.map(vintageLabel).join('; '),
+    lease_note: leaseNote,
+    lease_text: leases.map(vintageLabel).join('; '),
     historical_lines: historical.map(vintageLabel).join('\n'),
     context_debug: debugContext,
     versions_debug: versionsDebug,
@@ -4854,7 +4914,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { isSellerAddendum, splitLeasePaperwork, isLeaseDocument, applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
