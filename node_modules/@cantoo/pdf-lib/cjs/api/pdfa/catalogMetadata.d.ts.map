@@ -1,0 +1,1 @@
+{"version":3,"file":"catalogMetadata.d.ts","sourceRoot":"","sources":["../../../src/api/pdfa/catalogMetadata.ts"],"names":[],"mappings":"AAAA,OAAO,UAAU,MAAM,kCAAkC,CAAC;AAI1D,OAAO,EAAE,iBAAiB,EAAE,MAAM,mBAAmB,CAAC;AAGtD;;GAEG;AACH,eAAO,MAAM,sBAAsB,GACjC,SAAS,UAAU,KAClB,MAAM,GAAG,SASX,CAAC;AAEF;;GAEG;AACH,eAAO,MAAM,0BAA0B,GACrC,SAAS,UAAU,KAClB,iBAAiB,GAAG,SAGtB,CAAC"}

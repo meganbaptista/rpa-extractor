@@ -33,6 +33,7 @@
 //   ink(base64png) -> 0..1 share of non-white pixels (optional; no blank check without it)
 
 const { PDFDocument } = require('pdf-lib');
+const { unlockPdf } = require('./pdf-repair');
 
 const GMAIL_RAW_TARGET = 17 * 1024 * 1024;
 const RENDER_SCALE = 2;          // damaged pages and heavy-page re-renders
@@ -247,7 +248,8 @@ async function buildPdf(parts, deps) {
   for (const part of parts) {
     const k = srcKey(part.src);
     if (!cache.has(k)) {
-      const buf = await deps.getBytes(part.src);
+      // An owner-password lock (8808 Thrasher) is taken off first, or every page is rebuilt from images.
+      const { buf } = await unlockPdf(await deps.getBytes(part.src));
       let doc = null;
       // A file can LOAD and still have a broken page tree, so that even counting
       // its pages throws "Expected instance of PDFDict" (20701 Schoolcraft,

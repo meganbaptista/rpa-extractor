@@ -49,13 +49,20 @@ exports.handler = async function (event) {
     // putting the label back is how Megan re-runs it once the cause is fixed.
     let unlabelled = false;
     if (job.mode === 'live' && job.source.labelId) {
-      try { await gmail.modifyMessage(job.source.messageId, { remove: [job.source.labelId] }); unlabelled = true; } catch (err) {
+      // The whole conversation, as a finished audit does (lib/intake-steps removeLabel).
+      try {
+        if (job.source.threadId && gmail.modifyThread) await gmail.modifyThread(job.source.threadId, { remove: [job.source.labelId] });
+        else await gmail.modifyMessage(job.source.messageId, { remove: [job.source.labelId] });
+        unlabelled = true;
+      } catch (err) {
         console.warn(`[intake-job] ${jobId}: could not remove the label after the failure (${err.message})`);
       }
     }
     await rt.intakeAlert(`intake-failed:${jobId}`,
       `Disclosure intake FAILED for "${who}" at step "${claim.failed.name}" after ${J.MAX_ATTEMPTS} tries: `
-      + `${claim.failed.error}. The email from ${job.source.from} still needs a manual check.`
+      // A step that died (out of time or memory) leaves no error: say so, not a blank
+      // (8808 Thrasher's package, 2026-10-29: "after 3 tries: .").
+      + `${claim.failed.error || 'it ran out of time (about 15 minutes) without finishing, each try'}. The email from ${job.source.from} still needs a manual check.`
       + (unlabelled ? ` The "${rt.LABEL()}" label was taken off; once the cause is fixed, put it back on the email to run it again.` : ''));
     return { statusCode: 200 };
   }

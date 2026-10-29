@@ -7,6 +7,7 @@
 // the deal folder and creates the draft. Drafts only, never sends.
 
 const { PDFDocument } = require('pdf-lib');
+const { unlockPdf } = require('./pdf-repair');
 const { buildMime } = require('./mime');
 
 // A duplex reads as a number range ("4180 - 4182 Sunnyslope Ave", 2026-10-23)
@@ -74,7 +75,8 @@ async function mergePdfs(bufs, { render, pageCount, names = [] } = {}) {
   const parts = [];
   const rebuilt = [];
   for (let i = 0; i < bufs.length; i++) {
-    const buf = bufs[i];
+    // An owner-password lock is taken off first (8808 Thrasher, see lib/pdf-repair).
+    const { buf } = await unlockPdf(bufs[i]);
     try {
       const src = await PDFDocument.load(buf, { ignoreEncryption: true });
       const pages = await out.copyPages(src, src.getPageIndices());
@@ -102,7 +104,8 @@ async function mergePdfs(bufs, { render, pageCount, names = [] } = {}) {
  * Only the given pages (1-based) of a PDF. A damaged file pdf-lib cannot copy
  * is rendered page by page instead, like mergePdfs.
  */
-async function pickPages(buf, pages, { render } = {}) {
+async function pickPages(locked, pages, { render } = {}) {
+  const { buf } = await unlockPdf(locked);
   const out = await PDFDocument.create();
   try {
     const src = await PDFDocument.load(buf, { ignoreEncryption: true });
