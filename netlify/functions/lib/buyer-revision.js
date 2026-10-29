@@ -15,6 +15,21 @@ const { buildMime } = require('./mime');
 const streetOf = (address) => String(address || '').split(',')[0].trim().replace(/^(\d+)\s*[-–&]\s*\d+\s+/, '$1 ');
 const GMAIL_MAX_RAW = 25 * 1024 * 1024;
 
+// Street types and directions, each spelling -> one form.
+const STREET_WORDS = {
+  trail: 'trl', trl: 'trl', street: 'st', st: 'st', avenue: 'ave', ave: 'ave', av: 'ave',
+  drive: 'dr', dr: 'dr', road: 'rd', rd: 'rd', lane: 'ln', ln: 'ln', court: 'ct', ct: 'ct',
+  boulevard: 'blvd', blvd: 'blvd', place: 'pl', pl: 'pl', circle: 'cir', cir: 'cir',
+  parkway: 'pkwy', pkwy: 'pkwy', highway: 'hwy', hwy: 'hwy', terrace: 'ter', ter: 'ter',
+  way: 'way', wy: 'way', canyon: 'cyn', cyn: 'cyn', square: 'sq', sq: 'sq', point: 'pt', pt: 'pt',
+  north: 'n', south: 's', east: 'e', west: 'w',
+};
+const DIRECTIONS = new Set(['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']);
+/** "Deer Trail, Yucca Valley" and "Deer Trl" -> "deer trl yucca valley" / "deer trl". */
+const streetKey = (text) => String(text || '').toLowerCase().replace(/[^a-z0-9#]+/g, ' ').trim().split(/\s+/).map((w) => STREET_WORDS[w] || w).join(' ');
+/** The word Drive is searched by: the street's own name, never "N" or the type. */
+const nameWord = (rest) => String(rest).split(/[\s,]+/).find((w) => w.length > 1 && !DIRECTIONS.has(w.toLowerCase())) || rest;
+
 /** The package email she SENT for this deal (newest), or null. */
 async function findSentPackage(gmail, address) {
   const street = streetOf(address);
@@ -38,12 +53,15 @@ async function findDealFolder(drive, address) {
   const street = streetOf(address);
   // The number, then the rest of the street: "4180 Sunnyslope Ave" finds
   // "4180 Sunnyslope Ave, ..." and also a folder named "4180-4182 Sunnyslope Ave".
+  // The street type in either spelling (2073 Deer Trl, 2026-10-29: the folder
+  // said "Trail"), so Drive is searched by the street's NAME word, not "Deer Trl".
   const m = street.match(/^(\d+)\s+(.+)$/);
   const rest = m ? m[2] : street;
-  const folders = (await drive.findFoldersNameContains(rest))
+  const want = streetKey(rest);
+  const folders = (await drive.findFoldersNameContains(nameWord(rest)))
     .filter((f) => {
       const n = String(f.name || '').toLowerCase();
-      return m ? n.startsWith(m[1]) && n.includes(rest.toLowerCase()) && !/^\d/.test(n.slice(m[1].length)) : n.startsWith(street.toLowerCase());
+      return m ? n.startsWith(m[1]) && ` ${streetKey(n.slice(m[1].length))} `.includes(` ${want} `) && !/^\d/.test(n.slice(m[1].length)) : n.startsWith(street.toLowerCase());
     });
   const seen = [];
   for (const f of folders) {
