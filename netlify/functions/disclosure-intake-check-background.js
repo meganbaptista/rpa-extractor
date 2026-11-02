@@ -551,6 +551,23 @@ function vintageOf(form, nowMs, dealTokens) {
   return { band: 'current', months, signed, reason: 'none' };
 }
 
+// THE FORMS IN ONE BATCH THAT ARE ALL FROM AN EARLIER SALE, by age (2643 34th
+// St, 2026-11-02: the sellers' own 2018 purchase disclosures were reviewed and
+// their TDS's blank 220V location chased as this seller's). A form code whose
+// every dated copy in the batch is over HISTORICAL_AFTER_MONTHS old; the review
+// flags for it are that earlier sale's, never this one's. A batch that also
+// holds a current or undated copy of the code keeps its flags.
+function historicalFormCodes(forms, nowMs) {
+  const old = new Set(), live = new Set();
+  for (const f of forms || []) {
+    const code = String((f && f.code) || '').trim().toUpperCase();
+    if (!code) continue;
+    const v = vintageOf(f, nowMs, null);
+    (v.band === 'historical' ? old : live).add(code);
+  }
+  return new Set([...old].filter((c) => !live.has(c)));
+}
+
 // Split an accumulated received set into what counts for THIS deal and what
 // belongs to an earlier transaction. `current` is what reconcile and every
 // deterministic rule consume; `historical` is reported and never counted; `aging`
@@ -3590,6 +3607,23 @@ const RX_SECTION_ITEM = /^\s*(?:section|paragraph)\b/i;
 const RX_CITES_ATTACHMENT = /\b(?:attach(?:ed|ment|ments)|addendum|addenda|exhibit|supplement|renovations?\s+list|improvements?\s+list|separate\s+(?:sheet|page|list))\b/i;
 const RX_ASSERTS_ABSENT = /\bnot\s+(?:in\b|included|attached|present|enclosed|found|part\s+of)|\bis\s+missing\b|\bwas\s+not\s+(?:included|attached|provided|sent)\b|\bcannot\s+be\s+found\b|\bnowhere\s+in\b/i;
 
+// "NO C.A.R. FORM SOLAR IS INCLUDED" WHEN IT IS (2643 34th St, 2026-11-02:
+// SPQ 8B chased for a SOLAR form that was in the package, and the same review
+// flagged six of its items). Identify saw the form, so the claim is wrong.
+// Returns the form code the flag says is missing when the package has it.
+const RX_FORM_MISSING = /\bno\s+(?:C\.?A\.?R\.?\s+)?(?:Form\s+)?([A-Z][A-Z0-9-]{1,11})\b[^.;]*?\b(?:is|was|are|were)?\s*(?:included|attached|provided|enclosed|in\s+(?:the|this)\s+package)/i;
+const RX_FORM_NOT_INCLUDED = /\b(?:C\.?A\.?R\.?\s+)?Form\s+([A-Z][A-Z0-9-]{1,11})\s+(?:is|was)\s+not\s+(?:included|attached|provided|enclosed|in\s+(?:the|this)\s+package)/i;
+function claimsPresentFormMissing(flag, presentCodes) {
+  if (!flag || !presentCodes || !presentCodes.size) return '';
+  const reason = String(flag.reason || '');
+  for (const rx of [RX_FORM_MISSING, RX_FORM_NOT_INCLUDED]) {
+    const m = reason.match(rx);
+    const code = m && m[1].toUpperCase();
+    if (code && presentCodes.has(code)) return code;
+  }
+  return '';
+}
+
 function citesAnUnseenAttachment(flag) {
   if (!flag) return false;
   const reason = String(flag.reason || '');
@@ -4450,10 +4484,16 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const explainedOnSheet = new Set((Array.isArray(responseFlags) ? responseFlags : [])
     .filter((f) => f && f.issue === 'explanation_on_addendum')
     .map((f) => `${String(f.form || '').toUpperCase()}|${String(f.item || '').toUpperCase()}`));
+  const presentCodes = new Set(currentForms.map((f) => String((f && f.code) || '').trim().toUpperCase()).filter(Boolean));
   const allFlags = (Array.isArray(responseFlags) ? responseFlags : []).filter((f) => !(f
     && f.issue === 'yes_no_explanation'
     && explainedOnSheet.has(`${String(f.form || '').toUpperCase()}|${String(f.item || '').toUpperCase()}`)
-    && !(Number(f.pass_total) >= 2 && f.pass_count === f.pass_total)));
+    && !(Number(f.pass_total) >= 2 && f.pass_count === f.pass_total)))
+    .filter((f) => {
+      const code = claimsPresentFormMissing(f, presentCodes);
+      if (code) console.log(`[disclosure-intake] ${address}: dropped "${f.form} ${f.item}": it says no ${code} is included, but the package has one`);
+      return !code;
+    });
   // A flag claiming a cited attachment is absent is a claim the review cannot
   // support (see citesAnUnseenAttachment). Retag before the filtering below so it
   // takes the VERIFY route instead of the chase email.
@@ -4914,12 +4954,12 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { isSellerAddendum, splitLeasePaperwork, isLeaseDocument, applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { claimsPresentFormMissing, historicalFormCodes, isSellerAddendum, splitLeasePaperwork, isLeaseDocument, applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
 module.exports.core = {
-  loadDocuments, planBatches, identifyForms, reviewAnswers, combineIdentifyReview,
+  loadDocuments, planBatches, identifyForms, reviewAnswers, combineIdentifyReview, historicalFormCodes,
   mergeBatchResults, reconcileAndCallback, sendCallback, pdfPageCount, mergeForms, renderPagesAsImages,
   pdfPageTexts, normalizeAddress, blobsConfig, STATE_STORE, CALLBACK_URL_ENV, EMPTY_KEY_ANSWERS,
   // For Google Drive folder links (lib/drive-share.js): the same limits and name rules as a zip.

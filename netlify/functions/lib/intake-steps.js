@@ -299,6 +299,14 @@ async function finish(ctx) {
       for (const [name, pages] of Object.entries(rev.reviewedPages)) reviewed[name] = (reviewed[name] || []).concat(pages);
     }
     if (!idr) { outcomes.push({ ok: false, err: new Error('identify gave up') }); continue; }
+    // An earlier sale's forms (signed over a year ago) are not this seller's
+    // answers: their review flags are dropped (2643 34th St, the 2018 TDS).
+    if (rev && Array.isArray(rev.responseFlags) && core.historicalFormCodes) {
+      const old = core.historicalFormCodes(idr.forms, Date.now());
+      const keep = rev.responseFlags.filter((f) => !old.has(String((f && f.form) || '').trim().toUpperCase()));
+      if (keep.length < rev.responseFlags.length) ctx.log(`batch ${i + 1}: ${rev.responseFlags.length - keep.length} flag(s) on a prior sale's forms (${[...old].join(', ')}) dropped`);
+      rev.responseFlags = keep;
+    }
     const settled = rev ? { status: 'fulfilled', value: rev } : { status: 'rejected', reason: new Error('review gave up') };
     outcomes.push({ ok: true, r: core.combineIdentifyReview(idr, settled) });
   }
