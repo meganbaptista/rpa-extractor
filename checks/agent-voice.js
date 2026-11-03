@@ -19,9 +19,9 @@ assert.strictEqual(one[1].other_form, 'TDS C2', 'the TDS-vs-SPQ version is the o
 const fake = (reply) => async () => JSON.stringify(reply);
 (async () => {
   const good = { lines: [
-    { ids: ['q1'], text: 'SPQ 5B: Receipt for Reports received. Change to Yes.' },
-    { ids: ['q2'], text: 'SPQ 15D: TDS C2 says shared walls. Change to Yes.' },
-    { ids: ['q3'], text: 'TDS C1: add an explanation since the response was marked "Yes".' },
+    { ids: ['q1'], text: 'SPQ 5B: Receipt for Reports received. Recommend "Yes".' },
+    { ids: ['q2'], text: 'SPQ 15D: TDS C2 says shared walls. Recommend "Yes".' },
+    { ids: ['q3'], text: 'TDS C1: recommend adding an explanation since the response was marked "Yes".' },
     { ids: ['q4'], text: 'NHD: seller signature missing. Sign and date.' },
   ] };
   assert.deepStrictEqual(await V.writeAsks(one, { call: fake(good) }), good.lines.map((l) => l.text));
@@ -41,9 +41,10 @@ const fake = (reply) => async () => JSON.stringify(reply);
   // Her line shape (2026-11-03): "SPQ 5B-C: we received ...". A range names its questions,
   // and may not reach a question that was never asked.
   const pair = [{ id: 'q1', question: 'SPQ 5B' }, { id: 'q2', question: 'SPQ 5C' }];
-  assert.strictEqual(V.checkLines([{ ids: ['q1', 'q2'], text: 'SPQ 5B-C: Receipt for Reports received. Change to Yes.' }], pair), '');
-  assert.ok(/5A, which was not asked/.test(V.checkLines([{ ids: ['q1', 'q2'], text: 'SPQ 5A-C: Receipt for Reports received. Change to Yes.' }], pair)));
+  assert.strictEqual(V.checkLines([{ ids: ['q1', 'q2'], text: 'SPQ 5B-C: Receipt for Reports received. Recommend "Yes".' }], pair), '');
+  assert.ok(/5A, which was not asked/.test(V.checkLines([{ ids: ['q1', 'q2'], text: 'SPQ 5A-C: Receipt for Reports received. Recommend "Yes".' }], pair)));
   const tds = [{ id: 'q1', question: 'TDS C1', kind: 'yes_no_explanation' }];
   assert.ok(/must end/.test(V.checkLines([{ ids: ['q1'], text: 'TDS C1: add explanation.' }], tds)), 'the Yes reason is required');
+  assert.ok(/an order/.test(V.checkLines([{ ids: ['q1', 'q2'], text: 'SPQ 5B-C: Receipt for Reports received. Change to Yes.' }], pair)), 'suggest, never order');
   console.log('agent-voice: one line per question, every question kept, a bad answer never used');
 })().catch((e) => { console.error(e); process.exit(1); });
