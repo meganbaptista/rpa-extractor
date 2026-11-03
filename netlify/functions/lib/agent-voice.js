@@ -57,15 +57,18 @@ RULES
 - Fewest words possible. Direct. No filler (no "just", "please", "so this should be revisited", "we
   received", "I noticed"). The agent must see exactly what to change.
 - Every line: the questions, a colon, the evidence in 2 to 5 words, then the suggestion in 2 to 4 words.
-  "SPQ 5B-C: Receipt for Reports received. Recommend "Yes"."
-  "SPQ 6H, 9A: Travelers claim received. Recommend "Yes"."
-  "SPQ 15D: TDS C2 says shared walls. Recommend "Yes"."
+  "SPQ 5B-C: Receipt for Reports received. Recommend revising to "Yes"."
+  "SPQ 6H, 9A: Travelers claim received. Recommend revising to "Yes"."
+  "SPQ 15D: TDS C2 says shared walls. Recommend revising to "Yes"."
   "TDS C1, C2, C9: recommend adding an explanation since the response was marked "Yes"."
-  "LPD 1A-B: lead report received. Recommend "Yes"."
+  "LPD 1A-B: lead report received. Recommend revising to "Yes"."
   "SOLAR: needed, SPQ 8B is Yes."
 - At most 12 words a line (the explanation line above may run to 14).
 - A Yes with no explanation always reads: recommend adding an explanation since the response was marked "Yes".
-- Suggest, never order (Megan: "i dont want to sound like a dictator"): "Recommend "Yes".", "Recommend
+- A wrong Yes/No always reads: Recommend revising to "Yes". (or "No")
+- A document that is provided but not listed on the form reads (Megan's words): "LPD 1B: Since a Lead
+  Report is provided, recommended to list the report here."
+- Suggest, never order (Megan: "i dont want to sound like a dictator"): "Recommend revising to "Yes".", "Recommend
   adding ...", never "Change to", "Update", "Fix", "Must".
 - Name questions by form and number. A range (SPQ 5B-C) only when EVERY question in it is one given;
   otherwise list them (SPQ 5B, 6H, 9A).
@@ -130,6 +133,7 @@ function checkLines(lines, briefs) {
     if (DASH.test(text)) return `a dash in "${text}"`;
     if (text.split(/\s+/).length > 16) return `too long (12 words at most): "${text}"`;
     if (/\b(just|please|kindly|so this should be revisited|we received|per)\b/i.test(text)) return `filler in "${text}"`;
+    if (/recommend\s+"?(yes|no)"?\s*\.?$/i.test(text)) return `"${text}" should say: Recommend revising to "Yes"`;
     if (/\b(change (it |this |these )?to|update (it|this|these)|must|fix)\b/i.test(text)) return `an order, not a suggestion: "${text}"`;
     // Megan, 2026-11-03: a Yes with no explanation says why it is asked.
     const needsWhy = l.ids.some((id) => (briefs.find((x) => x.id === id) || {}).kind === 'yes_no_explanation');
