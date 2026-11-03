@@ -951,9 +951,18 @@ const vnorm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').t
 
 // Does a received form match a versions-sheet key? Whole-key match against the
 // form's code+name (word-bounded), so short codes like "SA" don't match "SBSA".
+//
+// A CODE ON THE SHEET MATCHES ONLY THAT CODE (533 Lincoln, 2026-11-02): "SPQ"
+// was found inside "Text Overflow Addendum No. 1 (to SPQ)", so the addendum's
+// own 6/23 revision was reported as an outdated SPQ (current 6/26). A form
+// with a code is compared by code; a long key ("Orange County Local Area") is
+// still matched inside the name.
 function formMatchesKey(form, key) {
   const k = vnorm(key);
   if (!k) return false;
+  const isCode = !/\s/.test(k) && k.length <= 8;
+  const code = vnorm(form.code);
+  if (isCode && code) return code === k;
   const hay = vnorm(`${form.code || ''} ${form.name || ''}`);
   return new RegExp('\\b' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(hay);
 }
@@ -981,6 +990,7 @@ function findOutdatedForms(received, versions) {
 // documents can sit one or more levels down. Detection, extraction and the
 // recursive walk live in lib/unzip.js and are shared with compliance-check.
 // ----------------------------------------------------------------------------
+const { onePerQuestion, writeAsks } = require('./lib/agent-voice');
 const { PDF_MAGIC, looksZip, hasCentralDirectory, collectPdfs, summarizeCollect } = require('./lib/unzip');
 
 // Filenames we never want to send to the model (big non-disclosure reports +
@@ -4618,7 +4628,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   }
   const followUps = allFlags.filter(isBlankFollowUpOnly);
   if (followUps.length) console.log(`[disclosure-intake] dropped ${followUps.length} "unanswered" flag(s) about a blank follow-up line under a marked question`);
-  const flags = sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f) && !isFactOnlyYes(f) && !isMirrorDefectMismatch(f) && !isSpq19B(f) && !isBlankFollowUpOnly(f)
+  // One line per question (agent-voice onePerQuestion, 533 Lincoln: SPQ 5B was asked twice, the lead report three times).
+  const flags = onePerQuestion(sortFlags(relabelEarthquakeFlags(allFlags).filter((f) => !wantsDetailOnly(f) && !isFactOnlyYes(f) && !isMirrorDefectMismatch(f) && !isSpq19B(f) && !isBlankFollowUpOnly(f)
     && f.issue !== 'explanation_on_addendum'
     && f.issue !== 'duplicate_form_copy'
     && f.issue !== 'cited_attachment_unseen'
@@ -4627,7 +4638,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     && f.issue !== 'claim_explained'
     && f.issue !== 'condo_brush_exempt'
     && f.issue !== 'not_worth_chasing'
-    && f.issue !== 'scan_unconfirmed'));
+    && f.issue !== 'scan_unconfirmed')));
   for (const f of unseenAttachment) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
     verify.push({
@@ -4825,28 +4836,38 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const signer = process.env.DISCLOSURE_SIGNER_NAME || 'Megan';
   const chaseEmailSubject = `Outstanding disclosures for ${address}`;
   let chaseEmailBody;
+  /*
+    THE ANSWER LINES IN MEGAN'S VOICE (agent-voice, 2026-11-03: "it needs to
+    stop reading so AI"): short, grouped, every question named once, checked
+    in code. null = the writer's answer failed its check, so the plain lines
+    below are used instead.
+  */
+  const voiced = followupCount && flags.length && !opts.plainLines
+    ? await writeAsks(flags, { model: MODEL, address }).catch(() => null)
+    : null;
   if (followupCount) {
     chaseEmailBody =
       `Hi${greetName(senderName)},\n\n` +
-      'Thanks so much for sending these over! I went through the package, and here is what is still pending on my end:\n' +
+      'Thanks so much for sending these over! I went through everything and just have a few things:\n' +
       (stillNeeded.length
-        ? '\nStill outstanding:\n' + stillNeeded.map((x) => `- ${x}`).join('\n') + '\n'
+        ? '\nStill need:\n' + stillNeeded.map((x) => `- ${x}`).join('\n') + '\n'
         : '') +
       (outdated.length
-        ? '\nThe following were sent in an outdated version. Please send the current version:\n' + outdated.map((o) => `- ${o.name} (received ${o.received}; current ${o.current})`).join('\n') + '\n'
+        ? '\nCould we get the current version of these?\n' + outdated.map((o) => `- ${o.name} (we have ${o.received}, current is ${o.current})`).join('\n') + '\n'
         : '') +
       (historical.length
         ? '\nSome of the documents sent appear to be from a previous sale of this property, so we have set '
           + 'those aside. Please send the current seller\'s versions of anything listed above.\n'
         : '') +
-      (reviseFlags.length
-        ? '\nA few answers need a quick update:\n' + groupReviseLines(reviseFlags).map((l) => `- ${l}`).join('\n') + '\n'
-        : '') +
-      (confirmFlags.length
-        ? '\nAnd a couple of things to confirm:\n' + confirmFlags.map((f) => `- ${confirmLine(f)}`).join('\n') + '\n'
-        : '') +
-      '\nWhenever you get a chance, send these my way and we will be all set. ' +
-      'If any of them are already on the way or do not apply, just let me know!\n\n' +
+      (voiced && voiced.length
+        ? '\nA few answers to take another look at:\n' + voiced.map((l) => `- ${l}`).join('\n') + '\n'
+        : (reviseFlags.length
+          ? '\nA few answers to take another look at:\n' + groupReviseLines(reviseFlags).map((l) => `- ${l}`).join('\n') + '\n'
+          : '') +
+        (confirmFlags.length
+          ? '\nAnd a couple of things to confirm:\n' + confirmFlags.map((f) => `- ${confirmLine(f)}`).join('\n') + '\n'
+          : '')) +
+      '\nJust let me know if any of these don\'t apply.\n\n' +
       `Thanks!\n${signer}`;
   } else {
     // Nothing to chase: no missing docs (TO REQUEST FROM LISTING SIDE is "(none)"), no responses
@@ -4954,7 +4975,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { claimsPresentFormMissing, historicalFormCodes, isSellerAddendum, splitLeasePaperwork, isLeaseDocument, applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { formMatchesKey, findOutdatedForms, claimsPresentFormMissing, historicalFormCodes, isSellerAddendum, splitLeasePaperwork, isLeaseDocument, applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
