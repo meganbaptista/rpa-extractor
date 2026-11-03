@@ -4626,16 +4626,6 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     console.log(`[disclosure-intake] dropped ${detailOnly.length} "explanation could say more" flag(s), the `
       + `explanation answers the question: ${detailOnly.map((f) => [f.form, f.item].filter(Boolean).join(' ')).join(', ')}`);
   }
-  /*
-    LPD 1A IS HERS TO DECIDE (Megan, 2026-11-03, 533 Lincoln: "techincally it
-    should i just have never been so nitpicky"). Whether the seller knows of
-    lead-based paint goes to CHECK BEFORE SENDING, not the agent's email; 1B,
-    a report provided but not listed, is still asked.
-  */
-  const isLpd1A = (f) => /^lpd$/i.test(String(f && f.form || '').trim()) && /^1\s*\(?a\)?$/i.test(String(f && f.item || '').trim());
-  for (const f of allFlags.filter(isLpd1A)) {
-    verify.push({ item: 'LPD 1A', note: `${String(f.reason || 'the answer may not match the lead report').replace(/\s*[\u2013\u2014]\s*/g, ', ').replace(/[.\s]+$/, '')}. Not in the email; add it if this deal warrants it` });
-  }
   const followUps = allFlags.filter(isBlankFollowUpOnly);
   if (followUps.length) console.log(`[disclosure-intake] dropped ${followUps.length} "unanswered" flag(s) about a blank follow-up line under a marked question`);
   // One line per question (agent-voice onePerQuestion, 533 Lincoln: SPQ 5B was asked twice, the lead report three times).
@@ -4648,8 +4638,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
     && f.issue !== 'claim_explained'
     && f.issue !== 'condo_brush_exempt'
     && f.issue !== 'not_worth_chasing'
-    && f.issue !== 'scan_unconfirmed'
-    && !isLpd1A(f))));
+    && f.issue !== 'scan_unconfirmed')));
   for (const f of unseenAttachment) {
     const ref = [f.form, f.item].filter(Boolean).join(' ') || 'this item';
     verify.push({
