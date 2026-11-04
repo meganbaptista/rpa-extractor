@@ -58,7 +58,7 @@ const RX = {
   eqDisclosure: /residential earthquake risk disclosure/i,
   prelim: /prelim(?:inary)?\b.*\b(?:title|report)|clta preliminary|\bptr\b/i,
   wildfireReport: /wildfire (?:risk |disclosure )?report|fire risk report/i,
-  homeInspection: /home inspection|property inspection report|pre-?listing inspection/i,
+  homeInspection: /home inspection|property inspection report|pre-?listing inspection|general inspection/i,
   report: /\binvoice\b|change\s+order|audit\s+trail|report|inspection|estimate|proposal|letter|permit|termite|wood destroying|work order|improvement|photo|remediation|mitigation|restoration|warranty|invoice\/order|association disclosure|hoa|certificate|clearance/i,
   listingBrokerage: /affiliated business|business arrangement disclosure|hold harmless|mold disclosure|local area disclosure|brokerage|realty|real estate|sotheby|compass|coldwell|keller|truline|carolwood|seven gables/i,
   mlsOrProfile: /property details|property profile|\bmls\b|listing (?:report|detail)|vendor enhanced/i,
@@ -365,8 +365,14 @@ function planPackage(input) {
       continue;
     }
     const long = RX.homeInspection.test(x.name) || (x.pages || 0) > longPages;
-    if (long) out.attachments.push({ name: sellerReportName(x.name), src: x.src || { type: 'extra', key: x.key } });
-    else out.units.push({ section: SECTION.REPORTS, order: 0, kind: 'REPORT', code: '', label: x.name.replace(/\.pdf$/i, ''), src: x.src || { type: 'extra', key: x.key }, pages: null, file: x.name, seq: out.units.length });
+    if (long) {
+      // Its plain name, unless another attachment already has it: then its own file name, cleaned.
+      let name = sellerReportName(reportNameFromFile(x.name));
+      if (out.attachments.some((a) => a.name === name)) name = sellerReportName(reportNameFromFile(x.name, true));
+      out.attachments.push({ name, src: x.src || { type: 'extra', key: x.key } });
+    }
+    // pagesKnown: an extra's whole length (it has no page list), for the paperwork total below.
+    else out.units.push({ section: SECTION.REPORTS, order: 0, kind: 'REPORT', code: '', label: x.name.replace(/\.pdf$/i, ''), src: x.src || { type: 'extra', key: x.key }, pages: null, pagesKnown: x.pages || 0, file: x.name, seq: out.units.length });
   }
 
   // Long seller reports inside the delivery go out as separate attachments too.
@@ -376,6 +382,38 @@ function planPackage(input) {
     out.attachments.push({ name: sellerReportName(u.label), src: { ...u.src, pages: u.pages } });
     out.leftOut.push({ what: `${u.file}, p${span(u.pages)} (${u.label})`, why: `${u.label === 'Home Warranty' ? 'home warranty' : 'long seller report'}: attached separately as "${sellerReportName(u.label)}"` });
     u.section = null;
+  }
+
+  /*
+    THE SELLER'S PAPERWORK, TOGETHER AND OUT (Megan, 1120 Pan Ct, 2026-11-04:
+    "we dont want even a 100 disclosure pckage to overwhelm the client"). One
+    estimate is short, but a dozen of them, a contract and photos made 126
+    pages inline, and the team pulled them out by hand and renumbered the
+    email wrong. When what is left in the seller's documents runs past
+    longPages, all of it goes as ONE attachment, in package order, named
+    "Seller Report - Seller-Provided Documents"; long reports stay their own
+    files above. Under it, the documents stay in the package as before.
+
+    The booklet's signature page that came as its own file ("6 of 6 -
+    Homeowner's Guide - Signature.pdf") is the booklet RECEIPT, which the
+    buyer signs: an additional form, never paperwork.
+  */
+  for (const u of out.units.filter((v) => v.section === SECTION.REPORTS && v.file && /\b6\s*(?:_|-)?\s*of\s*(?:_|-)?\s*6\b/i.test(v.file) && (RX.booklet.test(v.file) || RX.bookletReceipt.test(v.file)))) {
+    u.section = SECTION.FORMS; u.kind = 'CIA'; u.label = u.file.replace(/\.pdf$/i, '');
+    out.warnings = out.warnings.filter((w) => !w.startsWith(`${u.file} p`));
+  }
+  const paperwork = out.units.filter((u) => u.section === SECTION.REPORTS);
+  const paperPages = paperwork.reduce((n, u) => n + (u.pages ? u.pages.length : u.pagesKnown || 0), 0);
+  if (paperPages > longPages) {
+    const name = 'Seller Report - Seller-Provided Documents';
+    const ordered = paperwork.slice().sort((a, b) => a.seq - b.seq);
+    out.attachments.push({ name, parts: ordered.map((u) => ({ src: u.src, pages: u.pages || null, label: u.label })) });
+    for (const u of ordered) {
+      out.leftOut.push({ what: u.pages ? `${u.file}, p${span(u.pages)} (${u.label})` : u.file, why: `the seller's paperwork (${paperPages} pages together): attached as "${name}"` });
+      u.section = null;
+    }
+    out.warnings = out.warnings.filter((w) => !ordered.some((u) => u.file && w.startsWith(`${u.file} p`)));
+    out.paperwork = { pages: paperPages, files: [...new Set(ordered.map((u) => u.file))].length, name };
   }
 
   // NHD statement: when none came separately, pull it out of the full report.
@@ -432,7 +470,7 @@ function planPackage(input) {
  */
 const REPORT_NAMES = [
   [/restor|mitigation|remediation|water damage/i, 'Restoration Report'],
-  [/home inspection|property inspection|pre-?listing inspection/i, 'Home Inspection'],
+  [/home inspection|property inspection|pre-?listing inspection|general inspection/i, 'Home Inspection'],
   [/termite|wood destroying|pest/i, 'Termite Report'],
   [/roof/i, 'Roof Report'],
   [/sewer|lateral/i, 'Sewer Report'],
@@ -450,6 +488,23 @@ function reportTitle(u, dups, files) {
   }
   for (const [rx, title] of REPORT_NAMES) if (names.some((n) => rx.test(n))) return title;
   return '';
+}
+
+/**
+ * A whole file's report name, in plain words: what REPORT_NAMES calls it, else
+ * its file name without form codes or colons (1120 Pan, 2026-11-04: "SPQ:TDS:
+ * Termite Clearance:General Inspection Pan Court 2021.pdf" would have named
+ * an attachment the buyer email refuses, form codes and all).
+ */
+function reportNameFromFile(name, fileNameOnly = false) {
+  const base = String(name || '').replace(/\.pdf$/i, '');
+  if (!fileNameOnly) for (const [rx, title] of REPORT_NAMES) if (rx.test(base)) return title;
+  return base
+    .replace(/\b(TDS|SPQ|AVIDs?|NHD|SFLS|WCMD|WHSD|SBSA|MCA|BHAA|WFDA|FHDS|DSDT|LPD|RCSD(?:-[SB])?|AAA|ABA|TOA|RFR|PSD|DIA|ESD|BIE|SXA|FIRPTA|RPA|BRBC|ADM)\b/g, ' ')
+    .replace(/[:_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s-]+|[\s-]+$/g, '')
+    .trim() || 'Seller Document';
 }
 
 function sellerReportName(name) {

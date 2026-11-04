@@ -82,5 +82,32 @@ ok('Dornoch: the BIW is always removed', `${dn.units.some((u) => /INVESTIGATION 
 ok('Dornoch: the BIE is always removed', `${dn.units.some((u) => /INVESTIGATION ELECTIONS/.test(u.label))}:${dn.leftOut.some((l) => /investigation elections \(always removed\)/.test(l.why))}`, 'false:true');
 ok('no guide label says "other documents"', [dn, w, s].some((x) => x.guide.some((g) => /other documents/i.test(g.label))), false);
 
+// ---- The seller's paperwork, together and out (1120 Pan Ct shape, 2026-11-04) ----
+{
+  const f = (n, name, pages, forms) => ({ n, name, pages, forms: forms || [{ code: '', name: name.replace(/\.pdf$/, ''), pages: Array.from({ length: pages }, (_, i) => i + 1) }] });
+  const files = [
+    f(0, '6 of 6 - Homeowner\'s Guide - Signature.pdf', 1, [{ code: '', name: 'Revised 09/10 Official C.A.R. Publication 09/10', pages: [1] }]),
+    f(1, 'Real Estate Transfer Disclosure Statement.pdf', 3, [{ code: 'TDS', name: 'REAL ESTATE TRANSFER DISCLOSURE STATEMENT', pages: [1, 2, 3] }]),
+    f(2, 'Seller Property Questionnaire.pdf', 5, [{ code: 'SPQ', name: 'SELLER PROPERTY QUESTIONNAIRE', pages: [1, 2, 3, 4, 5] }]),
+    f(3, 'Replacement.pdf', 5, [{ code: '', name: 'Estimate #1', pages: [1, 2, 3, 4, 5] }]),
+    f(4, 'Furnace.pdf', 6, [{ code: '', name: 'Estimate #2', pages: [1, 2, 3, 4, 5, 6] }]),
+    f(5, 'Pictures.pdf', 8),
+    f(6, 'Contract.pdf', 6, [{ code: '', name: 'CONTRACT FOR MOLD REMEDIATION', pages: [1, 2, 3, 4, 5, 6] }]),
+    f(7, 'Statewide Buyer and Seller Advisory.pdf', 15, [{ code: 'SBSA', name: 'STATEWIDE BUYER AND SELLER ADVISORY', pages: Array.from({ length: 15 }, (_, i) => i + 1) }]),
+  ];
+  const extras = [{ key: 'x0', name: 'Invoice - Furnace.pdf', pages: 1 }, { key: 'x1', name: 'Roof Repair Report.pdf', pages: 30 }];
+  const pan = P.planPackage({ files, extras, dropIns: {} });
+  const att = pan.attachments.map((a) => a.name);
+  ok('pan: a long report (30 pages, now counted) is its own file', att.includes('Seller Report - Roof Report'), true);
+  ok('pan: 26 pages of estimates, photos and a contract go as one file', att.includes('Seller Report - Seller-Provided Documents'), true);
+  const paper = pan.attachments.find((a) => a.name === 'Seller Report - Seller-Provided Documents');
+  ok('pan: in package order, every piece', paper && paper.parts.length, 5);
+  ok('pan: none of it left in the package', pan.units.some((u) => u.section === P.SECTION.REPORTS), false);
+  ok('pan: the booklet receipt stays (the buyer signs it)', pan.units.some((u) => u.kind === 'CIA' && /6 of 6/.test(u.label)), true);
+  ok('pan: the package is the seller forms and advisories', pan.units.map((u) => u.pages ? u.pages.length : 0).reduce((a, b) => a + b, 0), 24);
+  const small = P.planPackage({ files: files.slice(0, 4).concat(files[7]), extras: [{ key: 'x0', name: 'Invoice - Furnace.pdf', pages: 1 }], dropIns: {} });
+  ok('pan: 6 pages of paperwork stay in the package as before', small.attachments.length, 0);
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-plan checks pass');
 process.exit(failed ? 1 : 0);

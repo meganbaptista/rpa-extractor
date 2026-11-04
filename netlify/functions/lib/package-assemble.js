@@ -294,7 +294,13 @@ async function addRendered(out, buf, pageNumbers, deps, scale = RENDER_SCALE) {
 /** The plan -> package parts (in order) and attachment parts. */
 function partsFromPlan(plan) {
   const pkg = plan.units.map((u) => ({ src: u.src, pages: u.pages || u.src.pages || null, label: u.label }));
-  const attachments = plan.attachments.map((a) => ({ name: a.name, parts: [{ src: { ...a.src, pages: undefined }, pages: a.src.pages || null, label: a.name }] }));
+  // One source, or several in order (the seller's paperwork together, package-plan).
+  const attachments = plan.attachments.map((a) => ({
+    name: a.name,
+    parts: a.parts
+      ? a.parts.map((p) => ({ src: { ...p.src, pages: undefined }, pages: p.pages || p.src.pages || null, label: p.label || a.name }))
+      : [{ src: { ...a.src, pages: undefined }, pages: a.src.pages || null, label: a.name }],
+  }));
   return { pkg, attachments };
 }
 

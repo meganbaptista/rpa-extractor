@@ -154,7 +154,12 @@ async function buildForJob(ctx, deps = {}) {
   // Text facts.
   const sources = [];
   for (const f of files) sources.push({ n: f.n, name: f.name, texts: await core.pdfPageTexts(await getBytes({ type: 'file', n: f.n })) });
-  for (const x of extras) sources.push({ key: x.key, name: x.name, texts: await core.pdfPageTexts(await getBytes({ type: 'extra', key: x.key })) });
+  for (const x of extras) {
+    const texts = await core.pdfPageTexts(await getBytes({ type: 'extra', key: x.key }));
+    // Its length, so a long one goes separate and the paperwork total counts it (1120 Pan: a roof report and a 2021 inspection went inline uncounted).
+    x.pages = texts.length;
+    sources.push({ key: x.key, name: x.name, texts });
+  }
   for (const r of drop.reports) { extras.push(r); sources.push({ key: r.key, name: r.name, texts: dealTexts.get(r.src.id) || [] }); }
   const assembleDeps = { getBytes, pageTexts: core.pdfPageTexts, render: core.renderPagesAsImages, pageCount: core.pdfPageCount };
   const flags = {
