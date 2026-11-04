@@ -62,7 +62,8 @@ const STILL_WORDS = [
   [/earthquake\s+(booklet|guide)|booklet\s+receipt/i, 'the earthquake booklet receipt'],
   [/earthquake\s+hazards?\s+report|residential\s+earthquake/i, 'the earthquake risk disclosure'],
   [/solar/i, 'the solar questionnaire'],
-  [/^psd\b|pool\s+safety/i, 'the pool safety disclosure'],
+  // PSD is C.A.R.'s Parking and Storage Disclosure, not a pool form (1120 Pan, 2026-11-04: the buyer email called it "the pool safety disclosure").
+  [/^psd\b|parking\s+(and|&)\s+storage/i, 'the parking and storage disclosure'],
   [/hoa\s+(docs|documents)|association\s+documents/i, 'the homeowners association documents'],
 ];
 function localAreaWords(line) {
