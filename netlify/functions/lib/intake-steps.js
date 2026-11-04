@@ -23,6 +23,7 @@ const { buildMime } = require('./mime');
 
 const SHARE_LINK = /https?:\/\/(?:www\.)?(?:dropbox\.com\/(?:scl\/fo|scl\/fi|sh|s)\/[^\s"'<>)]+|drive\.google\.com\/(?:file\/d\/[A-Za-z0-9_-]+|open\?id=[A-Za-z0-9_-]+|uc\?[^\s"'<>)]*id=[A-Za-z0-9_-]+|drive\/(?:u\/\d+\/)?folders\/[A-Za-z0-9_-]+)[^\s"'<>)]*|docs\.google\.com\/document\/d\/[A-Za-z0-9_-]+[^\s"'<>)]*)/gi;
 const DS = require('./drive-share');
+const { auditSummary, postToKeeva } = require('./keeva-audit');
 
 /**
  * Share links in an email body: Dropbox files/folders, Google Drive files AND
@@ -365,6 +366,12 @@ async function finish(ctx) {
         inReplyTo: job.source.rfcMessageId || '',
       });
       effects.draft = (draft && draft.id) || 'created'; await saveEffects();
+    }
+    // And into Keeva, the record the team can see when the email snags (keeva-audit). Never in the way.
+    if (!effects.keeva) {
+      try {
+        if (await postToKeeva(store, auditSummary({ payload, address, job, effects }), ctx.log)) { effects.keeva = Date.now(); await saveEffects(); }
+      } catch (err) { ctx.log(`keeva-audit: ${err.message}`); }
     }
   };
 
