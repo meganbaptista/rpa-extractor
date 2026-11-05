@@ -1030,11 +1030,20 @@ const BOOKLET_NAME = /(homeowner'?s?\s*guide|environmental\s*hazards?|earthquake
 //     2026-10-23: "6 of 6 - Homeowner's Guide - Signature.pdf" was skipped as
 //     the booklet, so the Earthquake Booklet Receipt was chased while it sat
 //     in the email).
-const NEVER_BLOCK = /(\bavid\b|agent\s*visual\s*inspection|buyer'?s?\s*inspection\s*(advisory|waiver)|inspection\s*(advisory|waiver)|\bbia\b|\bbiw\b|receipt|acknowledg|signature|\b6\s*(?:_|-)?\s*of\s*(?:_|-)?\s*6\b)/i;
+//   - a FORM sent under the booklet's name (8855 St. Ives Drive, 2026-11-05:
+//     "Homeowner's Guide to Earthquake Safety (form).pdf" was the Residential
+//     Earthquake Risk Disclosure Statement, skipped unread, then asked for).
+const NEVER_BLOCK = /(\bavid\b|agent\s*visual\s*inspection|buyer'?s?\s*inspection\s*(advisory|waiver)|inspection\s*(advisory|waiver)|\bbia\b|\bbiw\b|receipt|acknowledg|signature|\b6\s*(?:_|-)?\s*of\s*(?:_|-)?\s*6\b|\(\s*form\s*\)|risk\s*disclosure|disclosure\s*statement)/i;
 
-function isBlockedName(name) {
+/** The real booklets run 40+ pages; a booklet-named file this short is a form or receipt, and is read. */
+const BOOKLET_MAX_FORM_PAGES = 4;
+
+function isBlockedName(name, pages) {
   const n = name || '';
-  return (BLOCK_NAME.test(n) || BOOKLET_NAME.test(n) || RECORD_NAME.test(n)) && !NEVER_BLOCK.test(n);
+  if (NEVER_BLOCK.test(n)) return false;
+  if (BLOCK_NAME.test(n) || RECORD_NAME.test(n)) return true;
+  // Named like a booklet: blocked only when it is booklet-length (or the length is unknown).
+  return BOOKLET_NAME.test(n) && !(pages > 0 && pages <= BOOKLET_MAX_FORM_PAGES);
 }
 
 // Diagnostic: short, log-safe description of what we actually fetched.
@@ -1212,7 +1221,7 @@ async function loadDocuments(documents, report = null) {
       // zip branch above has always filtered them; the single-attachment path did
       // not, so anything emailed as a loose attachment (the common case) bypassed
       // the blocklist entirely and was billed in full.
-      if (isBlockedName(name)) { console.log(`[disclosure-intake] ${name} blocked (non-disclosure), skipping`); skip(name, 'not reviewed by rule (booklet, report or record, by its file name)', false, buf); continue; }
+      if (isBlockedName(name, BOOKLET_NAME.test(name) ? await pdfPageCount(buf).catch(() => 0) : 0)) { console.log(`[disclosure-intake] ${name} blocked (non-disclosure), skipping`); skip(name, 'not reviewed by rule (booklet, report or record, by its file name)', false, buf); continue; }
       if (buf.length > MAX_DOC_BYTES) { console.warn(`[disclosure-intake] ${name} too large (${buf.length}B), skipping`); skip(name, `too large to review (${Math.round(buf.length / 1048576)}MB)`, false, buf); continue; }
       out.push({ name, base64: buf.toString('base64') });
     } catch (err) {
@@ -1602,7 +1611,9 @@ const ANSWER_REVIEW_PROMPT =
   '"the seller indicates they occupy the property") so the request is not vague. Flag a REAL conflict only, do not ' +
   'invent one. Real example: SPQ 18E marked "property is tenant occupied = Yes" conflicts with the TDS where the ' +
   'seller indicates they occupy the property. If you cannot point to a concrete conflicting answer on a specific ' +
-  'form, do not use this type.\n' +
+  'form, do not use this type. The two answers must be about the SAME thing: TDS C8 asks only about flooding, ' +
+  'drainage or grading problems, so a leak through a roof, deck, window, pipe or appliance disclosed on SPQ 10A is ' +
+  'NOT a reason to change C8; only flooding, drainage, grading, standing water or runoff is.\n' +
   '  - "document" (a supporting document in the package contradicts it): set "document" = the doc (e.g. "a WBSA ' +
   '(Wooden Balconies and Stairs Addendum)") and "should_be".\n' +
   '  - "transaction" (information elsewhere in the transaction contradicts it): set "source" = one of MLS, title, ' +
@@ -3634,6 +3645,22 @@ function claimsPresentFormMissing(flag, presentCodes) {
   return '';
 }
 
+// TDS C8 ASKS ABOUT FLOODING, DRAINAGE OR GRADING, not every kind of water
+// (8855 St. Ives Drive, 2026-11-05: SPQ 10A's "garage from upper deck ... leaking
+// from a/c unit" was turned into "TDS C8: recommend revising to Yes", and Megan:
+// "10A doesn't match what C8 is asking for"). A leak through a deck, roof,
+// pipe or appliance is SPQ 10A's business, not C8's. A request to make C8 a
+// Yes stands only when its reason describes C8's own subject.
+const RX_C8_SUBJECT = /\b(flood\w*|drainage|drain(?:s|ing)?\s+(?:issue|problem|toward|into|onto)|grad(?:e|ing)\b|standing\s+water|ponding|pond(?:s|ed)?\b|run-?off|erosion|slope\s+(?:issue|problem|failure)|sump\s+pump)/i;
+function c8WithoutItsSubject(flag) {
+  if (!flag) return false;
+  const form = String(flag.form || '').toUpperCase();
+  const item = String(flag.item || '').toUpperCase().replace(/\s+/g, '');
+  if (form !== 'TDS' || item !== 'C8') return false;
+  if (flag.issue !== 'answer_contradicts_package') return false;
+  return !RX_C8_SUBJECT.test(`${flag.reason || ''} ${flag.document || ''}`);
+}
+
 function citesAnUnseenAttachment(flag) {
   if (!flag) return false;
   const reason = String(flag.reason || '');
@@ -4503,6 +4530,11 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
       const code = claimsPresentFormMissing(f, presentCodes);
       if (code) console.log(`[disclosure-intake] ${address}: dropped "${f.form} ${f.item}": it says no ${code} is included, but the package has one`);
       return !code;
+    })
+    .filter((f) => {
+      const off = c8WithoutItsSubject(f);
+      if (off) console.log(`[disclosure-intake] ${address}: dropped "TDS C8": its reason is not flooding, drainage or grading (${String(f.reason || '').slice(0, 120)})`);
+      return !off;
     });
   // A flag claiming a cited attachment is absent is a claim the review cannot
   // support (see citesAnUnseenAttachment). Retag before the filtering below so it
@@ -4975,7 +5007,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { formMatchesKey, findOutdatedForms, claimsPresentFormMissing, historicalFormCodes, isSellerAddendum, splitLeasePaperwork, isLeaseDocument, applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { c8WithoutItsSubject, formMatchesKey, findOutdatedForms, claimsPresentFormMissing, historicalFormCodes, isSellerAddendum, splitLeasePaperwork, isLeaseDocument, applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
