@@ -115,7 +115,22 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
   const firmFile = firmWord ? pdfs.find((f) => new RegExp(`^${firmWord.replace(/[^A-Za-z0-9]/g, '')}\\b.*\\b(disc|disclosures?)\\b`, 'i').test(f.name || '')) : null;
 
   // Template: our brokerage pages + missing standard forms.
-  const signedWithOffer = pdfs.filter((f) => /\(need s\)/i.test(f.name || ''));
+  /*
+    SIGNED WITH THE OFFER only when the "(NEED S)" file HOLDS our brokerage's
+    forms (8855 St. Ives Drive, 2026-11-05: "CONTRACT (NEED S).pdf", the
+    purchase contract waiting on the seller, kept every Compass disclosure out;
+    Megan: "no compass disclosures were added"). Its text must name our
+    brokerage or one of the template's brokerage forms; unread, it does not
+    count.
+  */
+  const brokerageTitles = (template && template.forms ? template.forms.filter((f) => !f.code && f.name) : []).map((f) => String(f.name).toLowerCase().slice(0, 40));
+  // A C.A.R. page (the contract itself) names the buyer's brokerage too, so only a page that is not one counts.
+  const holdsOurForms = (f) => (f.texts || []).some((t) => {
+    const text = String(t.text || '').toLowerCase();
+    if (/california association of realtors/.test(text)) return false;
+    return (firmWord && new RegExp(`\\b${firmWord.replace(/[^A-Za-z0-9]/g, '')}\\b`, 'i').test(text)) || brokerageTitles.some((title) => title.length > 8 && text.includes(title));
+  });
+  const signedWithOffer = pdfs.filter((f) => /\(need s\)/i.test(f.name || '') && holdsOurForms(f));
   // The firm's own file counts with or without a template.
   if (firmFile && !(template && template.forms && template.forms.length)) {
     if (signedWithOffer.length) notes.push(`our brokerage's forms were signed with the offer (${signedWithOffer.map((f) => f.name).join(', ')}): not added again`);

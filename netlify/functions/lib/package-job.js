@@ -129,7 +129,9 @@ async function buildForJob(ctx, deps = {}) {
     const plain = D.planDropIns({ dealFiles, deliveredCodes, wantedCodes: inputs.wantedCodes, buyerBrokerage: inputs.brokerage });
     // Read only what the drop-ins use: MLS (footer pages) and seller reports (duplicate check).
     const agencyId = (plain.dropIns.ourBrokerage || []).map((b) => b.src && b.src.id).find((id) => id && /^blank\s+(aaa|ac|aba)/i.test((dealFiles.find((x) => x.id === id) || {}).name || ''));
-    const needText = [plain.dropIns.mls && plain.dropIns.mls.id, agencyId, ...plain.reports.map((r) => r.src.id)].filter(Boolean);
+    // And every "(NEED S)" file: whether it holds our brokerage's forms is read from its text (package-dropins).
+    const needS = dealFiles.filter((f) => /\(need s\)/i.test(f.name || '')).map((f) => f.id);
+    const needText = [...new Set([plain.dropIns.mls && plain.dropIns.mls.id, agencyId, ...plain.reports.map((r) => r.src.id), ...needS].filter(Boolean))];
     for (const id of needText) {
       const t = await core.pdfPageTexts(await getBytes({ type: 'drive', id }));
       dealTexts.set(id, t);

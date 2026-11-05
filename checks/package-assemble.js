@@ -141,10 +141,16 @@ const lorem = (seed, n = 60) => Array.from({ length: n }, (_, i) => `word${seed}
   ok('no AVID in the deal folder = none added', d1.dropIns.ourAvid, null);
   ok('our BLANK AVID in the deal folder is added (blank is correct)', (D.planDropIns({ dealFiles: [{ id: 'ab', name: 'Our AVID - Blank.pdf', pages: 3 }] }).dropIns.ourAvid || {}).id, 'ab');
   ok('only the termite report is a deal-folder seller report', d1.reports.map((r) => r.name).join(), 'Termite Inspection.pdf');
-  const d2 = D.planDropIns({ dealFiles: dealFiles.concat([{ id: 'n', name: 'SIDE MCA (NEED S).pdf', pages: 6 }, { id: 'av', name: 'AVID - Buyer Agent.pdf', pages: 3 }]), template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
+  const d2 = D.planDropIns({ dealFiles: dealFiles.concat([{ id: 'n', name: 'SIDE MCA (NEED S).pdf', pages: 6, texts: [{ num: 1, text: 'SIDE, Inc. Affiliated Business Arrangement Disclosure. Buyer signature' }] }, { id: 'av', name: 'AVID - Buyer Agent.pdf', pages: 3 }]), template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
   ok('brokerage forms signed with the offer are not added again', d2.dropIns.ourBrokerage.length, 0);
   ok('a filled AVID in the deal folder is added', d2.dropIns.ourAvid && d2.dropIns.ourAvid.id, 'av');
   ok('the NEED S file is not a seller report', d2.reports.some((r) => /NEED S/.test(r.name)), false);
+  // 8855 St. Ives Drive (2026-11-05): a "(NEED S)" CONTRACT waiting on the seller is not our forms signed with the offer.
+  const contractOnly = [{ id: 'c', name: 'CONTRACT (NEED S).pdf', pages: 3, texts: [{ num: 1, text: 'CALIFORNIA RESIDENTIAL PURCHASE AGREEMENT. Buyer Brokerage Firm Compass. California Association of REALTORS' }] }];
+  const dSt = D.planDropIns({ dealFiles: dealFiles.concat(contractOnly), template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
+  ok('a contract waiting on the seller does not keep our brokerage forms out', dSt.dropIns.ourBrokerage.length > 0, true);
+  const dUnread = D.planDropIns({ dealFiles: dealFiles.concat([{ id: 'u', name: 'CONTRACT (NEED S).pdf', pages: 3 }]), template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
+  ok('an unread (NEED S) file does not count either', dUnread.dropIns.ourBrokerage.length > 0, true);
   const d3 = D.planDropIns({ dealFiles, template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Rodeo Realty' });
   ok("template pages that do not name the buyer's brokerage are warned", d3.warnings.some((w) => /do not name Rodeo Realty/.test(w)), true);
 
