@@ -77,7 +77,8 @@ async function buildForJob(ctx, deps = {}) {
   const { store, job, core, drive } = ctx;
   const address = job.address;
   if (!address) return { skip: 'no address' };
-  const side = await (deps.side || require('./deal-side').sideForSubject)(address);
+  // Keeva's own record first, her sheet as the fallback (deal-side sideForDeal, 2026-11-05).
+  const side = await (deps.side || require('./deal-side').sideForDeal)(address, store);
   if (side !== 'buyer') return { skip: `not a buyer-side deal (${side || 'side unknown or dual'})` };
 
   // Compliance Doc.

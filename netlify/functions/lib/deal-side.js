@@ -162,8 +162,11 @@ function targetTabs(existingTabs) {
   const explicit = process.env.DEALS_SHEET_TAB;
   if (explicit) return existingTabs.includes(explicit) ? [explicit] : [];
   if (process.env.DEALS_YEAR_TABS === 'false') return existingTabs.slice(0, 1);
+  // NEXT YEAR TOO (Megan, 2026-11-05, 8855 St. Ives Drive: "it wasnt syncing
+  // any deals that close in 2027"): a deal sits on the tab of the year it
+  // closes, so from autumn on, new deals land on next year's tab.
   const year = new Date().getFullYear();
-  return [String(year), String(year - 1)].filter((t) => existingTabs.includes(t));
+  return [String(year + 1), String(year), String(year - 1)].filter((t) => existingTabs.includes(t));
 }
 
 async function listTabs(id, token) {
@@ -236,4 +239,20 @@ async function sideForSubject(subject) {
   }
 }
 
-module.exports = { sideForSubject, status, _internal: { normalizeSide, addressKeyParts, loadDeals, targetTabs, parseTab } };
+/**
+ * THE DEAL'S SIDE FOR A KNOWN ADDRESS: Keeva first (keevaSide, the deal's own
+ * intake), the MTC INFORMATION sheet only when Keeva has no deal there or
+ * cannot be reached (2026-11-05). Dual is no single side, as on the sheet.
+ */
+async function sideForDeal(address, store) {
+  try {
+    const side = await require('./keeva-audit').keevaSide(store, address);
+    if (side === 'buyer' || side === 'seller') return side;
+    if (side === 'dual') return null;
+  } catch (err) {
+    console.warn(`[deal-side] Keeva not asked (${err.message}); using the sheet`);
+  }
+  return sideForSubject(address);
+}
+
+module.exports = { sideForSubject, sideForDeal, status, _internal: { normalizeSide, addressKeyParts, loadDeals, targetTabs, parseTab } };

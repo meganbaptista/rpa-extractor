@@ -46,4 +46,22 @@ async function postToKeeva(store, summary, log = console.log) {
   return true;
 }
 
-module.exports = { auditSummary, postToKeeva };
+/*
+  WHICH SIDE WE ARE ON, ASKED OF KEEVA (Megan, 2026-11-05, 8855 St. Ives Drive:
+  the side came from her income sheet, which never read its 2027 tab; "should
+  we move it somewhere else?"). Keeva's functions/deal-side answers from the
+  deal's own intake, with the same key as the audit. 'buyer' | 'seller' |
+  'dual', or null when Keeva has no deal at that address (or cannot be asked).
+*/
+async function keevaSide(store, address) {
+  const conf = store ? await store.get('meta/keeva-audit', { type: 'json' }).catch(() => null) : null;
+  const key = ((conf && conf.key) || process.env.KEEVA_AUDIT_KEY || '').trim();
+  if (!key || !address) return null;
+  const base = ((conf && conf.url) || process.env.KEEVA_AUDIT_URL || KEEVA_URL).trim().replace(/audit-result\/?$/, 'deal-side');
+  const res = await fetch(`${base}?address=${encodeURIComponent(address)}`, { headers: { 'x-keeva-audit-key': key } });
+  if (!res.ok) throw new Error(`Keeva answered ${res.status}`);
+  const data = await res.json().catch(() => ({}));
+  return ['buyer', 'seller', 'dual'].includes(data.side) ? data.side : null;
+}
+
+module.exports = { auditSummary, postToKeeva, keevaSide };

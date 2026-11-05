@@ -24,5 +24,25 @@ ok('flooding is C8', c8('SPQ 10A discloses flooding in the backyard'), false);
 ok('drainage is C8', c8('SPQ 10A notes standing water and drainage toward the garage'), false);
 ok('other items untouched', I.c8WithoutItsSubject({ form: 'TDS', item: 'C9', issue: 'answer_contradicts_package', reason: 'a leak' }), false);
 
-console.log(failed ? `\n${failed} check(s) FAILED` : '\nall St. Ives checks pass');
-process.exit(failed ? 1 : 0);
+// 3. The deal's side: a deal closing next year is on next year's tab ("it wasnt syncing any deals that close in 2027").
+const S = require('../netlify/functions/lib/deal-side.js')._internal;
+const y = new Date().getFullYear();
+ok("next year's tab is read", S.targetTabs([String(y - 1), String(y), String(y + 1)]).includes(String(y + 1)), true);
+ok('this year and last still read', S.targetTabs([String(y - 1), String(y)]).length, 2);
+
+// 4. Keeva answers the side first (2026-11-05: "should we move it somewhere else?").
+(async () => {
+  const KA = require('../netlify/functions/lib/keeva-audit.js');
+  const store = { get: async () => ({ key: 'k', url: 'https://keeva.example/.netlify/functions/audit-result' }) };
+  const realFetch = global.fetch;
+  let asked = '';
+  global.fetch = async (url, opts) => { asked = `${url} ${opts.headers['x-keeva-audit-key']}`; return { ok: true, json: async () => ({ side: 'buyer' }) }; };
+  ok('Keeva says buyer', await KA.keevaSide(store, '8855 St. Ives Drive'), 'buyer');
+  ok('asked deal-side with the key', asked, 'https://keeva.example/.netlify/functions/deal-side?address=8855%20St.%20Ives%20Drive k');
+  global.fetch = async () => ({ ok: true, json: async () => ({ side: null }) });
+  ok('Keeva has no deal: null (the sheet decides)', await KA.keevaSide(store, '1 Nowhere'), null);
+  ok('no key: not asked', await KA.keevaSide({ get: async () => null }, '1 Main'), null);
+  global.fetch = realFetch;
+  console.log(failed ? `\n${failed} check(s) FAILED` : '\nall St. Ives checks pass');
+  process.exit(failed ? 1 : 0);
+})();
