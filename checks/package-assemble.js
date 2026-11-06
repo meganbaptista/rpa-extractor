@@ -151,6 +151,17 @@ const lorem = (seed, n = 60) => Array.from({ length: n }, (_, i) => `word${seed}
   ok('a contract waiting on the seller does not keep our brokerage forms out', dSt.dropIns.ourBrokerage.length > 0, true);
   const dUnread = D.planDropIns({ dealFiles: dealFiles.concat([{ id: 'u', name: 'CONTRACT (NEED S).pdf', pages: 3 }]), template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
   ok('an unread (NEED S) file does not count either', dUnread.dropIns.ourBrokerage.length > 0, true);
+  // 1120 S Lucerne Blvd (2026-11-05): Compass on both sides; their delivery already has Compass's disclosures.
+  {
+    const both = D.planDropIns({ dealFiles, template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
+    const before = both.dropIns.ourBrokerage.filter((b) => b.kind === 'brokerage').length;
+    D.dropDeliveredBrokerage(both, [{ text: 'SIDE, Inc. Affiliated Business Arrangement Disclosure Statement' }, { text: 'TRANSFER DISCLOSURE STATEMENT ... California Association of REALTORS' }], 'Side');
+    ok('same brokerage, theirs delivered: ours not added again', before > 0 && both.dropIns.ourBrokerage.every((b) => b.kind !== 'brokerage'), true);
+    ok('and it says so', both.notes.some((n) => /already has them/.test(n)), true);
+    const other = D.planDropIns({ dealFiles, template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
+    D.dropDeliveredBrokerage(other, [{ text: 'Compass Affiliated Business Arrangement Disclosure' }, { text: 'Buyer Brokerage Firm SIDE ... California Association of REALTORS' }], 'Side');
+    ok('another brokerage delivered (or ours only on a C.A.R. page): ours still added', other.dropIns.ourBrokerage.some((b) => b.kind === 'brokerage'), true);
+  }
   const d3 = D.planDropIns({ dealFiles, template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Rodeo Realty' });
   ok("template pages that do not name the buyer's brokerage are warned", d3.warnings.some((w) => /do not name Rodeo Realty/.test(w)), true);
 

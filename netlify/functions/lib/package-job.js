@@ -163,6 +163,8 @@ async function buildForJob(ctx, deps = {}) {
     x.pages = texts.length;
     sources.push({ key: x.key, name: x.name, texts });
   }
+  // Same brokerage on both sides: theirs is already in the delivery, ours is not added again (1120 S Lucerne, 2026-11-05).
+  D.dropDeliveredBrokerage(drop, sources.flatMap((s) => s.texts || []), inputs.brokerage);
   for (const r of drop.reports) { extras.push(r); sources.push({ key: r.key, name: r.name, texts: dealTexts.get(r.src.id) || [] }); }
   const assembleDeps = { getBytes, pageTexts: core.pdfPageTexts, render: core.renderPagesAsImages, pageCount: core.pdfPageCount };
   const flags = {

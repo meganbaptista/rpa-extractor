@@ -134,7 +134,7 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
   // The firm's own file counts with or without a template.
   if (firmFile && !(template && template.forms && template.forms.length)) {
     if (signedWithOffer.length) notes.push(`our brokerage's forms were signed with the offer (${signedWithOffer.map((f) => f.name).join(', ')}): not added again`);
-    else dropIns.ourBrokerage.push({ label: firmFile.name.replace(/(\.pdf)+$/i, ''), src: { type: 'drive', id: firmFile.id, name: firmFile.name }, pages: null });
+    else dropIns.ourBrokerage.push({ kind: 'brokerage', label: firmFile.name.replace(/(\.pdf)+$/i, ''), src: { type: 'drive', id: firmFile.id, name: firmFile.name }, pages: null });
   }
   if (template && template.forms && template.forms.length) {
     const src = { type: 'drive', id: template.id, name: template.name };
@@ -143,7 +143,7 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
     const brokerage = forms.filter((f) => !f.code && f.pages[0] > lastCar && !LOCAL_AREA.test(f.name || ''));
     if (firmFile) {
       if (signedWithOffer.length) notes.push(`our brokerage's forms were signed with the offer (${signedWithOffer.map((f) => f.name).join(', ')}): not added again`);
-      else dropIns.ourBrokerage.push({ label: firmFile.name.replace(/(\.pdf)+$/i, ''), src: { type: 'drive', id: firmFile.id, name: firmFile.name }, pages: null });
+      else dropIns.ourBrokerage.push({ kind: 'brokerage', label: firmFile.name.replace(/(\.pdf)+$/i, ''), src: { type: 'drive', id: firmFile.id, name: firmFile.name }, pages: null });
     } else if (brokerage.length) {
       if (signedWithOffer.length) {
         notes.push(`our brokerage's forms were signed with the offer (${signedWithOffer.map((f) => f.name).join(', ')}): not added again`);
@@ -154,7 +154,7 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
           || (template.texts || []).some((t) => pagesOf.has(t.num) && word.test(t.text || '')));
         if (buyerBrokerage && !named) warnings.push(`the template's brokerage pages do not name ${buyerBrokerage}: check they are the buyer agent's brokerage before sending`);
         const pages = brokerage.flatMap((f) => f.pages).sort((a, b) => a - b);
-        dropIns.ourBrokerage.push({ label: `${buyerBrokerage || 'Our brokerage'} forms (template)`, src, pages });
+        dropIns.ourBrokerage.push({ kind: 'brokerage', label: `${buyerBrokerage || 'Our brokerage'} forms (template)`, src, pages });
       }
     }
     // Forms our buyer already signed with the offer are filed "FX - SBSA" (or
@@ -191,4 +191,28 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
   return { dropIns, reports, warnings, notes };
 }
 
-module.exports = { planDropIns, range };
+/**
+ * THE SAME BROKERAGE ON BOTH SIDES (Megan, 2026-11-05, 1120 S Lucerne Blvd:
+ * "the listing agent is compass and so are we on the buyer side, so we didn't
+ * need to add the duplicate compass disclosures into the disclosures PDF,
+ * since they were already there"). When the listing side's delivery already
+ * holds pages naming our buyer's brokerage that are not C.A.R. forms, our
+ * brokerage's own pages are not added again. The agency forms (AAA/AC/ABA)
+ * name our own agents and keep their own duplicate check.
+ * deliveredTexts: [{ text }] pages of the delivered files.
+ */
+function dropDeliveredBrokerage(drop, deliveredTexts, buyerBrokerage) {
+  const firmWord = String(buyerBrokerage || '').replace(/^\s*the\s+/i, '').split(/\s+/)[0].replace(/[^A-Za-z0-9]/g, '');
+  if (!firmWord || !drop || !drop.dropIns || !(drop.dropIns.ourBrokerage || []).some((b) => b.kind === 'brokerage')) return drop;
+  const word = new RegExp(`\\b${firmWord}\\b`, 'i');
+  const there = (deliveredTexts || []).some((t) => {
+    const text = String((t && t.text) || '');
+    return word.test(text) && !/california association of realtors/i.test(text) && /disclos|advisory|affiliat|notice/i.test(text);
+  });
+  if (!there) return drop;
+  drop.dropIns.ourBrokerage = drop.dropIns.ourBrokerage.filter((b) => b.kind !== 'brokerage');
+  (drop.notes = drop.notes || []).push(`${buyerBrokerage}'s own disclosures not added: the listing side's delivery already has them (same brokerage on both sides)`);
+  return drop;
+}
+
+module.exports = { planDropIns, dropDeliveredBrokerage, range };
