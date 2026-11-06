@@ -4277,8 +4277,18 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   const debugContext = `yearBuilt=${ctx.yearBuilt} hasHoa=${ctx.hasHoa} highFireHazard=${ctx.highFireHazard} brushExempt=${brushExempt} spq_7e=${ka.spq_7e}(->${sev || 'na'}) hoa_any_no=${ka.hoa_any_no} fire_clearance=${ka.fire_clearance || 'na'}(->${fireSev || 'na'})(${ka.fire_clearance_item || '?'}) fhds=${ka.fhds || 'na'}`;
   console.log(`[disclosure-intake] context check ${address}: ${debugContext}`);
   const ctxFlags = [];
+  const ctxVerify = [];
   const hasFlag = (re) => (Array.isArray(responseFlags) ? responseFlags : []).some((f) => re.test(`${f.form || ''} ${f.item || ''} ${f.reason || ''}`));
-  if (ctx.yearBuilt && sev && !hasFlag(/7e/i)) {
+  /*
+    A YEAR BUILT OF THIS YEAR OR LATER IS NOT TRUSTED (1120 S Lucerne Blvd,
+    2026-11-05: the deal said 2026, the seller had filled out the earthquake
+    risk statement for an older home, and the email told them to change SPQ 7E
+    to No). A typo of the current year reads as brand new, so it is a question
+    for the team, never a correction sent to the seller.
+  */
+  if (ctx.yearBuilt && ctx.yearBuilt >= new Date().getFullYear() && sev === 'yes' && !hasFlag(/7e/i)) {
+    ctxVerify.push({ item: 'SPQ 7E', note: `answered Yes (built before 1978), but the deal says year built ${ctx.yearBuilt}. Check the year built on the deal before asking the seller to change it` });
+  } else if (ctx.yearBuilt && sev && !hasFlag(/7e/i)) {
     if (ctx.yearBuilt >= 1978 && sev === 'yes') {
       ctxFlags.push({ form: 'SPQ', item: '7E', issue: 'answer_contradicts_package', discrepancy_type: 'incorrect', marked: 'Yes', should_be: 'No', reason: `the property was built in ${ctx.yearBuilt}` });
     } else if (ctx.yearBuilt < 1978 && sev === 'no') {
@@ -4337,6 +4347,7 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
   }
 
   let verify = rewriteCodeRemarks(Array.isArray(result.verify) ? result.verify : []);
+  verify.push(...ctxVerify);
   const na = Array.isArray(result.not_applicable) ? result.not_applicable : [];
 
   // Resolve the compliance list's "Confirm X marked YES" items ourselves from the
