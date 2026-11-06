@@ -30,11 +30,18 @@
 // ---------------------------------------------------------------------------
 // What a form IS, from its code or title.
 
+/*
+  THE ORDER (Megan, 2026-11-05, 1120 S Lucerne: "it should be seller
+  disclosures, then AVID, then supplemental disclosures, advisories and broker
+  disclosures"; the WCMD and the booklet receipt had come before the AVID):
+  the AVIDs follow the seller's TDS/SPQ directly, ahead of the seller's
+  documents and the other forms.
+*/
 const SECTION = {
   SELLER: 1,       // TDS, SPQ and their overflow / addenda
-  REPORTS: 2,      // reports and documents from the seller
-  FORMS: 3,        // NHD statement, FHDS, SFLS, PSD, LPD, WCMD, WHSD ...
-  AVIDS: 4,
+  AVIDS: 2,
+  REPORTS: 3,      // reports and documents from the seller
+  FORMS: 4,        // NHD statement, FHDS, SFLS, PSD, LPD, WCMD, WHSD ...
   ADVISORIES: 5,   // listing brokerage's own forms first, then C.A.R.
   OURS: 6,         // our brokerage's pages (drop-ins)
   OTHER: 7,        // contract / escrow items and anything else, at the end
@@ -43,7 +50,7 @@ const SECTION = {
 // Real lengths of single-page C.A.R. forms the map tends to over-extend.
 const KNOWN_LEN = { TOA: 1, ADM: 1, APD: 1, WCMD: 1, WHSD: 1, SFLS: 1, PSD: 1, SPT: 1, WFA: 1, AEA: 1, AC: 1, AAA: 1 };
 
-const ADDITIONAL_FORM_CODES = new Set(['FHDS', 'SFLS', 'PSD', 'LPD', 'WCMD', 'WHSD', 'TA', 'SOLAR', 'WBSA', 'RCSD', 'RCSD-S', 'ESD', 'SPRP', 'EQ']);
+const ADDITIONAL_FORM_CODES = new Set(['FHDS', 'SFLS', 'PSD', 'LPD', 'WCMD', 'WHSD', 'TA', 'SOLAR', 'WBSA', 'RCSD', 'RCSD-S', 'ESD', 'SPRP', 'EQ', 'SWPI']);
 const ADVISORY_CODES = new Set(['MCA', 'SBSA', 'WFDA', 'BHAA', 'DIA', 'FHDA', 'WFA', 'AC', 'AAA', 'PVOH', 'RPOA', 'SVRA', 'ABA', 'BIA', 'HOA', 'DBD']);
 // AS = the seller's FIRPTA affidavit of non-foreign status (86 Dornoch: it sat
 // with the advisories); escrow items go at the end, pointed out.
@@ -77,14 +84,14 @@ function classify(unit) {
   if (code === 'BIE' || /buyer.?s? investigation elections?/i.test(name)) return { leave: 'buyer investigation elections (always removed)' };
   // Counter offers are contract items: never in the package (3345 Rubio).
   if (/^(SCO|SMCO|BCO|MCO|BCOU|SCOU)$/.test(code) || /\bcounter\s*offer\b/i.test(name)) return { leave: 'counter offer: a contract item, yours to handle (not in the package)', warn: true };
-  if (code === 'TDS') return { section: SECTION.SELLER, order: 0, kind: 'TDS' };
+  if (code === 'TDS' || code === 'MHTDS') return { section: SECTION.SELLER, order: 0, kind: 'TDS' };
   // The seller's own written disclosures ("Disclosures regarding 3345 Rubio
   // Crest Drive, Altadena (revised 10-26)") belong with the TDS and SPQ.
   if (!code && /^\s*(?:seller'?s?\s+)?(?:additional\s+)?disclosures?\s+(?:regarding|for|re:?)\b/i.test(name)) return { section: SECTION.SELLER, order: 2, kind: 'SELLER_WRITTEN' };
   // The listing side's own property printout ("PROPERTY TAX RECORDS", 3345
   // Rubio) is their property profile: it sits with the SFLS, ours is not added.
   if (!code && /^\s*property\s+tax\s+records?\b/i.test(name)) return { section: SECTION.FORMS, kind: 'LISTING_PROFILE' };
-  if (code === 'SPQ') return { section: SECTION.SELLER, order: 1, kind: 'SPQ' };
+  if (code === 'SPQ' || code === 'CSPQ' || code === 'VLQ') return { section: SECTION.SELLER, order: 1, kind: 'SPQ' };
   if (code === 'TOA' || code === 'ADM' || code === 'APD') return { kind: 'ADDENDUM' };   // follows the form before it
   if (code === 'AVID') return { section: SECTION.AVIDS, kind: 'AVID' };
   if (RX.nhdStatement.test(name) && pages <= 3) return { section: SECTION.FORMS, kind: 'NHD_STATEMENT' };
@@ -398,7 +405,9 @@ function planPackage(input) {
     Homeowner's Guide - Signature.pdf") is the booklet RECEIPT, which the
     buyer signs: an additional form, never paperwork.
   */
-  for (const u of out.units.filter((v) => v.section === SECTION.REPORTS && v.file && /\b6\s*(?:_|-)?\s*of\s*(?:_|-)?\s*6\b/i.test(v.file) && (RX.booklet.test(v.file) || RX.bookletReceipt.test(v.file)))) {
+  // Also a file named as the hazard / booklet receipt ("35_-_Hazard_Receipt - need Buyer.pdf", 1120 S Lucerne).
+  const receiptFile = (f) => (/\b6\s*(?:_|-)?\s*of\s*(?:_|-)?\s*6\b/i.test(f) && (RX.booklet.test(f) || RX.bookletReceipt.test(f))) || /(hazard|booklet)[\s_-]*receipt/i.test(f);
+  for (const u of out.units.filter((v) => v.section === SECTION.REPORTS && v.file && receiptFile(v.file))) {
     u.section = SECTION.FORMS; u.kind = 'CIA'; u.label = u.file.replace(/\.pdf$/i, '');
     out.warnings = out.warnings.filter((w) => !w.startsWith(`${u.file} p`));
   }
@@ -440,6 +449,23 @@ function planPackage(input) {
     out.units.push({ section: c.section || SECTION.ADVISORIES, order: c.order || 0, kind: c.kind || f.code, code: f.code, label: f.label, src: f.src, pages: f.pages || null, file: 'Audit Disclosures template', seq: out.units.length });
   }
   for (const b of d.ourBrokerage || []) out.units.push({ section: SECTION.OURS, order: 0, kind: 'OURS', label: b.label, src: b.src, pages: b.pages, seq: out.units.length });
+
+  /*
+    THE FRONT OF THE PACKAGE, IN HER ORDER (Megan, 2026-11-05: "default order
+    should be TDS, SPQ, (addendums extras to the SPQ), EQ Risk Statement,
+    Solar, SWPI, FHDS, SFLS, prop profile, MLS, then...AVIDS...then the rest";
+    the NHD statement "right before the FHDS"; "PSD, that can go after the
+    SPQ"). The seller's own written disclosures follow the SPQ; WBSA with the
+    SWPI; LPD and WHSD/WCMD close the group. Every one of these sits in the
+    seller's section, before the AVIDs; the rest (the seller's documents and
+    reports, the booklet receipt, advisories, brokerage) follows the AVIDs.
+  */
+  for (const u of out.units) {
+    const r = frontRank(u);
+    if (r == null || !u.section) continue;
+    u.section = SECTION.SELLER;
+    u.order = r;
+  }
 
   // Order: section, then within section the rulebook's sub-order.
   const formRank = (u) => {
@@ -544,25 +570,51 @@ function otherLabel(units) {
  * conversational ("Documents from the seller and additional forms", "Standard
  * advisories" read flippant to a buyer; Megan, 3725 Ramboz, 2026-10-28).
  */
+/** Where a unit sits in the front group (frontRank order), or null when it is not one of them. */
+const FRONT = [
+  [(u) => u.code === 'ESD', 0],
+  [(u) => u.kind === 'TDS', 1],
+  [(u) => u.kind === 'SPQ', 2],
+  [(u) => u.kind === 'SELLER_WRITTEN' || /seller'?s?\s+supplemental\s+disclosure|supplemental\s+disclosure\s+addendum/i.test(u.label || ''), 3],
+  [(u) => u.code === 'PSD', 4],
+  [(u) => u.code === 'EQ' || RX.eqDisclosure.test(u.label || ''), 5],
+  [(u) => u.code === 'SOLAR', 6],
+  [(u) => u.code === 'SWPI', 7],
+  [(u) => u.code === 'WBSA', 8],
+  [(u) => u.kind === 'NHD_STATEMENT', 9],
+  [(u) => u.code === 'FHDS' || u.kind === 'FHDS', 10],
+  [(u) => u.code === 'SFLS' || u.kind === 'SFLS', 11],
+  [(u) => u.kind === 'PROFILE' || u.kind === 'LISTING_PROFILE', 12],
+  [(u) => u.kind === 'MLS', 13],
+  [(u) => u.code === 'LPD', 14],
+  [(u) => u.code === 'WHSD', 15],
+  [(u) => u.code === 'WCMD', 16],
+];
+function frontRank(u) {
+  const hit = FRONT.find(([test]) => test(u));
+  return hit ? hit[1] : null;
+}
+
 function guideSections(units) {
   const groups = [
     { secs: [SECTION.SELLER], label: 'Seller Disclosures' },
-    { secs: [SECTION.REPORTS, SECTION.FORMS, SECTION.AVIDS], label: null },
+    { secs: [SECTION.AVIDS], label: null },
+    { secs: [SECTION.REPORTS, SECTION.FORMS], label: null },
     { secs: [SECTION.ADVISORIES, SECTION.OURS], label: null },
     { secs: [SECTION.OTHER], label: null },
   ];
   const has = (s) => units.some((u) => u.section === s);
   const listingAvid = units.some((u) => u.kind === 'AVID');
   const ourAvid = units.some((u) => u.kind === 'OUR_AVID');
-  groups[1].label = joinAnd([
+  groups[1].label = listingAvid && ourAvid ? 'Agent Visual Inspection Disclosures' : listingAvid ? "Listing Agent's Visual Inspection Disclosure" : "Buyer's Agent's Visual Inspection Disclosure";
+  groups[2].label = joinAnd([
     has(SECTION.REPORTS) ? 'Seller-Provided Documents' : '',
     has(SECTION.FORMS) ? 'Supplemental Disclosures' : '',
-    has(SECTION.AVIDS) ? (listingAvid && ourAvid ? 'Agent Visual Inspection Disclosures' : listingAvid ? "Listing Agent's Visual Inspection Disclosure" : "Buyer's Agent's Visual Inspection Disclosure") : '',
   ].filter(Boolean));
-  groups[2].label = has(SECTION.OURS) ? (has(SECTION.ADVISORIES) ? 'California Advisories and Brokerage Disclosures' : 'Brokerage Disclosures') : 'California Advisories';
+  groups[3].label = has(SECTION.OURS) ? (has(SECTION.ADVISORIES) ? 'California Advisories and Brokerage Disclosures' : 'Brokerage Disclosures') : 'California Advisories';
   // NEVER "Other documents" (Megan, 86 Dornoch, 2026-10-26: "absolutely not do
   // we say that to a buyer"). Name what is there.
-  groups[3].label = otherLabel(units.filter((u) => u.section === SECTION.OTHER));
+  groups[4].label = otherLabel(units.filter((u) => u.section === SECTION.OTHER));
   return groups.filter((g) => g.secs.some(has)).map((g) => ({ sections: g.secs, label: g.label }));
 }
 

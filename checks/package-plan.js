@@ -109,5 +109,36 @@ ok('no guide label says "other documents"', [dn, w, s].some((x) => x.guide.some(
   ok('pan: 6 pages of paperwork stay in the package as before', small.attachments.length, 0);
 }
 
+// ---- The order (Megan, 2026-11-05): TDS, SPQ (+ seller's addenda), PSD, EQ statement, Solar, SWPI, WBSA,
+// NHD statement, FHDS, SFLS, profile, MLS, LPD, WHSD, WCMD, then the AVIDs, then the rest ----
+{
+  const f = (n, name, code, pages) => ({ n, name, pages: pages.length, forms: [{ code, name, pages }] });
+  const files = [
+    f(0, 'WCMD.pdf', 'WCMD', [1]),
+    f(1, 'Receipt.pdf', '', [1]),
+    f(2, 'AVID.pdf', 'AVID', [1, 2, 3]),
+    f(3, 'SBSA.pdf', 'SBSA', Array.from({ length: 15 }, (_, i) => i + 1)),
+    f(4, 'FHDS.pdf', 'FHDS', [1, 2]),
+    f(5, 'SPQ.pdf', 'SPQ', [1, 2, 3, 4, 5]),
+    f(6, 'SFLS.pdf', 'SFLS', [1]),
+    f(7, 'EQ.pdf', 'EQ', [1]),
+    f(8, 'NHD.pdf', '', [1]),
+    f(9, 'TDS.pdf', 'TDS', [1, 2, 3]),
+    f(10, 'Supp.pdf', '', [1, 2]),
+    f(11, 'PSD.pdf', 'PSD', [1]),
+    f(12, 'SOLAR.pdf', 'SOLAR', [1, 2]),
+    f(13, 'SWPI.pdf', 'SWPI', [1]),
+    f(14, 'LPD.pdf', 'LPD', [1, 2]),
+  ];
+  files[1].forms = [{ code: '', name: 'Receipt for Links to Booklets', pages: [1] }];
+  files[8].forms = [{ code: '', name: 'Natural Hazard Disclosure Statement', pages: [1] }];
+  files[10].forms = [{ code: '', name: 'SELLER SUPPLEMENTAL DISCLOSURE ADDENDUM NO. 1', pages: [1, 2] }];
+  const lu = P.planPackage({ files, extras: [], dropIns: {} });
+  const order = lu.units.map((u) => (u.kind === 'AVID' ? 'AVID' : u.code || (/supplemental/i.test(u.label) ? 'SUPP' : /natural hazard/i.test(u.label) ? 'NHD' : /booklet/i.test(u.label) ? 'RECEIPT' : u.label)));
+  ok('her order, front to the AVID', order.slice(0, order.indexOf('AVID') + 1).join(' '), 'TDS SPQ SUPP PSD EQ SOLAR SWPI NHD FHDS SFLS LPD WCMD AVID');
+  ok('the booklet receipt and advisories after the AVID', order.indexOf('RECEIPT') > order.indexOf('AVID') && order.indexOf('SBSA') > order.indexOf('AVID'), true);
+  ok('the guide: seller disclosures, then the AVID on its own', lu.guide[0].label === 'Seller Disclosures' && /Visual Inspection/.test(lu.guide[1].label), true);
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-plan checks pass');
 process.exit(failed ? 1 : 0);
