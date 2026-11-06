@@ -151,16 +151,19 @@ const lorem = (seed, n = 60) => Array.from({ length: n }, (_, i) => `word${seed}
   ok('a contract waiting on the seller does not keep our brokerage forms out', dSt.dropIns.ourBrokerage.length > 0, true);
   const dUnread = D.planDropIns({ dealFiles: dealFiles.concat([{ id: 'u', name: 'CONTRACT (NEED S).pdf', pages: 3 }]), template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
   ok('an unread (NEED S) file does not count either', dUnread.dropIns.ourBrokerage.length > 0, true);
-  // 1120 S Lucerne Blvd (2026-11-05): Compass on both sides; their delivery already has Compass's disclosures.
+  // 1120 S Lucerne Blvd (2026-11-05): Compass on both sides. Form by form: what they sent stays out, the rest goes in
+  // ("they didn't include the Compass buyer affirmation PDF, so I kept that one from our AUDIT pdf").
   {
-    const both = D.planDropIns({ dealFiles, template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
-    const before = both.dropIns.ourBrokerage.filter((b) => b.kind === 'brokerage').length;
-    D.dropDeliveredBrokerage(both, [{ text: 'SIDE, Inc. Affiliated Business Arrangement Disclosure Statement' }, { text: 'TRANSFER DISCLOSURE STATEMENT ... California Association of REALTORS' }], 'Side');
-    ok('same brokerage, theirs delivered: ours not added again', before > 0 && both.dropIns.ourBrokerage.every((b) => b.kind !== 'brokerage'), true);
-    ok('and it says so', both.notes.some((n) => /already has them/.test(n)), true);
-    const other = D.planDropIns({ dealFiles, template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Side' });
-    D.dropDeliveredBrokerage(other, [{ text: 'Compass Affiliated Business Arrangement Disclosure' }, { text: 'Buyer Brokerage Firm SIDE ... California Association of REALTORS' }], 'Side');
-    ok('another brokerage delivered (or ours only on a C.A.R. page): ours still added', other.dropIns.ourBrokerage.some((b) => b.kind === 'brokerage'), true);
+    const tpl2 = { ...template, forms: template.forms.concat([{ code: '', name: 'COMPASS BUYER AFFIRMATION', pages: [56] }]) };
+    const both = D.planDropIns({ dealFiles, template: tpl2, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Compass' });
+    D.dropDeliveredBrokerage(both, [{ text: 'Compass. AFFILIATED BUSINESS ARRANGEMENT DISCLOSURE STATEMENT. Seller' }, { text: 'TRANSFER DISCLOSURE STATEMENT ... California Association of REALTORS' }], 'Compass');
+    const ours = both.dropIns.ourBrokerage.filter((b) => b.kind === 'brokerage');
+    ok('same brokerage: the ABA they sent is not added again', ours.every((b) => !b.forms.some((f) => /AFFILIATED/.test(f.name))), true);
+    ok('the Buyer Affirmation they did not send still goes in', ours.some((b) => b.forms.some((f) => /BUYER AFFIRMATION/.test(f.name)) && b.pages.includes(56)), true);
+    ok('and the note names what was left out', both.notes.some((n) => /already sent: AFFILIATED BUSINESS ARRANGEMENT/.test(n)), true);
+    const other = D.planDropIns({ dealFiles, template: tpl2, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Compass' });
+    D.dropDeliveredBrokerage(other, [{ text: 'Coldwell Banker Affiliated Business Arrangement Disclosure Statement' }], 'Compass');
+    ok('another brokerage delivered: all of ours added', other.dropIns.ourBrokerage.filter((b) => b.kind === 'brokerage').reduce((n, b) => n + b.forms.length, 0), 3);
   }
   const d3 = D.planDropIns({ dealFiles, template, deliveredCodes: [], wantedCodes: null, buyerBrokerage: 'Rodeo Realty' });
   ok("template pages that do not name the buyer's brokerage are warned", d3.warnings.some((w) => /do not name Rodeo Realty/.test(w)), true);

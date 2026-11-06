@@ -154,7 +154,8 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
           || (template.texts || []).some((t) => pagesOf.has(t.num) && word.test(t.text || '')));
         if (buyerBrokerage && !named) warnings.push(`the template's brokerage pages do not name ${buyerBrokerage}: check they are the buyer agent's brokerage before sending`);
         const pages = brokerage.flatMap((f) => f.pages).sort((a, b) => a - b);
-        dropIns.ourBrokerage.push({ kind: 'brokerage', label: `${buyerBrokerage || 'Our brokerage'} forms (template)`, src, pages });
+        // Each form kept with its pages, so one the listing side already sent can be left out on its own (dropDeliveredBrokerage).
+        dropIns.ourBrokerage.push({ kind: 'brokerage', label: `${buyerBrokerage || 'Our brokerage'} forms (template)`, src, pages, forms: brokerage.map((f) => ({ name: f.name, pages: f.pages })) });
       }
     }
     // Forms our buyer already signed with the offer are filed "FX - SBSA" (or
@@ -201,17 +202,42 @@ function planDropIns({ dealFiles = [], template = null, deliveredCodes = [], wan
  * name our own agents and keep their own duplicate check.
  * deliveredTexts: [{ text }] pages of the delivered files.
  */
+/*
+  FORM BY FORM (Megan, same day: "jsut doulbe check that each for example
+  compass one is there. For example they didn't include the Compass buyer
+  affirmation PDF, so I kept that one from our AUDIT pdf"): each of the
+  template's brokerage forms is left out only when the delivery has that same
+  form, found by its title on a delivered page that is not a C.A.R. form. A
+  whole firm file ("Compass DISC.pdf") has no titles to compare, so it stays,
+  with a note to check it against theirs.
+*/
+const squash = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 function dropDeliveredBrokerage(drop, deliveredTexts, buyerBrokerage) {
   const firmWord = String(buyerBrokerage || '').replace(/^\s*the\s+/i, '').split(/\s+/)[0].replace(/[^A-Za-z0-9]/g, '');
   if (!firmWord || !drop || !drop.dropIns || !(drop.dropIns.ourBrokerage || []).some((b) => b.kind === 'brokerage')) return drop;
   const word = new RegExp(`\\b${firmWord}\\b`, 'i');
-  const there = (deliveredTexts || []).some((t) => {
-    const text = String((t && t.text) || '');
-    return word.test(text) && !/california association of realtors/i.test(text) && /disclos|advisory|affiliat|notice/i.test(text);
-  });
-  if (!there) return drop;
-  drop.dropIns.ourBrokerage = drop.dropIns.ourBrokerage.filter((b) => b.kind !== 'brokerage');
-  (drop.notes = drop.notes || []).push(`${buyerBrokerage}'s own disclosures not added: the listing side's delivery already has them (same brokerage on both sides)`);
+  // The delivered pages that are our firm's own (not C.A.R. forms).
+  const theirs = (deliveredTexts || []).map((t) => String((t && t.text) || '')).filter((text) => word.test(text) && !/california association of realtors/i.test(text)).map(squash);
+  if (!theirs.length) return drop;
+  const notes = (drop.notes = drop.notes || []);
+  const kept = [];
+  for (const b of drop.dropIns.ourBrokerage) {
+    if (b.kind !== 'brokerage') { kept.push(b); continue; }
+    if (!b.forms || !b.forms.length) {
+      kept.push(b);
+      notes.push(`${b.label} added, but the listing side (also ${buyerBrokerage}) sent some of ${buyerBrokerage}'s forms: check for duplicates`);
+      continue;
+    }
+    const sent = [];
+    const keep = [];
+    for (const f of b.forms) {
+      const title = squash(f.name).slice(0, 60);
+      (title.length >= 12 && theirs.some((page) => page.includes(title)) ? sent : keep).push(f);
+    }
+    if (sent.length) notes.push(`not added again, the listing side (also ${buyerBrokerage}) already sent: ${sent.map((f) => f.name).join('; ')}`);
+    if (keep.length) kept.push({ ...b, forms: keep, pages: keep.flatMap((f) => f.pages).sort((x, y) => x - y) });
+  }
+  drop.dropIns.ourBrokerage = kept;
   return drop;
 }
 
