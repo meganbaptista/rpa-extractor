@@ -517,7 +517,8 @@ async function createDraft({ to, subject, htmlBody, threadId = '', inReplyTo = '
     headers.push(`In-Reply-To: ${inReplyTo}`);
     headers.push(`References: ${inReplyTo}`);
   }
-  const raw = b64url(`${headers.join('\r\n')}\r\n\r\n${htmlBody}`);
+  // The first line at the top, as a person types it (email-layout, 2026-11-17).
+  const raw = b64url(`${headers.join('\r\n')}\r\n\r\n${require('./email-layout').flushTop(htmlBody)}`);
   const message = threadId ? { raw, threadId } : { raw };
   return apiPost('/drafts', { message });
 }

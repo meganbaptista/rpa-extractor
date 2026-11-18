@@ -4,6 +4,7 @@
 // gmail.updateDraftRaw. Pure, so checks/buyer-email.js can parse what it builds.
 
 const crypto = require('crypto');
+const { flushTop } = require('./email-layout');
 
 const wrap76 = (b64) => b64.replace(/.{1,76}/g, '$&\r\n');
 
@@ -20,7 +21,9 @@ function headerValue(v) {
  * html:        the body
  * attachments: [{ filename, contentType, data: Buffer }]
  */
-function buildMime({ headers = {}, html = '', attachments = [] }) {
+function buildMime({ headers = {}, html: rawHtml = '', attachments = [] }) {
+  // The first line at the top, as a person types it (email-layout, 2026-11-17).
+  const html = flushTop(rawHtml);
   const boundary = `----=_mtc_${crypto.randomBytes(12).toString('hex')}`;
   const lines = [];
   for (const [k, v] of Object.entries(headers)) {

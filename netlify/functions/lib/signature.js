@@ -10,12 +10,15 @@ const SIGNATURE_HTML = '<br>-- <br><div dir="ltr"><div dir="ltr" style="margin-l
 
 /** Append a signature to an HTML body. */
 function withSignature(htmlBody, signatureHtml = SIGNATURE_HTML) {
+  const { flushTop, trimEnd, trimStart } = require('./email-layout');
   const sig = String(signatureHtml || '').trim();
-  if (!sig) return htmlBody;
+  if (!sig) return flushTop(htmlBody);
   // Gmail's own convention: a "-- " separator line before the block. Only
-  // added when the signature does not already carry one.
+  // added when the signature does not already carry one. Empty lines are
+  // trimmed off both sides first, so nothing stacks up above the signature
+  // (email-layout, 2026-11-17).
   const sep = /^\s*(<br\s*\/?>)?\s*--\s/.test(sig) ? '' : '<br>-- <br>';
-  return `${htmlBody}\n${sep}${sig}`;
+  return `${flushTop(trimEnd(htmlBody))}\n${sep}${sep ? trimStart(sig) : sig}`;
 }
 
 /**
