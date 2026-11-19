@@ -45,6 +45,7 @@ function buildRecord({ message, decision, mode, applied, nowIso }) {
     category: decision.category || null,
     side: decision.side || null,  // 'buyer' | 'seller' | null
     sideSource: decision.sideSource || null, // 'tag' | 'deal-list' | null
+    keevaSide: decision.keevaSide || null,   // Keeva's answer, logged beside the sheet's (2026-11-19)
     skip: decision.skip,
     deciding_rule: decision.deciding_rule,   // which of the 14 rules drove it
     gate_reason: decision.reason || '',

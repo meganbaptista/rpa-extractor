@@ -42,7 +42,7 @@ function rows(records) {
       <td class="ctr">${esc(r.branch)}</td>
       <td class="${r.skip ? 'skip' : ''}">${skip}${r.gate_confidence ? `<br><span style="color:#999;font-size:11px">${esc(r.gate_confidence)}</span>` : ''}</td>
       <td class="ctr">${esc(r.deciding_rule)}</td>
-      <td class="ctr">${esc(r.side || '')}${r.sideSource ? `<br><span style="color:#999;font-size:11px">${esc(r.sideSource)}</span>` : ''}</td>
+      <td class="ctr">${esc(r.side || '')}${r.sideSource ? `<br><span style="color:#999;font-size:11px">${esc(r.sideSource)}</span>` : ''}${r.keevaSide ? `<br><span style="color:${r.keevaSide === r.side ? '#999' : '#b45309'};font-size:11px">Keeva: ${esc(r.keevaSide)}</span>` : ''}</td>
       <td><b>${esc(r.plannedLabel || '')}</b></td>
       <td>${esc(clf(r))}</td>
       <td>${esc(applied)}</td>

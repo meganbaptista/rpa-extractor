@@ -255,4 +255,61 @@ async function sideForDeal(address, store) {
   return sideForSubject(address);
 }
 
-module.exports = { sideForSubject, sideForDeal, status, _internal: { normalizeSide, addressKeyParts, loadDeals, targetTabs, parseTab } };
+/*
+  KEEVA'S ANSWER FOR AN EMAIL SUBJECT, LOGGED BESIDE THE SHEET'S (Megan,
+  2026-11-19: "should the email router use Keeva as the source of truth now").
+  Keeva's deal-side door hands back every open deal (address + side) from its
+  own saved copy, never Process Street; this matches the subject exactly as the
+  sheet is matched (house number + street word, most specific wins). Two of our
+  deals at one address with different sides is no single side. Held for 10
+  minutes. Any failure is null, never an error: routing does not depend on it
+  yet. Returns 'buyer' | 'seller' | 'dual' | 'both' | null.
+*/
+const KEEVA_TTL_MS = 10 * 60 * 1000;
+let _keeva = { at: 0, list: [] };
+function keevaConfStore() {
+  const { getStore } = require('@netlify/blobs');
+  return getStore({ name: 'disclosure-intake-jobs', siteID: process.env.SITE_ID || process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+}
+async function loadKeevaDeals(store) {
+  const now = Date.now();
+  if (_keeva.list.length && now - _keeva.at < KEEVA_TTL_MS) return _keeva.list;
+  const s = store || keevaConfStore();
+  const conf = await s.get('meta/keeva-audit', { type: 'json' }).catch(() => null);
+  const key = ((conf && conf.key) || process.env.KEEVA_AUDIT_KEY || '').trim();
+  if (!key) return [];
+  const base = ((conf && conf.url) || process.env.KEEVA_AUDIT_URL || 'https://app.mykeeva.com/.netlify/functions/audit-result').trim().replace(/audit-result\/?$/, 'deal-side');
+  const res = await fetch(`${base}?all=1`, { headers: { 'x-keeva-audit-key': key } });
+  if (!res.ok) throw new Error(`Keeva answered ${res.status}`);
+  const data = await res.json().catch(() => ({}));
+  const list = [];
+  for (const d of data.deals || []) {
+    const parts = addressKeyParts(d.address);
+    if (parts && d.side) list.push({ ...parts, side: d.side, address: d.address });
+  }
+  _keeva = { at: now, list };
+  return list;
+}
+async function keevaSideForSubject(subject, store) {
+  try {
+    if (!subject) return null;
+    const list = await loadKeevaDeals(store);
+    const subj = String(subject).toLowerCase();
+    let best = null;
+    const sides = new Set();
+    for (const d of list) {
+      if (containsToken(subj, d.num) && containsToken(subj, d.streetWord)) {
+        const score = d.num.length + d.streetWord.length;
+        if (!best || score > best.score) { best = { score }; sides.clear(); }
+        if (score === best.score) sides.add(d.side);
+      }
+    }
+    if (!best) return null;
+    return sides.size > 1 ? 'both' : [...sides][0];
+  } catch (err) {
+    console.warn(`[deal-side] Keeva side not read (non-fatal): ${err.message}`);
+    return null;
+  }
+}
+
+module.exports = { sideForSubject, sideForDeal, keevaSideForSubject, status, _internal: { normalizeSide, addressKeyParts, loadDeals, targetTabs, parseTab } };

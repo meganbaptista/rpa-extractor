@@ -214,7 +214,8 @@ const ROSTER = [
       + 'NOT make it Ethan\'s. Belle sets up the file and sends the initial package. '
       + 'Rejected offers. Inspection REPORTS/receipts when a PDF is '
       + 'attached or LINKED (general, termite, HVAC, roof, mold, plumbing, geo, etc.) — '
-      + 'EXCEPT when our own SELLER client is the one sending them (that is Ethan, see his lane).',
+      + 'EXCEPT when we are on the BUYER side (that is Edelyn, see her lane) or our own SELLER '
+      + 'client is the one sending them (that is Ethan, see his lane).',
   },
   {
     name: 'Jill',
@@ -232,7 +233,9 @@ const ROSTER = [
       + 'requested or sent by an AGENT. (Amended ESCROW INSTRUCTIONS returned by the escrow '
       + 'officer — escrow-company paperwork — go to Belle, not Jill.) RLAS (residential lease '
       + 'AFTER sale / leaseback / rentback), SIP (seller in possession / leaseback / '
-      + 'rentback), and IOA (Interim Occupancy Agreement — buyer in possession before close).',
+      + 'rentback), and IOA (Interim Occupancy Agreement — buyer in possession before close). '
+      + 'SIP IS ALWAYS JILL\'S, never Megan\'s lease lane, whatever the thread is called '
+      + '(even a "Purchase Contract Audit" or escrow thread that turns to the SIP).',
   },
   {
     name: 'Ethan',
@@ -280,7 +283,12 @@ const ROSTER = [
       + 'packet", a "REVIEW NOW" notification — route to Edelyn (she clicks through, retrieves '
       + 'the PDFs, and decides whether to apply the "Disclosures - AI Review" label). This '
       + 'holds even without a matched deal address; a shared/received packet means we are the '
-      + 'buyer side.',
+      + 'buyer side. BUYER-SIDE INSPECTION REPORTS, ALWAYS (Megan, 2026-11-19: "a buyer side '
+      + 'inspection report should always go to Edelyn to upload"): when we represent the BUYER, '
+      + 'an inspection report / invoice / receipt attached or LINKED (general, termite, sewer, '
+      + 'roof, mold, chimney, etc.), whoever sends or forwards it (the inspector, our agent, '
+      + 'any agent, e.g. "Fwd: Your Inspection Report"), is Edelyn\'s, not Belle\'s. On a DUAL '
+      + 'deal it is Edelyn\'s too (the buyer\'s inspections).',
   },
   {
     name: 'Allana',
@@ -297,7 +305,10 @@ const ROSTER = [
     handles: 'LEASES — Megan owns the entire lease file. Any thread that is a lease: CAR '
       + 'form "LR" (Residential Lease or month-to-month rental agreement), an RLMM '
       + '(Residential Lease or Month-to-Month) agreement, a subject like "Lease Contract", '
-      + 'or a lease agreement attached — but NOT RLAS (that is Jill). Because Megan owns the '
+      + 'or a lease agreement attached — but NOT RLAS, SIP or IOA (those are JILL\'s: a leaseback '
+      + 'or seller/buyer in possession around a SALE is part of the purchase, not a lease file; '
+      + '5987 Sagebrush, Nov 2026, a SIP addendum on a Purchase Contract Audit thread, went to '
+      + 'Megan as a "lease" by mistake). Because Megan owns the '
       + 'whole lease file, route EVERY message in a lease thread to her, including questions '
       + 'about compensation, payment, timing, or entity financials on that lease. '
       + 'Phone-call requests to Megan directly. Agent asking to send '
@@ -387,7 +398,7 @@ const NO_TAG_RULES = [
 // ---------------------------------------------------------------------------
 const ROUTING_NOTES = [
   'AN ANSWER TO OUR QUESTION GOES TO WHOEVER OWNS THE SUBJECT, NOT TO WHOEVER ASKED. Megan sends most requests from her own address on behalf of the whole team, so "Megan asked, they answered" is NEVER on its own a reason to route to Megan. Read what was asked and route by that lane: an RFR / Receipt for Reports, seller disclosures, inspections-or-BIW on a SELLER-side deal -> Ethan; buyer-side disclosures -> Edelyn; repairs/RR -> Jill; escrow paperwork, close date, EMD, CDA -> Belle. Example (11241 Peach Grove, Oct 2026): Megan asked the agent for "RFR2 - need buyer initials, Property Inspections or BIW, Termite Inspection or BIW" on a seller-side deal and the agent replied "Yes" -> Ethan, not Megan. Route to Megan only when the subject itself is hers (leases, a general services inquiry, a phone-call request to her).',
-  'WHO SENT THE REPORT decides inspection-report routing. From the buyer\'s agent, an inspector, a vendor or escrow -> Belle. From OUR SELLER CLIENT (the homeowner, typically a personal email address, often forwarding to us from their own inbox with phone-signature lines like "Sent via the Samsung Galaxy") sending reports, remediation or repair records, invoices, permits/sign-offs or photos of work -> Ethan, for the seller disclosures. A subject like "2402ACC remediation 7" with no full address is still the seller\'s.',
+  'INSPECTION REPORTS: THE SIDE FIRST, THEN WHO SENT IT. When WE REPRESENT THE BUYER (or dual), every inspection report, invoice or receipt, attached or linked, from anyone (inspector, our agent forwarding it, vendor, escrow) -> Edelyn, to upload (Megan, 2026-11-19). Otherwise WHO SENT THE REPORT decides: from the buyer\'s agent, an inspector, a vendor or escrow -> Belle. From OUR SELLER CLIENT (the homeowner, typically a personal email address, often forwarding to us from their own inbox with phone-signature lines like "Sent via the Samsung Galaxy") sending reports, remediation or repair records, invoices, permits/sign-offs or photos of work -> Ethan, for the seller disclosures. A subject like "2402ACC remediation 7" with no full address is still the seller\'s.',
   'SENDER TYPE matters. The same words route differently from an Escrow Officer, an Agent, a DocuSign notification, or a Client (buyer/seller). Use the sender to disambiguate.',
   'ATTACHMENTS: when the body is uninformative (e.g. "please see the attached"), use the ATTACHMENT FILENAME to identify the document and route by it — e.g. a filename naming a "Cancellation of Contract" / cancellation -> Jill, "Request for Repairs"/RR -> Jill, an addendum -> Jill, an AVID -> Ethan/Edelyn by side. You only have the FILENAME, not the PDF contents. If the body is uninformative AND neither the subject nor the attachment filename reveals the document type (e.g. the file is named only by the property address), route to BELLE for human triage — she opens the document and decides. Prefer Belle-triage over UNSURE for an undeterminable-attachment email.',
   'DOCUMENT-COPY REQUESTS are ACTIONABLE, never NO_TAG: a request to SEND / PROVIDE a copy of a document we may have on file (an inspection report, work order, receipt, disclosure, etc.) needs someone to check the file and send it. Route it — an inspection-report copy -> Belle; a disclosure -> Edelyn/Ethan by side. If the email is a jumble of asks or has no property address to identify the deal/owner, default to Needs Attention (a human triages). Do NOT mark it NO_TAG just because it also mentions inspection scheduling.',

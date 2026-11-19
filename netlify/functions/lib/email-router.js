@@ -132,6 +132,9 @@ async function routeCore(message, labelNames = [], deps = {}) {
     const dealSideVal = await dealSide.sideForSubject(h0.subject);
     if (dealSideVal) { side = dealSideVal; sideSource = 'deal-list'; }
   }
+  // Keeva's answer, LOGGED ONLY for a week beside the sheet's (2026-11-19); it
+  // decides nothing yet.
+  const keevaSide = dealSide.keevaSideForSubject ? await dealSide.keevaSideForSubject(h0.subject) : null;
 
   const gate = await runSkipGate(message);
 
@@ -140,6 +143,7 @@ async function routeCore(message, labelNames = [], deps = {}) {
     category,
     side,
     sideSource,
+    keevaSide,
     skip: gate.skip,
     deciding_rule: gate.deciding_rule,
     reason: gate.reason,
