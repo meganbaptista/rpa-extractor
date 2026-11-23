@@ -77,6 +77,7 @@ const usageLog = require('./lib/usage-log');
 const { callClaude: callClaudeShared } = require('./lib/claude');
 const { parseRequestBody } = require('./lib/parse-body');
 const { applyCounterChain } = require('./lib/counter-chain');
+const { applyOptionalInitials } = require('./lib/optional-initials');
 const { STORE_NAME: CACHE_STORE } = require('./lib/audit-cache');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
@@ -342,7 +343,7 @@ The core rule of this audit: SIGNATURE PARITY. On every document in the packet, 
 
 Concretely:
 - Per-page footer initials on the RPA. Do this as an explicit PAGE-BY-PAGE pass: go through every page of the RPA in order, and for EACH page state what you see in the Buyer's Initials box and what you see in the Seller's Initials box. Name the page, then the buyer box, then the seller box -- one line per page. Do not summarize a range of pages in a single statement; each page is inspected and reported on its own. If buyer initialed and seller did not (or the reverse), that is a missing initial -- flag it.
-- The Liquidated Damages (paragraph 29) and Arbitration of Disputes (paragraph 31) initials -- both parties.
+- The Liquidated Damages (paragraph 29) and Arbitration of Disputes (paragraph 31) initials -- ALL OR NONE. Each is an optional election, so a paragraph that NO party initialed is fine and is not a finding, and one that every party initialed is fine. But if ANY party initialed it (a seller, or one of the buyers) and any other party's box is blank, that is a missing initial -- flag it (severity "missing") naming whose initials are blank. Do NOT excuse a one-sided paragraph as a valid choice not to initial, and do not excuse it because the form or a counter offer (e.g. SCO paragraph 1A) says un-initialed paragraphs are excluded from the agreement: the paragraph being one-sided is exactly what the transaction coordinator needs to fix. Transcribe every box on both paragraphs literally in transcription.rpa.optional_initials.
 - The RPA Section 32D Buyer Signature block AND the RPA Section 33D Seller Signature block. The RPA seller signature on Section 33D is ALWAYS required regardless of counter offers, addenda, or anything else in the packet; counter offers are additional documents, not substitutes. Same for the buyer side on Section 32D.
 - Buyer's Agent and Listing Agent signatures in the Real Estate Brokers Section (each agent signs their own block; agents do not mirror each other or the parties).
 - Every signature and initial on every counter offer in the packet -- both parties sign every counter.
@@ -458,7 +459,11 @@ followed by a single JSON object (no markdown fences) with this shape:
       "date_prepared": "RPA page 1 'Date Prepared', literally as written",
       "buyer": "RPA paragraph 1A 'THIS IS AN OFFER FROM', every name including any continuation line",
       "seller": "the seller as named on the RPA (Section 33D printed name, or 33B(2) entity name)",
-      "property": "RPA paragraph 1B property address, with its city and ZIP code"
+      "property": "RPA paragraph 1B property address, with its city and ZIP code",
+      "optional_initials": {
+        "liquidated_damages": { "buyer": ["each Buyer's Initials box on RPA paragraph 29, in order, literally (e.g. 'FF'), or 'BLANK'"], "seller": ["each Seller's Initials box on paragraph 29, literally, or 'BLANK'"] },
+        "arbitration": { "buyer": ["each Buyer's Initials box on RPA paragraph 31, in order, literally, or 'BLANK'"], "seller": ["each Seller's Initials box on paragraph 31, literally, or 'BLANK'"] }
+      }
     },
     "counters": [
       {
@@ -487,7 +492,7 @@ Rules for PART 2:
 - Per-page initials appear in "findings" ONLY as a specific named page that is genuinely missing or unreadable -- never as a page range, and never at all if the page-by-page pass found them present.
 - This audit does not produce QC findings. Do not add findings for blank data fields, form-choice issues, or other non-signature observations.
 - "action_items": a client-ready restatement of the findings for the transaction coordinator to copy and send to the OTHER side of the deal. Write ONE line per issue in plain English, phrased as a clear notice or courteous request (e.g. "Seller's signature on the SCO and RPA (Section 33D) shows the trust name only -- please have the trustee re-execute signing with capacity, e.g. 'Jane Doe, Trustee'."). NO severity tags, NO S1/S2/S3/N codes, NO internal jargon -- it must read like a message a coordinator would send to the other agent. Combine closely related findings into a single line where that reads more naturally. Order from most to least important. If there are no findings, use an empty array. The action_items must correspond to the findings -- do not introduce issues not in "findings". NEVER use em dashes ("—") or en dashes ("–") anywhere in action_items; restructure with periods, commas, parentheses, or the word "to" instead (ordinary hyphens in compound words are fine).
-- "transcription": the literal contents of the fields you transcribed in the N2 pass, plus the RPA's page-1 identification, one entry per counter in packet order ("packet_position" 1 = top of the packet). Copy each field EXACTLY as written on the document -- the actual names, dates and address, never a judgment like "filled", "present", "matches" or "complete". Write "BLANK" for an empty field. Every counter offer in the packet gets an entry, including earlier links in the chain and counters that were countered rather than accepted. If there are no counter offers, use an empty "counters" array. "addenda" lists every C.A.R. Addendum (Form ADM) and Addendum - Generic (Form ADM-GEN) in the packet, one entry each with its printed number; use an empty array if there are none. Do NOT judge whether the counters agree with the RPA or with each other -- a separate check compares them from this transcription, so an accurate literal copy is the entire job here.
+- "transcription": the literal contents of the fields you transcribed in the N2 pass, plus the RPA's page-1 identification and the paragraph 29 / 31 initial boxes (optional_initials: one entry per box, initials exactly as written or \"BLANK\"), one entry per counter in packet order ("packet_position" 1 = top of the packet). Copy each field EXACTLY as written on the document -- the actual names, dates and address, never a judgment like "filled", "present", "matches" or "complete". Write "BLANK" for an empty field. Every counter offer in the packet gets an entry, including earlier links in the chain and counters that were countered rather than accepted. If there are no counter offers, use an empty "counters" array. "addenda" lists every C.A.R. Addendum (Form ADM) and Addendum - Generic (Form ADM-GEN) in the packet, one entry each with its printed number; use an empty array if there are none. Do NOT judge whether the counters agree with the RPA or with each other -- a separate check compares them from this transcription, so an accurate literal copy is the entire job here.
 - The JSON must be valid and parseable. PART 1 prose is the audit; PART 2 JSON is the machine-readable summary of it -- they must agree.`;
 }
 
@@ -693,6 +698,15 @@ exports.handler = async function (event) {
     const chain = applyCounterChain(auditPart);
     if (chain.findings.length) {
       console.log(`[audit-background] jobId=${jobId} counter chain: ${chain.findings.length} finding(s)`);
+    }
+
+    // LIQUIDATED DAMAGES / ARBITRATION: ALL OR NONE, in code over the
+    // model's literal copy of the boxes (3131 Michelson, 2026-11-21: a second
+    // audit saw the seller-only arbitration initials and excused them). See
+    // lib/optional-initials.js.
+    const optional = applyOptionalInitials(auditPart, { buyerCount, sellerCount });
+    if (optional.findings.length) {
+      console.log(`[audit-background] jobId=${jobId} optional initials: ${optional.findings.length} finding(s)`);
     }
 
     const envelope = buildEnvelope(auditPart);
