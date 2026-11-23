@@ -80,5 +80,12 @@ const n3 = acceptanceFromCounters(karen, [])
 ok('back-up offer: flagged, not guessed', [karen.date_of_acceptance, /Back-up offer/.test(n3[0])], ['2026-09-28', true])
 ok('no counters, not back-up: nothing', acceptanceFromCounters({ date_of_acceptance: '2026-09-01', backup_offer: 'No' }, []), [])
 
+// The home warranty as the seller countered it (2026-11-23): the RPA's $800 cap becomes $1,000; a later waiver wins.
+const hw = { home_warranty: 'Yes', home_warranty_amount: '800.00', home_warranty_who_pays: 'Seller' }
+applyCounterTerms(hw, [counter({ kind: 'SCO', number: '1', date: '10/03/2026', home_warranty: 'Seller to pay up to $1,000 for a home warranty' })])
+ok('home warranty countered', [hw.home_warranty, hw.home_warranty_amount, hw.home_warranty_who_pays], ['Yes', '1,000', 'Seller'])
+applyCounterTerms(hw, [counter({ kind: 'BCO', number: '1', date: '10/04/2026', home_warranty: 'Buyer waives home warranty' })])
+ok('home warranty waived by a later counter', [hw.home_warranty, hw.home_warranty_amount], ['No', ''])
+
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log('\ncounter terms: all pass');

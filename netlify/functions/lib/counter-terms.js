@@ -55,12 +55,13 @@ const COUNTER_TOOL = {
             appraisal: { type: 'string', description: 'Appraisal contingency as THIS counter sets it: days, or "waived"/"removed". Empty if unchanged.' },
             loan: { type: 'string', description: 'Loan contingency as THIS counter sets it: days, or "waived"/"removed". Empty if unchanged.' },
             disclosures: { type: 'string', description: 'Days for the seller to deliver disclosures if THIS counter changes them. Empty if unchanged.' },
+            home_warranty: { type: 'string', description: 'The home warranty as THIS counter sets it, as written: the dollar cap ("Seller to pay up to $1,000 for a home warranty"), who pays, or "waived". Empty if it does not mention the home warranty. Also write it in other_terms.' },
             other_terms: { type: 'string', description: 'Every other change THIS counter makes, word for word (credits, who pays what, leasebacks, "as-is", attachments). Empty if none.' },
             made_by_signed: { type: 'string', description: 'Date the party MAKING this counter signed it (paragraph 4 on SCO/BCO), as written. Empty if unsigned.' },
             accepted_signed: { type: 'string', description: 'Date the OTHER party signed ACCEPTANCE of this counter (paragraph 5 on SCO/BCO; on an SMCO also the seller\'s final re-signature, paragraph 7). Empty if not signed.' },
             unsure: { type: 'string', description: 'Anything in this counter you could not read with certainty: crossed-out or handwritten-over numbers, illegible values, boxes you cannot tell are checked. Name the term and what you saw. Empty if everything is clear.' },
           },
-          required: ['kind', 'number', 'date', 'counters_what', 'price', 'close_of_escrow', 'emd_amount', 'emd_days', 'inspection', 'appraisal', 'loan', 'disclosures', 'other_terms', 'made_by_signed', 'accepted_signed', 'unsure'],
+          required: ['kind', 'number', 'date', 'counters_what', 'price', 'close_of_escrow', 'emd_amount', 'emd_days', 'inspection', 'appraisal', 'loan', 'disclosures', 'home_warranty', 'other_terms', 'made_by_signed', 'accepted_signed', 'unsure'],
         },
       },
     },
@@ -157,6 +158,29 @@ function applyCounterTerms(fields, counters) {
         set('close_of_escrow_days', n, c, 'close of escrow');
         set('close_of_escrow_specific_date', '', c, 'close of escrow');
       } else review.push(`${label(c)} changes close of escrow but it could not be read ("${c.close_of_escrow}")`);
+    }
+    /*
+      THE HOME WARRANTY, AS COUNTERED (Megan, 2026-11-23: "if there are changes
+      in the counter offers to the price, it also needs to make sure its
+      reflected there, the RPA is the original terms, but sometimes the seller
+      counters"). A counter's cap, payer or waiver replaces the RPA's 3Q(18).
+    */
+    if (!blank(c.home_warranty)) {
+      const hw = String(c.home_warranty);
+      if (/\bwaiv/i.test(hw)) {
+        set('home_warranty', 'No', c, 'home warranty');
+        set('home_warranty_amount', '', c, 'home warranty');
+      } else {
+        const amount = /\$\s*[\d,]+(?:\.\d{2})?/.exec(hw);
+        const a = amount ? money(amount[0]) : '';
+        if (a) {
+          set('home_warranty', 'Yes', c, 'home warranty');
+          set('home_warranty_amount', Number(a).toLocaleString('en-US'), c, 'home warranty');
+        }
+        const payer = /\bboth\b/i.test(hw) ? 'Both' : /\bseller\b/i.test(hw) && !/\bbuyer\b/i.test(hw) ? 'Seller' : /\bbuyer\b/i.test(hw) && !/\bseller\b/i.test(hw) ? 'Buyer' : '';
+        if (payer) set('home_warranty_who_pays', payer, c, 'home warranty');
+        if (!a && !payer) review.push(`${label(c)} changes the home warranty but it could not be read ("${hw}")`);
+      }
     }
     if (!blank(c.emd_amount)) {
       const a = money(c.emd_amount);
