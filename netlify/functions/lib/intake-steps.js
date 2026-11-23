@@ -35,10 +35,29 @@ const { auditSummary, postToKeeva } = require('./keeva-audit');
  * direct-download URL only as the fallback for a file. WeTransfer still cannot
  * be fetched.
  */
+/*
+  A SIGNATURE'S OWN LINKS ARE NOT DISCLOSURES (4145 Creciente, 2026-11-23):
+  Compass TCs sign off with "Download or bookmark our Agent Support Directory",
+  a Google Drive file Keeva cannot open, so the review held the draft for a
+  link that was never the package. A link whose words are about support,
+  directories, the firm or marketing is skipped, in the HTML (its anchor
+  text) and in the plain text (the words just before it).
+*/
+const SIGNATURE_LINK = /support directory|agent support|bookmark|directory|our website|careers|newsletter|unsubscribe|privacy|terms of (use|service)|linkedin|instagram|facebook|schedule (a|time)|calendly|review us|leave (a|us) review/i;
 function shareLinks(html = '', text = '') {
   const found = new Map();
+  const skip = new Set();
+  const clean = (raw) => raw.replace(/&amp;/g, '&').replace(/[.,;]+$/, '');
+  for (const m of String(html).matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    const words = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (SIGNATURE_LINK.test(words)) skip.add(clean(m[1]));
+  }
+  for (const m of String(text).matchAll(SHARE_LINK)) {
+    if (SIGNATURE_LINK.test(String(text).slice(Math.max(0, m.index - 80), m.index))) skip.add(clean(m[0]));
+  }
   const add = (raw) => {
-    const url = raw.replace(/&amp;/g, '&').replace(/[.,;]+$/, '');
+    const url = clean(raw);
+    if (skip.has(url)) return;
     const drive = DS.parseDriveLink(url);
     const direct = drive && drive.kind === 'file' ? `https://drive.google.com/uc?export=download&id=${drive.id}` : url;
     const keyOf = drive ? `drive:${drive.id}` : direct;
