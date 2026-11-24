@@ -9,6 +9,8 @@ assert.deepStrictEqual(s.stillNeeded, ['MCA', 'SBSA']);
 assert.strictEqual(s.flags.length, 2);
 assert.strictEqual(s.draftMade, true);
 assert.strictEqual(auditSummary({ payload: {}, address: 'a', job: { id: 'j' }, effects: { draft: 'held: Drive link unread' } }).draftMade, false, 'a held draft is not a draft');
+// A link that could not be opened is said first (17834 Porto Marina, 2026-11-23).
+assert.strictEqual(auditSummary({ payload: { link_unread_warning: 'A link could not be opened', verify_lines: 'x' }, address: 'a', job: { id: 'j' }, effects: { draft: 'held: link unread' } }).verify[0], 'A link could not be opened');
 (async () => {
   delete process.env.KEEVA_AUDIT_KEY;
   assert.strictEqual(await postToKeeva(null, s, () => {}), false, 'no key: skipped, never thrown');

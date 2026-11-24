@@ -192,7 +192,13 @@ async function load(ctx) {
     j.archives = report.filter((r) => r.info);
     j.extras = extras;
     // A share link that could not be opened: the run never saw those files.
-    j.linkUnread = driveNotes.filter((n) => !n.info && /could not be (?:opened|read)|could not be listed/.test(n.reason)).map((n) => `${n.name}: ${n.reason}`);
+    // ANY share link, not only Drive (17834 Porto Marina, 2026-11-23: a link
+    // that would not download held VLQ, SFLS, MCA and SBSA, and the review
+    // listed all four as still needed).
+    j.linkUnread = [
+      ...driveNotes.filter((n) => !n.info && /could not be (?:opened|read)|could not be listed/.test(n.reason)),
+      ...report.filter((r) => !r.info && !driveNotes.includes(r) && /could not be downloaded|link failed/i.test(r.reason || '')),
+    ].map((n) => `${n.name}: ${n.reason}`);
     if (revision && meta.length) j.revision = revision;
     J.addSteps(j, !meta.length ? ['finish'] : (revision ? ['revcheck', 'revdraft'] : ['map', 'plan']));
   };
@@ -351,6 +357,15 @@ async function finish(ctx) {
   const saveEffects = () => J.putOut(store, job.id, 'finish-effects', effects);
 
   const deliver = async (payload) => {
+    // A LINK WE COULD NOT OPEN: what it held was never read, so the "still
+    // needed" list may name forms that were sent (17834 Porto Marina). Said
+    // first, on the card and in Keeva, before the list.
+    if ((job.linkUnread || []).length) {
+      const warn = `A link in the email could not be opened, so its files were NOT reviewed. Anything listed as still needed may be in that link: check it before requesting. (${job.linkUnread.join('; ')})`;
+      payload.ps_comment = `${warn}\n\n${payload.ps_comment || ''}`;
+      payload.ps_comment_md = `**${warn}**\n\n${payload.ps_comment_md || ''}`;
+      payload.link_unread_warning = warn;
+    }
     // Megan reads the PS card, not the logs: the page accounting goes on it.
     if (gaps) {
       payload.ps_comment = `${payload.ps_comment || ''}\n\nINTAKE CHECK\n${acctText}`;
@@ -373,8 +388,8 @@ async function finish(ctx) {
     // told why instead (135 S Vendome, 2026-10-28, drafted a 15-item request).
     if (!effects.draft && (job.linkUnread || []).length) {
       await ctx.alert(`intake-link-unread:${job.id}`,
-        `${address}: the Google Drive link in the listing side's email could not be opened, so no request was drafted. ${job.linkUnread.join('; ')}. Share it with your account, or download the files and send them to yourself.`);
-      effects.draft = 'held: Drive link unread'; await saveEffects();
+        `${address}: a link in the listing side's email could not be opened, so its files were not reviewed and no request was drafted. ${job.linkUnread.join('; ')}. Share it with your account, or download the files and send them to yourself (or drop them in the deal's "Disclosures to Review" folder).`);
+      effects.draft = 'held: link unread'; await saveEffects();
     }
     if (!effects.draft && payload.chase_email_body_html) {
       const draft = await ctx.gmail.createDraft({

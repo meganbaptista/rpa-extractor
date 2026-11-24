@@ -23,7 +23,8 @@ function auditSummary({ payload, address, job, effects }) {
     stillNeeded: lines(payload.still_needed_lines || payload.still_needed_text && String(payload.still_needed_text).split(', ').join('\n')),
     outdated: lines(payload.outdated_versions_lines),
     flags: lines(payload.response_flags_lines),
-    verify: lines(payload.verify_lines),
+    // A link that could not be opened goes first: the still-needed list may be wrong (17834 Porto Marina).
+    verify: [...(payload.link_unread_warning ? [payload.link_unread_warning] : []), ...lines(payload.verify_lines)],
     draftMade: Boolean(effects && effects.draft && !/^held/.test(String(effects.draft))),
   };
 }
