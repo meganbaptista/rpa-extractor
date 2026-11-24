@@ -290,7 +290,17 @@ async function identify(ctx, i) {
 }
 
 async function review(ctx, i) {
-  const r = await ctx.core.reviewAnswers(await batchDocs(ctx, i));
+  const docs = await batchDocs(ctx, i);
+  // The map's question-and-answer forms are always reviewed (3175 Sunburst: the picker skipped the SPQ and TDS).
+  const map = (await J.getOut(ctx.store, ctx.job.id, 'map').catch(() => null)) || {};
+  const lite = (await J.getOut(ctx.store, ctx.job.id, 'plan')) || [];
+  const qa = (ctx.core.QA_FORM_CODES) || new Set(['TDS', 'SPQ', 'ESD', 'FHDS', 'LPD', 'WCMD', 'WHSD', 'SFLS']);
+  (lite[i] || []).forEach((b, k) => {
+    const forms = ((map[b.n] || map[String(b.n)] || {}).forms) || [];
+    const must = [...new Set(forms.filter((f) => qa.has(String(f.code || '').toUpperCase())).flatMap((f) => f.pages || []))];
+    if (must.length && docs[k]) docs[k]._mustPages = must;
+  });
+  const r = await ctx.core.reviewAnswers(docs);
   await J.putOut(ctx.store, ctx.job.id, `review:${i}`, r);
   ctx.log(`batch ${i + 1}: ${(r.responseFlags || []).length} answer flag(s)`);
   return null;

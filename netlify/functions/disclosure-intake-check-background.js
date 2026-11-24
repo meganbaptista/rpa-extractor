@@ -2392,6 +2392,18 @@ async function classifyQAPagesWindowed(buffer, pageCount, name, only = null) {
  * Pages under this many characters of text are treated as scanned.
  */
 const SCAN_PAGE_TEXT_MIN = 150;
+/*
+  E-SIGNATURE STAMPS ARE NOT PAGE TEXT (3175 Sunburst, 2026-11-24). The SPQ and
+  TDS arrived as flattened images whose only text was the signing platform's
+  stamps ("BM-SIGNED 8f000... 11/23/26 04:58 PM PST Package ID: DFBB..."), 174
+  characters: just over the scan line, so they were neither read as text nor
+  sent to the image classifier, and the review never saw either form. A page's
+  length is measured without those stamps.
+*/
+const RX_SIGN_STAMP_LINE = /^(?:.*\b(?:package|envelope|document|transaction)\s+id\b.*|.*-SIGNED\b.*|\s*[0-9a-f]{4,}\.{0,3}\s*|\s*\d{1,2}\/\d{1,2}\/\d{2,4}\s*|\s*\d{1,2}:\d{2}\s*(?:AM|PM)?\s*(?:P[SD]T|[A-Z]{3})?\s*|\s*[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}\s*|.*\b(?:docusign|dotloop|authentisign|zipsign|signnow|skyslope)\b.*)$/gim;
+function pageTextLen(text) {
+  return String(text || '').replace(RX_SIGN_STAMP_LINE, '').replace(/\s+/g, '').length;
+}
 
 async function renderQAPageImages(buffer, name, opts = {}) {
   const pageCount = await pdfPageCount(buffer);
@@ -2430,7 +2442,7 @@ async function renderQAPageImages(buffer, name, opts = {}) {
       // markEqBookletStatements (2506 Westminster).
       const eqBook = opts.skipBookletStatement ? eqStatementLayout(texts) : null;
       const scanned = texts
-        .filter((t) => String(t.text || '').replace(/\s+/g, '').length < SCAN_PAGE_TEXT_MIN)
+        .filter((t) => pageTextLen(t.text) < SCAN_PAGE_TEXT_MIN)
         .map((t) => t.num)
         .filter((n) => n >= 1 && n <= pageCount && !qaNums.includes(n))
         .filter((n) => !(eqBook && eqBook.inBooklet(n)));
@@ -2455,6 +2467,21 @@ async function renderQAPageImages(buffer, name, opts = {}) {
       }
       selection = `${name}: image-classified ${qaNums.length}/${pageCount}pp [${qaNums.join(',') || 'none'}]`
         + (backfilled.length ? ` +backfill [${backfilled.join(',')}]` : '');
+    }
+  }
+
+  /*
+    THE SAFETY NET (3175 Sunburst, 2026-11-24): every page the delivery's map
+    found to be a question-and-answer form (TDS, SPQ, FHDS, ...) is reviewed,
+    whatever the picker above decided. The map had the SPQ at 37-41 and the
+    TDS at 42-44; the picker read 3, 4, 9, 32, 33 and the email chased none of
+    the TDS or SPQ answers.
+  */
+  if (Array.isArray(opts.mustPages) && opts.mustPages.length) {
+    const added = opts.mustPages.filter((n) => n >= 1 && n <= pageCount && !qaNums.includes(n));
+    if (added.length) {
+      qaNums = [...qaNums, ...added].sort((x, y) => x - y);
+      selection += ` +mapped Q&A forms [${added.join(',')}]`;
     }
   }
 
@@ -2495,7 +2522,7 @@ async function renderQAPageImages(buffer, name, opts = {}) {
   if (!pageTexts) {
     try { pageTexts = await pdfPageTexts(buffer); } catch (e) { pageTexts = []; }
   }
-  const textLen = new Map((pageTexts || []).map((p) => [p.num, String(p.text || '').replace(/\s+/g, '').length]));
+  const textLen = new Map((pageTexts || []).map((p) => [p.num, pageTextLen(p.text)]));
   const isScanned = (n) => (textLen.get(n) || 0) < SCAN_PAGE_TEXT_MIN;
   const scannedPages = hi.filter((p) => isScanned(p.pageNumber)).map((p) => p.pageNumber);
   if (scannedPages.length) {
@@ -2788,6 +2815,7 @@ async function reviewAnswers(docs) {
         texts: d._texts,
         skipBookletStatement: d._skipBookletStatement === true,
         skipPages: d._skipPages || [],
+        mustPages: d._mustPages || [],
       });
       qaImages = qaImages.concat(images);
       if (selection) selections.push(selection);
@@ -5045,11 +5073,12 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
 // convention. Netlify only reads exports.handler, so this is inert in production -
 // and the vintage bands decide whether a disclosure counts at all, which is not a
 // thing to leave provable only by deploying and emailing a package at it.
-module.exports._internal = { c8WithoutItsSubject, formMatchesKey, findOutdatedForms, claimsPresentFormMissing, historicalFormCodes, isSellerAddendum, splitLeasePaperwork, isLeaseDocument, applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
+module.exports._internal = { c8WithoutItsSubject, formMatchesKey, findOutdatedForms, claimsPresentFormMissing, historicalFormCodes, isSellerAddendum, splitLeasePaperwork, isLeaseDocument, applyNhdStatementRule, isBlockedName, is7ACoveredBy7B, isSolarDateVsRecord, isMeteringTierWording, isCondoBrushFlag, rewriteCodeRemarks, LIST_CODE_GLOSSARY, fetchAuditListByAddress, isBlankFollowUpOnly, isClaimExplained6H, validateAddendumFlags, reviseLineFor, isSpq19B, reviewUnits, packReviewBatches, renderPagesAsImages, renderQAPageImages, isUpkeepNotProblem, isMirrorDefectMismatch, isFactOnlyYes, isTdsSectionIII, validateAddendumFlags, checkBeforeSending, greetName, wantsDetailOnly, groupReviseLines, reviseLineFor, routeUnconfirmedFlags, unsignedSellerForms, requiresSellerSignature, selectQAPagesFromText, pdfPageTexts, pageTextLen, QA_FORM_CODES, eqStatementLayout, markEqBookletStatements, relabelEarthquakeFlags, parseSignedDate, vintageOf, partitionByVintage, mergeForms, vintageLabel, applyExemptSellerRules, nameTokens, dealSellerTokens, isDifferentParty, verifyItemDisposition, RX_SPQ, RX_FHDS };
 
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
 module.exports.core = {
+  QA_FORM_CODES,
   loadDocuments, planBatches, identifyForms, reviewAnswers, combineIdentifyReview, historicalFormCodes,
   mergeBatchResults, reconcileAndCallback, sendCallback, pdfPageCount, mergeForms, renderPagesAsImages,
   pdfPageTexts, normalizeAddress, blobsConfig, STATE_STORE, CALLBACK_URL_ENV, EMPTY_KEY_ANSWERS,
