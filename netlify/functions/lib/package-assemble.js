@@ -54,11 +54,20 @@ function shingles(text) {
   return { set: s, words: w.length };
 }
 
+/*
+  HOW MUCH OF PAGE a IS FOUND IN PAGE b. Measured against a's OWN size (2238 W
+  28th St, 2026-11-24): divided by the smaller page, a nearly blank booklet page
+  (just the zipForm footer, 29 phrases, printed on every form) "matched" the
+  SFLS, the earthquake statement, WCMD, the booklet receipt and the NSF at 93%,
+  they were left out as duplicates of a booklet that is itself never in the
+  package, and the buyer got none of them. The CATC Disclaimer, which shares
+  an opening paragraph with the CATC Privacy Policy, went the same way.
+*/
 function overlap(a, b) {
   if (!a.set.size || !b.set.size) return 0;
   let hit = 0;
   for (const x of a.set) if (b.set.has(x)) hit++;
-  return hit / Math.min(a.set.size, b.set.size);
+  return hit / a.set.size;
 }
 
 const span = (pages) => {

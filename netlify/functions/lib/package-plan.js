@@ -171,7 +171,20 @@ function planPackage(input) {
   // Whole files (or extras) that repeat pages already in another delivered file
   // (5733 E Stillwater #2: four separate attachments were copies of pages inside
   // the combined PDF). Found by the assembler's text comparison; placed once.
-  const dupFiles = new Map(((input.flags || {}).duplicates || []).filter((x) => x.n != null).map((x) => [x.n, x.of]));
+  /*
+    NEVER A DUPLICATE OF A STATE BOOKLET (2238 W 28th St, 2026-11-24): the
+    booklets are never in the package, and the earthquake booklet prints a
+    blank copy of the Residential Earthquake Risk Disclosure Statement, so the
+    seller's signed one was "already in the package once" and the buyer never
+    got it. A copy counts only when what it copies is itself a form we send.
+  */
+  const bookletPage = (n, pages) => {
+    const f = (input.files || []).find((x) => x.n === n);
+    if (!f) return false;
+    if (/booklet|for reference only/i.test(f.name || '') || RX.booklet.test(f.name || '')) return true;
+    return (pages || []).some((p) => (f.forms || []).some((fm) => (fm.pages || []).includes(p) && !fm.code && RX.booklet.test(fm.name || '')));
+  };
+  const dupFiles = new Map(((input.flags || {}).duplicates || []).filter((x) => x.n != null && !bookletPage(x.ofN, x.pages)).map((x) => [x.n, x.of]));
   const dupExtras = new Map(((input.flags || {}).duplicates || []).filter((x) => x.key != null).map((x) => [x.key, x.of]));
   const dupList = (input.flags || {}).duplicates || [];
   // Pages that are only signature lines (Stillwater p100: the termite work

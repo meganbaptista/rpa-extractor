@@ -140,5 +140,15 @@ ok('no guide label says "other documents"', [dn, w, s].some((x) => x.guide.some(
   ok('the guide: seller disclosures, then the AVID on its own', lu.guide[0].label === 'Seller Disclosures' && /Visual Inspection/.test(lu.guide[1].label), true);
 }
 
+// 2238 W 28th St (2026-11-24): a "duplicate" of a state booklet page is never left out.
+{
+  const files = [
+    { n: 3, name: '26 - EQ Hazard Report - need Buyer.pdf', pages: 1, forms: [{ name: 'Residential Earthquake Risk Disclosure Statement', code: '', pages: [1] }] },
+    { n: 21, name: 'Hazard Booklets - For Reference ONLY.pdf', pages: 122, forms: [{ name: "Homeowner's Guide to Earthquake Safety", code: '', pages: Array.from({ length: 122 }, (_, i) => i + 1) }] },
+  ];
+  const plan = P.planPackage({ files, extras: [], flags: { duplicates: [{ n: 3, of: 'Hazard Booklets - For Reference ONLY.pdf page 97', ofN: 21, pages: [97] }] } });
+  ok('a booklet copy never removes the signed form', !plan.leftOut.some((l) => /EQ Hazard/.test(l.what) && /duplicate/.test(l.why)), true);
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-plan checks pass');
 process.exit(failed ? 1 : 0);

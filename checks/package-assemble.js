@@ -197,6 +197,21 @@ const lorem = (seed, n = 60) => Array.from({ length: n }, (_, i) => `word${seed}
   const ag2 = D.planDropIns({ dealFiles: [{ id: 'ag', name: 'Blank AAA AC ABA.pdf.pdf', pages: 2, codes: ['AAA', 'AC'] }], deliveredCodes: ['AAA'] });
   ok('a file holding more than theirs is added, with a duplicate warning', `${ag2.dropIns.ourBrokerage.length}:${ag2.warnings.some((w) => /check for a duplicate/.test(w))}`, '1:true');
 
+  // 2238 W 28th St (2026-11-24): a footer-only page never swallows the forms that carry the same footer.
+  {
+    const footer = 'Produced with Lone Wolf Transactions (zipForm Edition) 717 N Harwood St, Suite 2200, Dallas, TX 75201 www.lwolf.com CA Transaction Coordination, 3594 Adams Ave San Diego CA 92116 (858) 483-8903 2238 W 28th St'
+    const form = (title) => `${title} ${'This advisory explains the rights and duties of the buyer and the seller in plain words for the property described above '.repeat(6)} ${footer}`
+    const dups = A.findDuplicates([
+      { n: 1, name: 'SFLS', texts: [{ num: 1, text: form('SQUARE FOOTAGE AND LOT SIZE ADVISORY AND DISCLOSURE') }] },
+      { n: 21, name: 'Booklets', texts: [{ num: 1, text: 'x '.repeat(40) + footer }, { num: 2, text: footer + ' page two text '.repeat(10) }] },
+    ])
+    ok('a footer-only page is not the form', !dups.some((d) => d.n === 1), true)
+    const same = A.findDuplicates([
+      { n: 1, name: 'TDS copy', texts: [{ num: 1, text: form('TRANSFER DISCLOSURE STATEMENT') }] },
+      { n: 2, name: 'Packet', texts: [{ num: 1, text: 'cover' }, { num: 2, text: form('TRANSFER DISCLOSURE STATEMENT') }] },
+    ])
+    ok('a real copy is still found', same.some((d) => d.n === 1), true)
+  }
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall package-assemble checks pass');
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
