@@ -317,7 +317,12 @@ const isHeaderAduBox = (f) => {
 function aduHeaderBox(f) {
   if (!isHeaderAduBox(f)) return f;
   const in8E = /\b8E\b/i.test(String(f.reason || ''));
-  return { ...f, item: 'page 1 "Additional Dwelling Units" box', marked: 'unchecked', should_be: 'checked', reason: `the property has an ADU${in8E ? ' (disclosed in SPQ 8E)' : ''}; the box at the top of page 1 is not checked` };
+  return {
+    ...f, item: 'page 1 "Additional Dwelling Units" box', marked: 'unchecked', should_be: 'checked',
+    reason: `the property has an ADU${in8E ? ' (disclosed in SPQ 8E)' : ''}; the box at the top of page 1 is not checked`,
+    // Megan's words, word for word (2026-11-24): never reworded by the writer.
+    fixed_line: 'SPQ Top of page (above section 1): box to be checked since there are additional dwelling units.',
+  };
 }
 
 /** The Residential Earthquake Risk Disclosure Statement, however the review names it ("Earthquake", "RERDS"). */

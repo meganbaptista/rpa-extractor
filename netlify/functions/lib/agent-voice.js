@@ -174,8 +174,15 @@ function parseLines(raw) {
  * plain lines). `call` is for checks; live it is callClaude.
  */
 async function writeAsks(flags, { model, call = callClaude, address = '' } = {}) {
-  const list = (flags || []).filter(Boolean);
-  if (!list.length) return [];
+  // A line Megan wrote herself (fixed_line) goes out word for word, after the written ones.
+  const fixed = [...new Set((flags || []).filter((f) => f && f.fixed_line).map((f) => f.fixed_line))];
+  const list = (flags || []).filter((f) => f && !f.fixed_line);
+  if (!list.length) return fixed;
+  const written = await writeAsksFree(list, { model, call, address });
+  return written ? [...written, ...fixed] : null;
+}
+
+async function writeAsksFree(list, { model, call, address }) {
   const briefs = list.map((f, i) => briefOf(f, `q${i + 1}`));
   let note = '';
   for (let attempt = 0; attempt < 2; attempt++) {

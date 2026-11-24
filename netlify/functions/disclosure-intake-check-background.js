@@ -3502,7 +3502,8 @@ function wantsDetailOnly(f) {
 }
 
 function groupReviseLines(flags) {
-  const lines = [];
+  const lines = [...new Set((flags || []).filter((f) => f && f.fixed_line).map((f) => f.fixed_line))];
+  flags = (flags || []).filter((f) => f && !f.fixed_line);
   const groups = new Map();
   const hoa = (flags || []).filter(isHoaFlag);
   if (hoa.length >= 2) flags = (flags || []).filter((f) => !hoa.includes(f));

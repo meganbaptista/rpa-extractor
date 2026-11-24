@@ -22,4 +22,11 @@ const one = onePerQuestion(two);
 assert.strictEqual(one.length, 1);
 assert.strictEqual(one[0].item, 'page 1 "Additional Dwelling Units" box');
 assert.strictEqual(one[0].should_be, 'checked');
-console.log('review-flag-rules: Earthquake statement never chased; the ADU header box is one clear ask');
+assert.strictEqual(one[0].fixed_line, 'SPQ Top of page (above section 1): box to be checked since there are additional dwelling units.')
+// The writer never rewords it, and it is said once.
+require('../netlify/functions/lib/agent-voice.js').writeAsks(one, { call: async () => { throw new Error('the writer must not be called') } })
+  .then((lines) => {
+    assert.deepStrictEqual(lines, ['SPQ Top of page (above section 1): box to be checked since there are additional dwelling units.'])
+    console.log('review-flag-rules: Earthquake statement never chased; the ADU header box in Megan\'s words')
+  })
+  .catch((e) => { console.error('FAIL', e.message); process.exitCode = 1 })
