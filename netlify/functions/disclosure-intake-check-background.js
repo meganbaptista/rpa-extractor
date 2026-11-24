@@ -1477,6 +1477,9 @@ const ANSWER_REVIEW_PROMPT =
   'ALSO return "addendum_entries": list EVERY entry you can see on any separate explanations sheet in this package, ' +
   'as {"form":"SPQ|TDS","item":"<entry number exactly as printed, e.g. 7 or C>","text":"<verbatim text>"}. List ' +
   'them all, even ones no Yes sub-item needs. Return [] if there is no such sheet in this package. Every ' +
+  'A seller\'s sheet may key its entries with a mistyped code ("SPG 5B", "Seller Questionnaire") or by sub-item ' +
+  '("SPQ 7A" covers 7A); read it as the SPQ (or TDS) item it plainly means, and record it with "form":"SPQ" and ' +
+  'the item as printed. ' +
   '"explanation_on_addendum" you raise MUST correspond to one of these entries;\n' +
   '(c) a sub-item that HAS a written explanation but whose box is marked NO or left BLANK: a seller writes an ' +
   'explanation only when the answer is Yes, so the mark should be Yes. Set "issue":"answer_contradicts_package", ' +
@@ -2193,9 +2196,26 @@ function eqStatementLayout(texts) {
  * count. Over-inclusion costs one page the review finds nothing on.
  */
 const RX_SELLER_ADDENDUM_HEAD = /\b(?:addendum|explanations?)\b.{0,80}?\b(?:transfer\s+disclosure|seller['\u2019]?s?\s+property\s+questionnaire|TDS|SPQ|disclosures?)\b|\b(?:TDS|SPQ|seller['\u2019]?s?)\s*(?:\/\s*(?:TDS|SPQ)\s*)?(?:disclosure\s+)?(?:addendum|explanations?)\b/i;
+/*
+  ...AND BY ITS ITEM LINES (31 Portalon Ct, 2026-11-24). "Addendum to the Seller
+  Questionnaire (C.AR. Form SPG, Revised 6/26)": no "Property", a typo'd "SPG",
+  a "C.A.R. Form" in the heading (which used to disqualify it), a text layer
+  that reads "Ques=onnaire", and pages 2-3 with no heading at all ("5. SPG
+  7D"). Only page 12 was picked and the review asked for seven explanations
+  the addendum already gave. Now: a page whose lines are keyed "SPQ 7A" /
+  "SPG 5B" / "TDS C2" is the seller's addendum, unless it is a real C.A.R.
+  page (which carries a "PAGE m OF n" footer).
+*/
+const RX_ADDENDUM_ITEM_LINE = /^\s*(?:\d{1,2}[.)]\s*)?(?:SP[QG]|TDS)\s*#?\s*(?:\d{1,2}\s*[A-Z]{1,4}|[A-Z]\s*\d{1,2})\b/im;
+const RX_ADDENDUM_TO_SELLER = /\baddendum\s+to\s+(?:the\s+)?(?:seller|transfer|TDS|SPQ)/i;
 function isSellerAddendum(text) {
-  const head = String(text || '').slice(0, 300).replace(/\s+/g, ' ');
-  return RX_SELLER_ADDENDUM_HEAD.test(head) && !/C\.?A\.?R\.?\s+Form/i.test(head);
+  const t = String(text || '');
+  const head = t.slice(0, 300).replace(/\s+/g, ' ');
+  const carPage = /\(?\s*PAGE\s+\d+\s+OF\s+\d+\s*\)?/i.test(t) && /C\.?A\.?R\.?\s+Form/i.test(t);
+  if (carPage) return false;
+  if (RX_ADDENDUM_TO_SELLER.test(head)) return true;
+  if (RX_SELLER_ADDENDUM_HEAD.test(head) && !/C\.?A\.?R\.?\s+Form/i.test(head)) return true;
+  return RX_ADDENDUM_ITEM_LINE.test(t);
 }
 
 function selectQAPagesFromText(texts, pageCount, opts = {}) {

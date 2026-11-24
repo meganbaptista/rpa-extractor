@@ -29,6 +29,12 @@ ok('every page of the seller’s addendum goes to the review', [2, 3, 4].every((
 ok('the advisories around it do not', sel.pages.includes(1) || sel.pages.includes(5), false);
 ok('a TDS that only says "see attached addendum" is not an addendum', I.isSellerAddendum('REAL ESTATE TRANSFER DISCLOSURE STATEMENT (C.A.R. Form TDS) ... see attached addendum'), false);
 ok('"Seller Explanations" heading counts', I.isSellerAddendum('SELLER EXPLANATIONS for 14951 Camarosa'), true);
+// 31 Portalon Ct (2026-11-24): "Seller Questionnaire" without "Property", a typo'd "C.AR. Form SPG", a garbled
+// text layer, and continuation pages with no heading at all.
+ok('Portalon page 1 (heading names a C.A.R. form) counts', I.isSellerAddendum('31 Portalon Court, Ladera Ranch, CA 92694\nAddendum to the Seller Ques=onnaire (C.AR. Form SPG, Revised 6/26)\n1. SPG 5B\nAHached Quality First Termite'), true);
+ok('Portalon page 2 (no heading, "5. SPG 7D") counts', I.isSellerAddendum('1.\n5. \tSPG 7D\nNovember 2025 to November 2026...miscellaneous repain=ng'), true);
+ok('Portalon page 3 ("9. SPG 16A") counts', I.isSellerAddendum('9. \tSPG 16A\nSeller has not experienced any out of the ordinary noise'), true);
+ok('a real SPQ page (C.A.R. footer) is not an addendum', I.isSellerAddendum('SELLER PROPERTY QUESTIONNAIRE (C.A.R. Form SPQ, Revised 6/24)\n7. REPAIRS AND ALTERATIONS\nSPQ REVISED 6/24 (PAGE 2 OF 5)'), false);
 
 // 2. TENANT LEASE PAPERWORK (the Vendome set, as the run read it)
 const v = (code, name, signed, seller = 'Thelma Sazon') => ({ code, name, signed, seller, vintage: { band: 'historical', reason: signed ? 'age' : 'party', signed } });
