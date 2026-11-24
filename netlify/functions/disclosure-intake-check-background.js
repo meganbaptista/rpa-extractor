@@ -86,6 +86,11 @@ const MAX_UNZIP_TOTAL_BYTES = 120 * 1024 * 1024;
 // anything much past that is a folder nobody meant to send us for a disclosure
 // audit, and buffering it is how this function dies with no useful log line.
 const MAX_FETCH_BYTES = 160 * 1024 * 1024;
+// A WHOLE-FOLDER ZIP may be bigger (17834 Porto Marina, 2026-11-23: 178.6MB, of
+// which ONE geology report in "Receipt for reports" was 154MB; the disclosures
+// were 25MB). Its bulk is never inflated: collectPdfs skips report folders and
+// oversized entries from the zip index. Only the compressed bytes are held.
+const MAX_FETCH_ZIP_BYTES = 400 * 1024 * 1024;
 
 // Items the BUYER side assembles in-house (title/MLS/AVID/receipts). Never request
 // these from the listing side and don't count them as "still needed" — they move to
@@ -1101,16 +1106,17 @@ async function fetchToBuffer(url, name) {
   // on an out-of-memory with no log line explaining why, which is the worst way
   // for this to fail: the delivery looks like it silently vanished.
   const declared = parseInt(res.headers.get('content-length') || '0', 10);
-  if (declared > MAX_FETCH_BYTES) {
+  const ceiling = /zip/i.test(contentType) ? MAX_FETCH_ZIP_BYTES : MAX_FETCH_BYTES;
+  if (declared > ceiling) {
     console.warn(`[disclosure-intake] ${name}: refusing a ${(declared / 1048576).toFixed(0)}MB download `
-      + `(ceiling ${(MAX_FETCH_BYTES / 1048576).toFixed(0)}MB). If this is a whole-folder share link, `
+      + `(ceiling ${(ceiling / 1048576).toFixed(0)}MB). If this is a whole-folder share link, `
       + 'ask the listing side for the disclosures folder on its own.');
     return null;
   }
   let buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > MAX_FETCH_BYTES) {
+  if (buf.length > ceiling) {
     console.warn(`[disclosure-intake] ${name}: downloaded ${(buf.length / 1048576).toFixed(0)}MB, over the `
-      + `${(MAX_FETCH_BYTES / 1048576).toFixed(0)}MB ceiling (no content-length was declared), skipping`);
+      + `${(ceiling / 1048576).toFixed(0)}MB ceiling (no content-length was declared), skipping`);
     return null;
   }
   if (/google\.com/i.test(direct) && isHtml(buf, contentType)) {
