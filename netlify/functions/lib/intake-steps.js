@@ -301,6 +301,28 @@ async function review(ctx, i) {
 // recorded as they happen, so a retried finish never repeats one.
 // ---------------------------------------------------------------------------
 
+/*
+  THE "ADDITIONAL DWELLING UNITS" HEADER BOX, NAMED SO THE AGENT CAN FIND IT
+  (Megan, 2026-11-24, 2238 W 28th St: "i dont mind chasing it, but there is no
+  reference to what question they need to change"). The review called it
+  "additional dwelling units" and "ADU box" (two lines for one box) and asked
+  for "Yes" on a checkbox. It becomes ONE ask on the page 1 box: check it.
+*/
+const isHeaderAduBox = (f) => {
+  const item = String((f && f.item) || '');
+  const why = String((f && f.reason) || '');
+  return /additional dwelling unit|\badus?\b\s*box/i.test(item) || (/\badus?\b|additional dwelling/i.test(item + ' ' + why) && /header box/i.test(why));
+};
+
+function aduHeaderBox(f) {
+  if (!isHeaderAduBox(f)) return f;
+  const in8E = /\b8E\b/i.test(String(f.reason || ''));
+  return { ...f, item: 'page 1 "Additional Dwelling Units" box', marked: 'unchecked', should_be: 'checked', reason: `the property has an ADU${in8E ? ' (disclosed in SPQ 8E)' : ''}; the box at the top of page 1 is not checked` };
+}
+
+/** The Residential Earthquake Risk Disclosure Statement, however the review names it ("Earthquake", "RERDS"). */
+const isEarthquakeStatement = (form) => /^(residential\s+)?(eq|earthquake)(\s+risk)?(\s+disclosure)?(\s+statement)?$|\brerds\b/i.test(String(form || '').trim());
+
 async function finish(ctx) {
   const { store, job, core } = ctx;
   const live = job.mode === 'live';
@@ -331,6 +353,14 @@ async function finish(ctx) {
       const old = core.historicalFormCodes(idr.forms, Date.now());
       const keep = rev.responseFlags.filter((f) => !old.has(String((f && f.form) || '').trim().toUpperCase()));
       if (keep.length < rev.responseFlags.length) ctx.log(`batch ${i + 1}: ${rev.responseFlags.length - keep.length} flag(s) on a prior sale's forms (${[...old].join(', ')}) dropped`);
+      rev.responseFlags = keep;
+    }
+    // THE EARTHQUAKE STATEMENT IS NEVER CHASED (Megan, 2026-11-24, 2238 W 28th
+    // St: "as long as they check the boxes we are fine. we look super AI doing
+    // that"). Its answers are never sent back for revision.
+    if (rev && Array.isArray(rev.responseFlags)) {
+      const keep = rev.responseFlags.filter((f) => !isEarthquakeStatement(f && f.form)).map(aduHeaderBox);
+      if (keep.length < rev.responseFlags.length) ctx.log(`batch ${i + 1}: ${rev.responseFlags.length - keep.length} flag(s) on the Earthquake statement dropped`);
       rev.responseFlags = keep;
     }
     const settled = rev ? { status: 'fulfilled', value: rev } : { status: 'rejected', reason: new Error('review gave up') };
@@ -756,4 +786,5 @@ async function run(name, ctx) {
   }
 }
 
-module.exports = { run, shareLinks, isPdfOrZip, laterReplies };
+module.exports = {
+  isEarthquakeStatement, isHeaderAduBox, aduHeaderBox, run, shareLinks, isPdfOrZip, laterReplies };

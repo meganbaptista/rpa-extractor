@@ -63,9 +63,12 @@ RULES
   "TDS C1, C2, C9: recommend adding an explanation since the response was marked "Yes"."
   "LPD 1A-B: lead report received. Recommend revising to "Yes"."
   "SOLAR: needed, SPQ 8B is Yes."
+  "SPQ page 1 "Additional Dwelling Units" box: ADU in 8E. Recommend checking the box."
 - At most 12 words a line (the explanation line above may run to 14).
 - A Yes with no explanation always reads: recommend adding an explanation since the response was marked "Yes".
 - A wrong Yes/No always reads: Recommend revising to "Yes". (or "No")
+- A checkbox (should_be "checked") always reads: Recommend checking the box. Name WHERE the box is
+  (the question text gives it, e.g. SPQ page 1 "Additional Dwelling Units" box), never a bare "ADU box".
 - A document that is provided but not listed on the form reads (Megan's words): "LPD 1B: Since a Lead
   Report is provided, recommended to list the report here."
 - Suggest, never order (Megan: "i dont want to sound like a dictator"): "Recommend revising to "Yes".", "Recommend
