@@ -3177,6 +3177,9 @@ function routeUnconfirmedFlags(allFlags) {
   // on whether a page was seen at all. A blank written field (detail_incomplete,
   // "the location is left blank") is legible on a scan and is kept.
   const scanUnconfirmed = [];
+  // Questions another read found explained on a DIFFERENT form (see explainedElsewhere below).
+  const keyOfFlag = (f) => `${String(f.form || '').trim().toUpperCase()}|${String(f.item || '').trim().toUpperCase()}`;
+  const misplaced = new Set(allFlags.filter((f) => f && f.issue === 'explanation_misplaced').map(keyOfFlag));
   for (const f of allFlags) {
     if (!f || f.issue === 'cited_attachment_unseen' || f.issue === 'explanation_on_addendum'
       || f.issue === 'duplicate_form_copy') continue;
@@ -3219,8 +3222,18 @@ function routeUnconfirmedFlags(allFlags) {
     // and Megan sent it. Reliable now that scanned pages are read WITH the
     // typed sheet: what is left is a Yes nothing explains.
     const agreedUnexplained = f.issue === 'yes_no_explanation' && Number(f.pass_total) >= 2 && f.pass_count === f.pass_total;
+    /*
+      EXPLAINED ON THE OTHER FORM ONLY (Megan, 2026-11-24, 3175 Sunburst, her
+      option #2): SPQ 15D marked Yes with its own line blank, the shared wall
+      and fence explained only on TDS C2. One read said "no explanation", the
+      other "explanation misplaced", so it went to VERIFY and the agent was
+      never asked. Each form must stand on its own: a Yes whose explanation
+      sits only on the other form is asked for, scan or not.
+    */
+    const explainedElsewhere = f.issue === 'yes_no_explanation'
+      && (misplaced.has(keyOfFlag(f)) || /\b(only|related)\b[^.;]{0,40}\b(note|explanation)\b[^.;]{0,30}\bon\s+(the\s+)?(TDS|SPQ)\b/i.test(String(f.reason || '')));
     if (f.from_scan && f.issue !== 'detail_incomplete' && !blankWrittenField && !agreedBlank && !agreedSectionIII
-      && !agreedUnexplained) {
+      && !agreedUnexplained && !explainedElsewhere) {
       f.original_issue = f.issue;
       f.issue = 'scan_unconfirmed';
       scanUnconfirmed.push(f);
