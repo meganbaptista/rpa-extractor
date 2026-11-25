@@ -24,7 +24,8 @@ const MAX_MINE = 60;
 const MAX_PAIRS = 40;
 
 async function hers(log) {
-  const q = `in:sent before:${DRAFTS_BEGAN} after:2025/06/01 (SPQ OR TDS OR AVID OR disclosures)`;
+  // Her corrections to the listing side, not the Zaps' automatic sends (File Audit lists, AVID receipts).
+  const q = `in:sent before:${DRAFTS_BEGAN} after:2025/01/01 ("take another look" OR "still need" OR "recommend" OR "could you" OR "please update") (SPQ OR TDS) -"AUTOMATIC MESSAGE" -subject:"File Audit"`;
   const ids = await gmail.listMessages({ q, maxPages: 3, pageSize: 100 });
   const out = [];
   for (const { id } of ids) {
@@ -32,8 +33,8 @@ async function hers(log) {
     const m = await gmail.getMessage(id).catch(() => null);
     if (!m || !(m.labelIds || []).includes('SENT')) continue;
     const text = String(m.newestText || '').trim();
-    // A correction email names forms and questions; a one-line "Thank you!" teaches nothing.
-    if (text.length < 120 || !LOOKS_LIKE_REVIEW.test(text)) continue;
+    // A correction email names forms and questions; a one-line "Thank you!" teaches nothing; a Zap's template is not her.
+    if (text.length < 120 || !LOOKS_LIKE_REVIEW.test(text) || /<!DOCTYPE|<html|AUTOMATIC MESSAGE/i.test(text)) continue;
     out.push({ date: new Date(Number(m.internalDate)).toISOString().slice(0, 10), subject: m.headers.subject || '', text: text.slice(0, 4000) });
   }
   log(`mine: ${out.length} of ${ids.length} sent emails kept`);
@@ -54,10 +55,18 @@ async function drafted(store, log) {
     const draft = payload && (payload.chase_email_body || '');
     if (!draft) continue;
     const thread = await gmail.getThreadMessages(job.source.threadId).catch(() => []);
-    // Her first message in the thread after the draft was made.
-    const sent = thread.find((m) => (m.labelIds || []).includes('SENT') && Number(m.internalDate) > Number(job.createdAt || 0));
-    if (!sent) continue;
-    out.push({ jobId: id, address: job.address || '', draft: String(draft).slice(0, 4000), sent: String(sent.newestText || '').slice(0, 4000) });
+    /*
+      EVERY message she sent in the thread after the draft, not just the first
+      (2026-11-24, 20232 Delita: the first was a separate "Awesome, thank you
+      so much!", so the study wrongly said she dropped the whole draft). The
+      analysis picks the one that matches the draft.
+    */
+    const sentAll = thread.filter((m) => (m.labelIds || []).includes('SENT') && Number(m.internalDate) > Number(job.createdAt || 0)).slice(0, 6);
+    if (!sentAll.length) continue;
+    out.push({
+      jobId: id, address: job.address || '', draft: String(draft).slice(0, 4000),
+      sent: sentAll.map((m) => ({ at: new Date(Number(m.internalDate)).toISOString(), text: String(m.newestText || '').slice(0, 4000) })),
+    });
   }
   log(`pairs: ${out.length} draft/sent pairs`);
   return out;
