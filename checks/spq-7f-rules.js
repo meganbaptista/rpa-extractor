@@ -48,4 +48,10 @@ assert.strictEqual(answeredElsewhere([dues]).length, 1, 'real HOA evidence still
 const misplaced = { form: 'SPQ', item: '19A', issue: 'explanation_misplaced', reason: '19. B: The community is in discussion to bring a public sewer line to the neighborhood.' };
 assert.strictEqual(answeredElsewhere([misplaced]).length, 1, 'every Yes needs its own explanation');
 
+// TDS C8 is the exterior grounds, never SPQ 10A's water intrusion (Megan, 2026-11-24, 8855 St Ives).
+const { c8OnTheGrounds, c8WithoutItsSubject } = require('../netlify/functions/disclosure-intake-check-background.js').core;
+const mixed = c8OnTheGrounds({ form: 'TDS', item: 'C8', issue: 'answer_contradicts_package', reason: 'on SPQ 10A and the Text Overflow Addendum, the seller discloses water intrusion into the garage and states the drainage systems were all corrected based on a prior inspection.' });
+assert.ok(/drainage systems were all corrected/.test(mixed.reason) && !/garage|10A|intrusion/i.test(mixed.reason), mixed.reason);
+assert.ok(c8WithoutItsSubject({ form: 'TDS', item: 'C8', issue: 'answer_contradicts_package', reason: 'SPQ 10A: garage from upper deck leaking from a/c unit.' }), 'a leak alone is not C8');
+
 console.log('spq-7f-rules: 7F as the form reads; "see attached" never chased blind; no "no explanation" for an answer found');

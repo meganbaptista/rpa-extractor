@@ -3734,6 +3734,26 @@ function c8WithoutItsSubject(flag) {
   return !RX_C8_SUBJECT.test(`${flag.reason || ''} ${flag.document || ''}`);
 }
 
+/*
+  C8 IS THE EXTERIOR GROUNDS (Megan, 2026-11-24: "I wouldn't consider C8 to
+  match 10A, I think C8 is more like exterior grounds"). 8855 St Ives on 11/5:
+  the reason named BOTH the SPQ 10A water intrusion into the garage AND the
+  drainage corrections, passed on the word "drainage", and the email asked
+  about the garage water; she cut it. On 11/7 the same fact, worded as the
+  drainage corrections, she sent. A C8 reason that mixes the two keeps only
+  its grounds part, so the line is written about the lot, never the leak.
+*/
+const RX_INTERIOR_WATER = /\b(?:SPQ\s*)?10\s*A\b|water\s+intrusion|intrud\w*|leak\w*|into\s+the\s+(?:garage|house|home|basement|crawl\s*space)/i;
+function c8OnTheGrounds(flag) {
+  if (!flag || String(flag.form || '').toUpperCase() !== 'TDS' || String(flag.item || '').toUpperCase().replace(/\s+/g, '') !== 'C8') return flag;
+  const reason = String(flag.reason || '');
+  if (!RX_INTERIOR_WATER.test(reason)) return flag;
+  const grounds = reason.split(/(?<=[.;])\s+|,\s+and\s+|\s+and\s+(?=(?:states|says|notes|discloses|the\s+drainage))/i)
+    .filter((part) => RX_C8_SUBJECT.test(part) && !RX_INTERIOR_WATER.test(part.replace(RX_C8_SUBJECT, '')));
+  if (!grounds.length) return flag;
+  return { ...flag, reason: `the seller discloses ${grounds.join('; ').replace(/^(?:the seller\s+)?(?:states|says|notes|discloses)\s+/i, '').trim()}` };
+}
+
 function citesAnUnseenAttachment(flag) {
   if (!flag) return false;
   const reason = String(flag.reason || '');
@@ -4619,7 +4639,8 @@ async function reconcileAndCallback(address, received, auditList, callback, resp
       const off = c8WithoutItsSubject(f);
       if (off) console.log(`[disclosure-intake] ${address}: dropped "TDS C8": its reason is not flooding, drainage or grading (${String(f.reason || '').slice(0, 120)})`);
       return !off;
-    });
+    })
+    .map(c8OnTheGrounds);
   // A flag claiming a cited attachment is absent is a claim the review cannot
   // support (see citesAnUnseenAttachment). Retag before the filtering below so it
   // takes the VERIFY route instead of the chase email.
@@ -5096,7 +5117,7 @@ module.exports._internal = { c8WithoutItsSubject, formMatchesKey, findOutdatedFo
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
 module.exports.core = {
-  QA_FORM_CODES, citesAnUnseenAttachment,
+  QA_FORM_CODES, citesAnUnseenAttachment, c8OnTheGrounds, c8WithoutItsSubject,
   loadDocuments, planBatches, identifyForms, reviewAnswers, combineIdentifyReview, historicalFormCodes,
   mergeBatchResults, reconcileAndCallback, sendCallback, pdfPageCount, mergeForms, renderPagesAsImages,
   pdfPageTexts, normalizeAddress, blobsConfig, STATE_STORE, CALLBACK_URL_ENV, EMPTY_KEY_ANSWERS,
