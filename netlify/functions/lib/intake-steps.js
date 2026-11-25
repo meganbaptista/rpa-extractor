@@ -358,6 +358,15 @@ function answeredElsewhere(flags, fileNames = []) {
     if (!f) return false;
     const why = String(f.reason || '');
     if (f.issue === 'yes_no_explanation' && onAddendum.has(keyOfItem(f))) return false;
+    /*
+      E. A BHAA IS NOT AN HOA (Megan, 2026-11-24, 25732 Via Viento: SPQ 14A chased
+      because "a Buyers Homeowners' Association Advisory is included in the
+      package"). The BHAA goes to every buyer, HOA or not. A flag resting on it
+      alone is dropped; real evidence (HOA documents, dues, CC&Rs, the prelim, a
+      Yes elsewhere) still stands.
+    */
+    if (/\bBHAA\b|buyers?['\u2019]?\s+home\s*owners?['\u2019]?\s+association\s+advisory/i.test(why)
+      && !/\bdues\b|cc&?rs\b|\bprelim|hoa\s+(?:documents?|docs|statement|demand|certificate)|marked\s+yes|answered\s+yes|\bis\s+yes\b/i.test(why)) return false;
     const is7F = /^spq$/i.test(String(f.form || '').trim()) && /^7\s*F\b/i.test(String(f.item || '').trim());
     if (!is7F) return true;
     const item = String(f.item || '').replace(/\s+/g, '').toUpperCase();

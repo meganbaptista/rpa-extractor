@@ -39,4 +39,13 @@ assert.ok(!citesAnUnseenAttachment({ reason: '6G is marked Yes but the item 6 ex
 const { isSellerAddendum } = require('../netlify/functions/disclosure-intake-check-background.js')._internal;
 assert.ok(isSellerAddendum('List of Improvements and Permits\n(Pursuant to Cal. Civ. Code § 1102.6h)\nProperty address: 8301 Rayford Dr'));
 
+// Via Viento (E): a BHAA in the package is not evidence of an HOA.
+const bhaa = { form: 'SPQ', item: '14A', issue: 'verify_mismatch', reason: "a Buyers Homeowners' Association Advisory is included in the package while the seller marked SPQ 6G and TDS C12 to C14 No and wrote Section 14 not applicable; please confirm whether the property is subject to an HOA." };
+assert.deepStrictEqual(answeredElsewhere([bhaa]), [], 'the BHAA alone does not make an HOA');
+const dues = { form: 'SPQ', item: '14A', issue: 'answer_contradicts_package', reason: 'the BHAA and the HOA dues statement in the package show HOA dues of $450 a month, but 14A is marked No.' };
+assert.strictEqual(answeredElsewhere([dues]).length, 1, 'real HOA evidence still stands');
+// Altadena (Megan: no D): an explanation on the wrong line is still chased.
+const misplaced = { form: 'SPQ', item: '19A', issue: 'explanation_misplaced', reason: '19. B: The community is in discussion to bring a public sewer line to the neighborhood.' };
+assert.strictEqual(answeredElsewhere([misplaced]).length, 1, 'every Yes needs its own explanation');
+
 console.log('spq-7f-rules: 7F as the form reads; "see attached" never chased blind; no "no explanation" for an answer found');
