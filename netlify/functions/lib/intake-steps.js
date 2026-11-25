@@ -351,7 +351,24 @@ function aduHeaderBox(f) {
   Notes 1 and 2 themselves, when F(1) is Yes, are still asked.
 */
 const keyOfItem = (f) => `${String((f && f.form) || '').trim().toUpperCase()}|${String((f && f.item) || '').replace(/\s+/g, '').toUpperCase()}`;
+/*
+  A SPA HEATER ON THE SPQ IS THE TDS "HOT TUB/SPA" BOX (Megan, 2026-11-24,
+  4527 Winnetka: SPQ 13D's spa heater was asked as both "Hot Tub/Spa" and
+  "Pool/Spa Heater"; she sent only the first). A Pool/Spa Heater ask resting on
+  the spa heater becomes the Hot Tub/Spa ask, or goes when that is asked already.
+*/
+const isPoolSpaHeater = (f) => /^tds$/i.test(String(f.form || '').trim()) && /pool\s*\/\s*spa\s+heater/i.test(String(f.item || ''));
+const isHotTub = (f) => /^tds$/i.test(String(f.form || '').trim()) && /hot\s*tub|\bspa\b(?!\s+heater)/i.test(String(f.item || '')) && !isPoolSpaHeater(f);
+function spaHeaterIsHotTub(flags) {
+  const hotTubAsked = flags.some((f) => f && isHotTub(f));
+  return flags.flatMap((f) => {
+    if (!f || !isPoolSpaHeater(f) || !/spa\s+heater/i.test(String(f.reason || '')) || !/\bSPQ\b/i.test(String(f.reason || ''))) return [f];
+    return hotTubAsked ? [] : [{ ...f, item: 'II A Hot Tub/Spa' }];
+  });
+}
+
 function answeredElsewhere(flags, fileNames = []) {
+  flags = spaHeaterIsHotTub(flags);
   const onAddendum = new Set(flags.filter((f) => f && f.issue === 'explanation_on_addendum').map(keyOfItem));
   const permitsFile = fileNames.some((n) => /\bpermits?\b/i.test(String(n || '')));
   return flags.filter((f) => {

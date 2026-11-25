@@ -57,4 +57,12 @@ assert.ok(c8WithoutItsSubject({ form: 'TDS', item: 'C8', issue: 'answer_contradi
 // FHDS 2C(3) vs gutter covers: never asked (St Ives).
 assert.deepStrictEqual(answeredElsewhere([{ form: 'FHDS', item: '2C(3)', issue: 'answer_contradicts_package', reason: 'the seller indicates on FHDS 2B(6) that the property has rain gutters without metal or noncombustible gutter covers' }]), []);
 
+// Winnetka: a spa heater on the SPQ is asked as the TDS Hot Tub/Spa box only.
+const spa = [
+  { form: 'TDS', item: 'II A Hot Tub/Spa', issue: 'answer_contradicts_package', reason: 'SPQ 13D is marked Yes that a spa heater is on the Property and operational, but the Hot Tub/Spa box is not checked' },
+  { form: 'TDS', item: 'II A Pool/Spa Heater', issue: 'answer_contradicts_package', reason: 'the seller marked SPQ 13D Yes for an operational spa heater on the Property, but the TDS Pool/Spa Heater box is not checked' },
+];
+assert.deepStrictEqual(answeredElsewhere(spa).map((f) => f.item), ['II A Hot Tub/Spa']);
+assert.deepStrictEqual(answeredElsewhere([spa[1]]).map((f) => f.item), ['II A Hot Tub/Spa'], 'alone, it becomes the Hot Tub/Spa ask');
+
 console.log('spq-7f-rules: 7F as the form reads; "see attached" never chased blind; no "no explanation" for an answer found');
