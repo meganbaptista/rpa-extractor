@@ -365,6 +365,8 @@ function answeredElsewhere(flags, fileNames = []) {
       alone is dropped; real evidence (HOA documents, dues, CC&Rs, the prelim, a
       Yes elsewhere) still stands.
     */
+    // FHDS 2C(3) against 2B(6)'s gutter covers: "not worth asking" (Megan, 2026-11-24, 8855 St Ives).
+    if (/^fhds$/i.test(String(f.form || '').trim()) && /^2\s*C\s*\(?\s*3\s*\)?$/i.test(String(f.item || '').trim()) && /gutter/i.test(why)) return false;
     if (/\bBHAA\b|buyers?['\u2019]?\s+home\s*owners?['\u2019]?\s+association\s+advisory/i.test(why)
       && !/\bdues\b|cc&?rs\b|\bprelim|hoa\s+(?:documents?|docs|statement|demand|certificate)|marked\s+yes|answered\s+yes|\bis\s+yes\b/i.test(why)) return false;
     const is7F = /^spq$/i.test(String(f.form || '').trim()) && /^7\s*F\b/i.test(String(f.item || '').trim());

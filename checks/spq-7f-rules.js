@@ -54,4 +54,7 @@ const mixed = c8OnTheGrounds({ form: 'TDS', item: 'C8', issue: 'answer_contradic
 assert.ok(/drainage systems were all corrected/.test(mixed.reason) && !/garage|10A|intrusion/i.test(mixed.reason), mixed.reason);
 assert.ok(c8WithoutItsSubject({ form: 'TDS', item: 'C8', issue: 'answer_contradicts_package', reason: 'SPQ 10A: garage from upper deck leaking from a/c unit.' }), 'a leak alone is not C8');
 
+// FHDS 2C(3) vs gutter covers: never asked (St Ives).
+assert.deepStrictEqual(answeredElsewhere([{ form: 'FHDS', item: '2C(3)', issue: 'answer_contradicts_package', reason: 'the seller indicates on FHDS 2B(6) that the property has rain gutters without metal or noncombustible gutter covers' }]), []);
+
 console.log('spq-7f-rules: 7F as the form reads; "see attached" never chased blind; no "no explanation" for an answer found');
