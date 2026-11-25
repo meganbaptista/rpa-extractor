@@ -382,6 +382,22 @@ function answeredElsewhere(flags, fileNames = []) {
       alone is dropped; real evidence (HOA documents, dues, CC&Rs, the prelim, a
       Yes elsewhere) still stands.
     */
+    /*
+      AN UNCHECKED TDS BOX MEANS "NOT ON THE PROPERTY" (Megan, 2026-11-24, 15408
+      Sutton: "Pool is checked but the Pool/Spa Heater and its type are left
+      blank" was asked; a pool with no heater is a complete answer). A TDS II A
+      box is asked about only when something else in the package says the item
+      exists (the SPQ, an inspection, the AVID), never because a box beside it
+      is checked. A checked box missing its own detail (220V with no location)
+      is still asked.
+    */
+    if (/^tds$/i.test(String(f.form || '').trim()) && /^II\s*A\b/i.test(String(f.item || '').trim())
+      && /\bis\s+checked\s+but\b/i.test(why) && !f.other_form && !f.document
+      && !/\bSPQ\b|\bAVID\b|inspection|report|addendum|invoice|permit|photo/i.test(why)) {
+      const own = String(f.item || '').replace(/^II\s*A\s*/i, '').trim().toLowerCase();
+      const afterBut = why.split(/\bis\s+checked\s+but\b/i)[1] || '';
+      if (own && afterBut.toLowerCase().includes(own.split(/[\s(]/)[0])) return false;
+    }
     // FHDS 2C(3) against 2B(6)'s gutter covers: "not worth asking" (Megan, 2026-11-24, 8855 St Ives).
     if (/^fhds$/i.test(String(f.form || '').trim()) && /^2\s*C\s*\(?\s*3\s*\)?$/i.test(String(f.item || '').trim()) && /gutter/i.test(why)) return false;
     if (/\bBHAA\b|buyers?['\u2019]?\s+home\s*owners?['\u2019]?\s+association\s+advisory/i.test(why)

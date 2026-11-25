@@ -65,4 +65,9 @@ const spa = [
 assert.deepStrictEqual(answeredElsewhere(spa).map((f) => f.item), ['II A Hot Tub/Spa']);
 assert.deepStrictEqual(answeredElsewhere([spa[1]]).map((f) => f.item), ['II A Hot Tub/Spa'], 'alone, it becomes the Hot Tub/Spa ask');
 
+// Sutton: an unchecked TDS II A box beside a checked one is "not on the property", not a question.
+assert.deepStrictEqual(answeredElsewhere([{ form: 'TDS', item: 'II A Pool/Spa Heater', issue: 'detail_incomplete', reason: 'Pool is checked but the Pool/Spa Heater and its type (Gas/Solar/Electric) are left blank.' }]), []);
+assert.strictEqual(answeredElsewhere([{ form: 'TDS', item: 'II A 220 Volt Wiring', issue: 'detail_incomplete', reason: "The location is not stated; the seller wrote only 'Yes'." }]).length, 1, 'a checked box missing its own detail is still asked');
+assert.strictEqual(answeredElsewhere([{ form: 'TDS', item: 'II A Pool/Spa Heater', issue: 'answer_contradicts_package', reason: 'Pool is checked but the Pool/Spa Heater is blank, and the home inspection report notes a gas pool heater.' }]).length, 1, 'other evidence: still asked');
+
 console.log('spq-7f-rules: 7F as the form reads; "see attached" never chased blind; no "no explanation" for an answer found');
