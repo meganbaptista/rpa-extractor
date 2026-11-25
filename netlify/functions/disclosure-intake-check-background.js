@@ -2214,6 +2214,9 @@ function isSellerAddendum(text) {
   const carPage = /\(?\s*PAGE\s+\d+\s+OF\s+\d+\s*\)?/i.test(t) && /C\.?A\.?R\.?\s+Form/i.test(t);
   if (carPage) return false;
   if (RX_ADDENDUM_TO_SELLER.test(head)) return true;
+  // THE 7F LIST (8301 Rayford, 2026-11-24): "List of Improvements and Permits (Pursuant to Cal. Civ. Code
+  // § 1102.6h)" is what SPQ 7F's "See attached" points to; skipped, the review said no attachment existed.
+  if (/\blist\s+of\s+improvements\b|\bimprovements\s+and\s+permits\b|\b1102\.6\s*h\b/i.test(head)) return true;
   if (RX_SELLER_ADDENDUM_HEAD.test(head) && !/C\.?A\.?R\.?\s+Form/i.test(head)) return true;
   return RX_ADDENDUM_ITEM_LINE.test(t);
 }
@@ -3694,7 +3697,9 @@ const RX_SECTION_ITEM = /^\s*(?:section|paragraph)\b/i;
 // validateAddendumFlags emits after checking real addendum entries.
 // ----------------------------------------------------------------------------
 const RX_CITES_ATTACHMENT = /\b(?:attach(?:ed|ment|ments)|addendum|addenda|exhibit|supplement|renovations?\s+list|improvements?\s+list|separate\s+(?:sheet|page|list))\b/i;
-const RX_ASSERTS_ABSENT = /\bnot\s+(?:in\b|included|attached|present|enclosed|found|part\s+of)|\bis\s+missing\b|\bwas\s+not\s+(?:included|attached|provided|sent)\b|\bcannot\s+be\s+found\b|\bnowhere\s+in\b/i;
+// "no attachment is in the package", "permit copies are missing" (8301 Rayford, 2026-11-24): a SEE ATTACHED the
+// review could not find goes to VERIFY, never the email (Megan: "you kept flagging it as missing but it wasn't").
+const RX_ASSERTS_ABSENT = /\bnot\s+(?:in\b|included|attached|present|enclosed|found|part\s+of)|\b(?:is|are)\s+missing\b|\bwas\s+not\s+(?:included|attached|provided|sent)\b|\bcannot\s+be\s+found\b|\bnowhere\s+in\b|\bno\s+(?:attachment|attached\s+\w+|list|addendum|sheet)\b[^.;]{0,40}\b(?:is|was|in|found|included|provided)\b/i;
 
 // "NO C.A.R. FORM SOLAR IS INCLUDED" WHEN IT IS (2643 34th St, 2026-11-02:
 // SPQ 8B chased for a SOLAR form that was in the package, and the same review
@@ -5091,7 +5096,7 @@ module.exports._internal = { c8WithoutItsSubject, formMatchesKey, findOutdatedFo
 // The audit, for the job pipeline (lib/intake-job.js + disclosure-intake-job-*).
 // Same functions the handler below uses, so the two paths cannot drift.
 module.exports.core = {
-  QA_FORM_CODES,
+  QA_FORM_CODES, citesAnUnseenAttachment,
   loadDocuments, planBatches, identifyForms, reviewAnswers, combineIdentifyReview, historicalFormCodes,
   mergeBatchResults, reconcileAndCallback, sendCallback, pdfPageCount, mergeForms, renderPagesAsImages,
   pdfPageTexts, normalizeAddress, blobsConfig, STATE_STORE, CALLBACK_URL_ENV, EMPTY_KEY_ANSWERS,

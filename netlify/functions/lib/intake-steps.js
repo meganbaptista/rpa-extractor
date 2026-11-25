@@ -335,6 +335,39 @@ function aduHeaderBox(f) {
   };
 }
 
+/*
+  B. NEVER "NO EXPLANATION" WHEN THE REVIEW FOUND IT (4527 Winnetka, 2026-11-24):
+  the same review said SPQ 7F was explained on the seller's addendum AND that it
+  had no explanation, and the email asked for it. A "no explanation" flag on an
+  item the review also found explained on an addendum is dropped.
+
+  C. SPQ 7F, AS THE FORM READS (Megan, 2026-11-24, with the form: Notes 1 and 2
+  apply only "If yes to F(1)"):
+    - 7F Yes with F(1) No: nothing to ask (8855 St Ives);
+    - a date inside the 7F explanation is never questioned ("purchased 12/3/2026"
+      after an 11/5/2026 signing, St Ives: a typo, not a chase);
+    - Note 2's permit copies are there when the package holds a permits file
+      (Winnetka sent "Permits.pdf" and was still asked for copies).
+  Notes 1 and 2 themselves, when F(1) is Yes, are still asked.
+*/
+const keyOfItem = (f) => `${String((f && f.form) || '').trim().toUpperCase()}|${String((f && f.item) || '').replace(/\s+/g, '').toUpperCase()}`;
+function answeredElsewhere(flags, fileNames = []) {
+  const onAddendum = new Set(flags.filter((f) => f && f.issue === 'explanation_on_addendum').map(keyOfItem));
+  const permitsFile = fileNames.some((n) => /\bpermits?\b/i.test(String(n || '')));
+  return flags.filter((f) => {
+    if (!f) return false;
+    const why = String(f.reason || '');
+    if (f.issue === 'yes_no_explanation' && onAddendum.has(keyOfItem(f))) return false;
+    const is7F = /^spq$/i.test(String(f.form || '').trim()) && /^7\s*F\b/i.test(String(f.item || '').trim());
+    if (!is7F) return true;
+    const item = String(f.item || '').replace(/\s+/g, '').toUpperCase();
+    if (item === '7F' && f.issue === 'yes_no_explanation' && /(?:follow-?up|F\s*\(1\)|7F\s*\(1\))[^.;]{0,90}\bmarked\s+No\b/i.test(why)) return false;
+    if (f.issue === 'explanation_unclear' && /\bdate\b|\bpost-?dates?\b|\bafter\b[^.;]{0,40}\bsign/i.test(why)) return false;
+    if (permitsFile && f.issue === 'detail_incomplete' && /\bpermits?\b/i.test(why) && /cop(?:y|ies)|attach|provided/i.test(why)) return false;
+    return true;
+  });
+}
+
 /** The Residential Earthquake Risk Disclosure Statement, however the review names it ("Earthquake", "RERDS"). */
 const isEarthquakeStatement = (form) => /^(residential\s+)?(eq|earthquake)(\s+risk)?(\s+disclosure)?(\s+statement)?$|\brerds\b/i.test(String(form || '').trim());
 
@@ -374,6 +407,7 @@ async function finish(ctx) {
     // St: "as long as they check the boxes we are fine. we look super AI doing
     // that"). Its answers are never sent back for revision.
     if (rev && Array.isArray(rev.responseFlags)) {
+      rev.responseFlags = answeredElsewhere(rev.responseFlags, job.docs.map((d) => d.name));
       const keep = rev.responseFlags.filter((f) => !isEarthquakeStatement(f && f.form)).map(aduHeaderBox);
       if (keep.length < rev.responseFlags.length) ctx.log(`batch ${i + 1}: ${rev.responseFlags.length - keep.length} flag(s) on the Earthquake statement dropped`);
       rev.responseFlags = keep;
@@ -802,4 +836,4 @@ async function run(name, ctx) {
 }
 
 module.exports = {
-  isEarthquakeStatement, isHeaderAduBox, aduHeaderBox, run, shareLinks, isPdfOrZip, laterReplies };
+  isEarthquakeStatement, isHeaderAduBox, aduHeaderBox, answeredElsewhere, run, shareLinks, isPdfOrZip, laterReplies };
